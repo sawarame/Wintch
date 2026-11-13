@@ -103,9 +103,11 @@ public final class AppCoordinator {
         guard !isStarted else { return }
         isStarted = true
 
-        // 保存されているショートカット設定をロードして監視サービスへ反映する
+        // 保存されている通常およびランチャーのショートカット設定をロードして監視サービスへ反映する
         let savedShortcut = preferencesStore.loadShortcut()
+        let savedLauncherShortcut = preferencesStore.loadLauncherShortcut()
         hotKeyMonitor.updateShortcut(savedShortcut)
+        hotKeyMonitor.updateLauncherShortcut(savedLauncherShortcut)
 
         // 初期の権限状態を確認し、監視を開始する
         updatePermissionState(permissionService.currentStatus())
@@ -167,12 +169,22 @@ public final class AppCoordinator {
             self?.switcherViewModel.handleHotKeyEvent(event)
         }
 
-        switcherViewModel.onPresentationChanged = { [weak self] isPresented in
+        switcherViewModel.onModePresentationChanged = { [weak self] mode, reason in
             guard let self else { return }
-            if isPresented {
-                self.ensureSwitcherPanel().showCentered()
-            } else {
-                self.switcherPanel?.hidePanel()
+            switch mode {
+            case .normal, .launcher:
+                self.ensureSwitcherPanel().show(mode: mode)
+            case .inactive:
+                // ランチャーモードで Esc / トグル終了した場合のみ直前アプリへフォーカスを戻す
+                let shouldRestore = reason == .cancelled
+                self.switcherPanel?.hidePanel(restorePreviousApp: shouldRestore)
+            }
+        }
+
+        switcherViewModel.onSearchResultsUpdated = { [weak self] in
+            // SwiftUI の状態更新に伴うレイアウト反映後にパネル上端固定リサイズを行う
+            Task { @MainActor [weak self] in
+                self?.switcherPanel?.updateAnchoredHeightIfNeeded()
             }
         }
 
@@ -191,10 +203,15 @@ public final class AppCoordinator {
         if let panel = switcherPanel {
             return panel
         }
-        let listView = SwitcherListView(viewModel: switcherViewModel)
+        let listView = SwitcherListView(
+            viewModel: switcherViewModel,
+            onContentHeightChanged: { [weak self] newHeight in
+                self?.switcherPanel?.updateAnchoredHeight(to: newHeight)
+            }
+        )
         let panel = SwitcherPanel(contentView: listView)
         panel.onResignActive = { [weak self] in
-            self?.switcherViewModel.cancel()
+            self?.switcherViewModel.cancel(reason: .resignedActive)
         }
         switcherPanel = panel
         return panel
@@ -208,7 +225,7 @@ public final class AppCoordinator {
         }
         let hostingView = NSHostingView(rootView: SettingsView(viewModel: settingsViewModel))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 430),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

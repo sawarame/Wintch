@@ -42,19 +42,45 @@ final class MockWindowService: WindowServicing {
 final class MockHotKeyMonitor: HotKeyMonitoring {
     /// イベント通知クロージャ
     var onEvent: ((HotKeyEvent) -> Void)?
+    /// 現在の監視モード
+    var activeMode: HotKeyMonitorMode = .inactive {
+        didSet {
+            let nextIsActive = activeMode != .inactive
+            if isSwitcherActive != nextIsActive {
+                isSwitcherActive = nextIsActive
+            }
+        }
+    }
     /// スイッチャー表示中フラグ
-    var isSwitcherActive: Bool = false
-    /// 更新されたショートカット設定履歴
+    var isSwitcherActive: Bool = false {
+        didSet {
+            let expectedMode: HotKeyMonitorMode = isSwitcherActive ? (activeMode == .inactive ? .normal : activeMode) : .inactive
+            if activeMode != expectedMode {
+                activeMode = expectedMode
+            }
+        }
+    }
+    /// ショートカット記録中のサスペンド状態
+    var isSuspendedForRecording: Bool = false
+    /// 更新された通常ショートカット設定履歴
     var updatedShortcuts: [ShortcutPreference] = []
+    /// 更新されたランチャーショートカット設定履歴
+    var updatedLauncherShortcuts: [LauncherShortcutPreference] = []
     /// 監視開始の戻り値スタブ
     var startMonitoringResult = true
     /// 監視中フラグ
     var isMonitoring = false
 
-    /// ショートカット設定更新を記録する
+    /// 通常ショートカット設定更新を記録する
     /// - Parameter preference: 更新された設定
     func updateShortcut(_ preference: ShortcutPreference) {
         updatedShortcuts.append(preference)
+    }
+
+    /// ランチャーショートカット設定更新を記録する
+    /// - Parameter preference: 更新されたランチャー設定
+    func updateLauncherShortcut(_ preference: LauncherShortcutPreference) {
+        updatedLauncherShortcuts.append(preference)
     }
 
     /// 監視開始を記録する
@@ -123,22 +149,39 @@ final class MockAccessibilityPermissionService: AccessibilityPermissionServicing
 
 /// テスト用の設定永続化ストアモック
 final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
-    /// メモリ上に保持しているショートカット設定
+    /// メモリ上に保持している通常ショートカット設定
     var storedShortcut: ShortcutPreference = .default
+    /// メモリ上に保持しているランチャーショートカット設定
+    var storedLauncherShortcut: LauncherShortcutPreference = .default
     /// saveShortcut が呼ばれた回数
     var saveCallCount = 0
+    /// saveLauncherShortcut が呼ばれた回数
+    var saveLauncherCallCount = 0
 
-    /// メモリ上のショートカット設定を読み込む
+    /// メモリ上の通常ショートカット設定を読み込む
     /// - Returns: 保持している設定
     func loadShortcut() -> ShortcutPreference {
         storedShortcut
     }
 
-    /// メモリ上のショートカット設定を保存する
+    /// メモリ上の通常ショートカット設定を保存する
     /// - Parameter preference: 保存する設定
     func saveShortcut(_ preference: ShortcutPreference) {
         storedShortcut = preference
         saveCallCount += 1
+    }
+
+    /// メモリ上のランチャーショートカット設定を読み込む
+    /// - Returns: 保持しているランチャー設定
+    func loadLauncherShortcut() -> LauncherShortcutPreference {
+        storedLauncherShortcut
+    }
+
+    /// メモリ上のランチャーショートカット設定を保存する
+    /// - Parameter preference: 保存するランチャー設定
+    func saveLauncherShortcut(_ preference: LauncherShortcutPreference) {
+        storedLauncherShortcut = preference
+        saveLauncherCallCount += 1
     }
 }
 

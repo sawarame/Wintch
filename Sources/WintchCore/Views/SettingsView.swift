@@ -1,6 +1,7 @@
+import AppKit
 import SwiftUI
 
-/// Wintch の最小限の設定項目（ショートカット・ログイン時自動起動・権限状態）を提供する設定画面
+/// Wintch の最小限の設定項目（通常/ランチャーショートカット・ログイン時自動起動・権限状態）を提供する設定画面
 public struct SettingsView: View {
     /// 設定画面の状態管理 ViewModel
     private let viewModel: SettingsViewModel
@@ -9,22 +10,6 @@ public struct SettingsView: View {
     /// - Parameter viewModel: 設定 ViewModel
     public init(viewModel: SettingsViewModel) {
         self.viewModel = viewModel
-    }
-
-    /// 修飾キー選択用の双方向バインディング
-    private var modifierBinding: Binding<ModifierKeyOption> {
-        Binding(
-            get: { viewModel.shortcut.modifier },
-            set: { viewModel.updateModifier($0) }
-        )
-    }
-
-    /// トリガーキー選択用の双方向バインディング
-    private var triggerBinding: Binding<TriggerKeyOption> {
-        Binding(
-            get: { viewModel.shortcut.trigger },
-            set: { viewModel.updateTrigger($0) }
-        )
     }
 
     /// ログイン時自動起動用の双方向バインディング
@@ -38,17 +23,21 @@ public struct SettingsView: View {
     /// ビューの本体構築
     public var body: some View {
         Form {
-            Section("起動ショートカット") {
-                Picker("修飾キー", selection: modifierBinding) {
-                    ForEach(ModifierKeyOption.allCases) { option in
-                        Text(option.displayName).tag(option)
-                    }
-                }
-
-                Picker("トリガーキー", selection: triggerBinding) {
-                    ForEach(TriggerKeyOption.allCases) { option in
-                        Text(option.displayName).tag(option)
-                    }
+            Section("通常スイッチャー（ホールド式）") {
+                LabeledContent("起動ショートカット") {
+                    ShortcutRecorderView(
+                        displayString: viewModel.shortcut.displayString,
+                        isRecording: viewModel.isRecordingNormalShortcut,
+                        onBeginRecording: {
+                            viewModel.beginRecordingNormalShortcut()
+                        },
+                        onCapture: { captured in
+                            viewModel.recordNormalShortcut(captured.toNormalShortcut())
+                        },
+                        onCancel: {
+                            viewModel.cancelRecordingNormalShortcut()
+                        }
+                    )
                 }
 
                 LabeledContent("操作方法") {
@@ -67,6 +56,46 @@ public struct SettingsView: View {
                     )
                     .font(.caption)
                     .foregroundStyle(.orange)
+                }
+
+                if viewModel.shortcutValidationTarget == .normal,
+                   let validationError = viewModel.shortcutValidationError {
+                    Label(validationError, systemImage: "xmark.octagon.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("⌘ / ⌥ / ⌃ のいずれか1つ以上を含めて入力してください（⇧ は逆順移動用）。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("検索ランチャー（トグル式）") {
+                LabeledContent("起動ショートカット") {
+                    ShortcutRecorderView(
+                        displayString: viewModel.launcherShortcut.displayString,
+                        isRecording: viewModel.isRecordingLauncherShortcut,
+                        onBeginRecording: {
+                            viewModel.beginRecordingLauncherShortcut()
+                        },
+                        onCapture: { captured in
+                            viewModel.recordLauncherShortcut(captured.toLauncherShortcut())
+                        },
+                        onCancel: {
+                            viewModel.cancelRecordingLauncherShortcut()
+                        }
+                    )
+                }
+
+                if viewModel.shortcutValidationTarget == .launcher,
+                   let validationError = viewModel.shortcutValidationError {
+                    Label(validationError, systemImage: "xmark.octagon.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("⌘ / ⌥ / ⌃ のいずれか1つ以上を含めて入力してください。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -99,9 +128,15 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 340)
+        .frame(width: 460, height: 430)
         .onAppear {
             viewModel.refreshStatus()
+        }
+        .onDisappear {
+            viewModel.cancelAllRecordings()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
+            viewModel.cancelAllRecordings()
         }
     }
 }

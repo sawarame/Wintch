@@ -9,16 +9,40 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// スレッドセーフに共有する監視状態（C コールバックからの同期判定用）
     private struct TapState: Sendable {
         var shortcut: ShortcutPreference = .default
-        var isSwitcherActive: Bool = false
+        var launcherShortcut: LauncherShortcutPreference = .default
+        var activeMode: HotKeyMonitorMode = .inactive
+        var isSuspendedForRecording: Bool = false
     }
 
     /// イベント発生時の通知ハンドラ
     public var onEvent: ((HotKeyEvent) -> Void)?
 
-    /// スイッチャーが現在表示中かどうか
+    /// 現在のスイッチャー監視モード
+    public var activeMode: HotKeyMonitorMode {
+        get { sharedState.withLock { $0.activeMode } }
+        set { sharedState.withLock { $0.activeMode = newValue } }
+    }
+
+    /// スイッチャーが現在表示中かどうか（activeMode と同期）
     public var isSwitcherActive: Bool {
-        get { sharedState.withLock { $0.isSwitcherActive } }
-        set { sharedState.withLock { $0.isSwitcherActive = newValue } }
+        get { sharedState.withLock { $0.activeMode != .inactive } }
+        set {
+            sharedState.withLock { state in
+                if newValue {
+                    if state.activeMode == .inactive {
+                        state.activeMode = .normal
+                    }
+                } else {
+                    state.activeMode = .inactive
+                }
+            }
+        }
+    }
+
+    /// 設定画面でショートカット記録中のためグローバル監視を一時停止するか
+    public var isSuspendedForRecording: Bool {
+        get { sharedState.withLock { $0.isSuspendedForRecording } }
+        set { sharedState.withLock { $0.isSuspendedForRecording = newValue } }
     }
 
     /// 非同期イベントタップコールバックと同期的に共有するロック付き状態
@@ -33,11 +57,19 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// HotKeyMonitorService を初期化する
     public init() {}
 
-    /// 監視対象のショートカット設定を更新する
+    /// 通常スイッチャーの監視対象ショートカット設定を更新する
     /// - Parameter preference: 新しいショートカット設定
     public func updateShortcut(_ preference: ShortcutPreference) {
         sharedState.withLock { state in
             state.shortcut = preference
+        }
+    }
+
+    /// ランチャーモードの監視対象ショートカット設定を更新する
+    /// - Parameter preference: 新しいランチャーショートカット設定
+    public func updateLauncherShortcut(_ preference: LauncherShortcutPreference) {
+        sharedState.withLock { state in
+            state.launcherShortcut = preference
         }
     }
 
@@ -89,7 +121,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
         eventTap = nil
         runLoopSource = nil
-        isSwitcherActive = false
+        activeMode = .inactive
     }
 
     // MARK: - イベントコールバック処理（nonisolated）
@@ -116,11 +148,18 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
 
         let snapshot = sharedState.withLock { $0 }
+
+        // 設定画面のショートカット記録待機中はすべてのキー入力を通過させる
+        if snapshot.isSuspendedForRecording {
+            return Unmanaged.passUnretained(event)
+        }
+
         let flags = event.flags
+        let currentModifiers = extractShortcutModifiers(from: flags)
 
         if type == .flagsChanged {
-            // スイッチャー表示中に必須修飾キーが離されたら確定イベントを送信する
-            if snapshot.isSwitcherActive && !isModifierPressed(snapshot.shortcut.modifier, in: flags) {
+            // 通常モード表示中のみ必須修飾キーのいずれかが離されたら確定イベントを送信する
+            if snapshot.activeMode == .normal && !snapshot.shortcut.modifiers.isSubset(of: currentModifiers) {
                 dispatchEvent(.modifierReleased)
             }
             return Unmanaged.passUnretained(event)
@@ -131,34 +170,65 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        // 通常スイッチャーは Shift の併用を逆順移動として許容するため Shift 以外の修飾キー一致で判定する
+        let isNormalMatch = keyCode == snapshot.shortcut.keyCode
+            && currentModifiers.subtracting(.shift) == snapshot.shortcut.modifiers
+        let isLauncherMatch = keyCode == snapshot.launcherShortcut.keyCode
+            && currentModifiers == snapshot.launcherShortcut.modifiers
 
-        // スイッチャー表示中は Esc および上下矢印キーを横取り消費する
-        if snapshot.isSwitcherActive {
+        switch snapshot.activeMode {
+        case .inactive:
+            if isNormalMatch {
+                let isShift = flags.contains(.maskShift)
+                dispatchEvent(.triggerPressed(isShiftPressed: isShift))
+                return nil
+            }
+            if isLauncherMatch {
+                dispatchEvent(.launcherTriggerPressed)
+                return nil
+            }
+            return Unmanaged.passUnretained(event)
+
+        case .normal:
+            // 通常モード表示中は Esc および上下矢印キーを横取り消費する
             switch keyCode {
-            case 53: // Esc
+            case 53: // Esc キー
                 dispatchEvent(.escapePressed)
                 return nil
-            case 126: // 上矢印
+            case 126: // 上矢印キー
                 dispatchEvent(.arrowPressed(direction: .up))
                 return nil
-            case 125: // 下矢印
+            case 125: // 下矢印キー
                 dispatchEvent(.arrowPressed(direction: .down))
                 return nil
             default:
                 break
             }
-        }
 
-        // トリガーキーと必須修飾キーの一致判定
-        if keyCode == snapshot.shortcut.trigger.keyCode,
-           matchesRequiredModifierOnly(snapshot.shortcut.modifier, in: flags) {
-            let isShift = flags.contains(.maskShift)
-            dispatchEvent(.triggerPressed(isShiftPressed: isShift))
-            // 他アプリへの文字入力や OS 標準スイッチャーの起動を防ぐためイベントを消費する
-            return nil
-        }
+            if isNormalMatch {
+                let isShift = flags.contains(.maskShift)
+                dispatchEvent(.triggerPressed(isShiftPressed: isShift))
+                return nil
+            }
+            // 通常モード表示中のランチャーショートカットは無視し、裏アプリへ漏らさないよう消費する
+            if isLauncherMatch {
+                return nil
+            }
+            return Unmanaged.passUnretained(event)
 
-        return Unmanaged.passUnretained(event)
+        case .launcher:
+            // ランチャー再押下はトグル終了として検知・消費する
+            if isLauncherMatch {
+                dispatchEvent(.launcherTriggerPressed)
+                return nil
+            }
+            // ランチャー表示中の通常ショートカットは無視する
+            if isNormalMatch {
+                return nil
+            }
+            // Esc / 上下矢印 / 文字入力 / IME 変換操作はキーウィンドウへ通過させる
+            return Unmanaged.passUnretained(event)
+        }
     }
 
     /// 検出されたキーイベントを MainActor 上のハンドラへ非同期配送する
@@ -169,42 +239,15 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
     }
 
-    /// 指定された修飾キーが現在のフラグに含まれているか判定する
-    /// - Parameters:
-    ///   - modifier: 判定対象の修飾キー
-    ///   - flags: 現在の CGEventFlags
-    /// - Returns: 押下中であれば true
-    private nonisolated func isModifierPressed(_ modifier: ModifierKeyOption, in flags: CGEventFlags) -> Bool {
-        switch modifier {
-        case .option:
-            return flags.contains(.maskAlternate)
-        case .control:
-            return flags.contains(.maskControl)
-        case .command:
-            return flags.contains(.maskCommand)
-        }
-    }
-
-    /// 対象の修飾キーのみ（Shift の併用は許可）が押されているか判定する
-    /// - Parameters:
-    ///   - modifier: 必須の修飾キー
-    ///   - flags: 現在の CGEventFlags
-    /// - Returns: 一致する場合は true
-    private nonisolated func matchesRequiredModifierOnly(
-        _ modifier: ModifierKeyOption,
-        in flags: CGEventFlags
-    ) -> Bool {
-        let hasOption = flags.contains(.maskAlternate)
-        let hasControl = flags.contains(.maskControl)
-        let hasCommand = flags.contains(.maskCommand)
-
-        switch modifier {
-        case .option:
-            return hasOption && !hasControl && !hasCommand
-        case .control:
-            return hasControl && !hasOption && !hasCommand
-        case .command:
-            return hasCommand && !hasOption && !hasControl
-        }
+    /// CGEventFlags から比較用の 4 修飾キー集合を抽出する
+    /// - Parameter flags: 現在の CGEventFlags
+    /// - Returns: 抽出された ShortcutModifiers
+    private nonisolated func extractShortcutModifiers(from flags: CGEventFlags) -> ShortcutModifiers {
+        var result: ShortcutModifiers = []
+        if flags.contains(.maskControl) { result.insert(.control) }
+        if flags.contains(.maskAlternate) { result.insert(.option) }
+        if flags.contains(.maskShift) { result.insert(.shift) }
+        if flags.contains(.maskCommand) { result.insert(.command) }
+        return result
     }
 }

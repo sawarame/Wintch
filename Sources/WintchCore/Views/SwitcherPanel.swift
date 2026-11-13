@@ -2,10 +2,20 @@ import AppKit
 import SwiftUI
 
 /// 他アプリのフォーカスを奪わずに画面最前面へフローティング表示する NSPanel ラッパー
+/// ランチャーモード時は IME 入力のために一時的なアプリアクティブ化および上端固定リサイズを制御する
 @MainActor
 public final class SwitcherPanel: NSPanel {
     /// パネルが外部クリック等でフォーカスを失った際に呼ばれるキャンセル通知
     public var onResignActive: (() -> Void)?
+
+    /// ランチャー表示中に上端位置を固定するための Y 座標アンカー（AppKit 座標系での frame.maxY）
+    private var anchoredTopY: CGFloat?
+
+    /// ランチャーモード起動直前に最前面だったアプリケーション（キャンセル時のフォーカス復元用）
+    private var previousFrontmostApp: NSRunningApplication?
+
+    /// 現在のパネル表示モード
+    private var currentMode: SwitcherMode = .inactive
 
     /// パネルを初期化する
     /// - Parameter contentView: パネル内にホストする SwiftUI リストビュー
@@ -32,7 +42,26 @@ public final class SwitcherPanel: NSPanel {
         self.contentView = hostingView
     }
 
-    /// パネル内のクリック等のためにキーウィンドウになれることを許可する
+    /// ランチャー表示中に上端位置を固定したまま指定高さへ下方向リサイズする
+    /// - Parameter height: 新しいコンテンツ高さ
+    public func updateAnchoredHeight(to height: CGFloat) {
+        guard isVisible, currentMode == .launcher, let anchoredTopY else {
+            return
+        }
+
+        let targetHeight = max(height, 48)
+        guard abs(frame.height - targetHeight) > 0.5 else {
+            return
+        }
+
+        let newOriginY = anchoredTopY - targetHeight
+        setFrame(
+            NSRect(x: frame.origin.x, y: newOriginY, width: frame.width, height: targetHeight),
+            display: true
+        )
+    }
+
+    /// パネル内のクリックやテキスト入力のためにキーウィンドウになれることを許可する
     public override var canBecomeKey: Bool { true }
 
     /// メインウィンドウにはならないように制限する
@@ -46,9 +75,24 @@ public final class SwitcherPanel: NSPanel {
         }
     }
 
-    /// 現在アクティブなディスプレイの中央にパネルを配置して前面表示する
-    public func showCentered() {
+    /// 指定モードに応じて現在アクティブなディスプレイの中央にパネルを配置して前面表示する
+    /// - Parameter mode: 表示するスイッチャーモード（.normal または .launcher）
+    public func show(mode: SwitcherMode) {
+        currentMode = mode
+        if mode == .launcher {
+            // キャンセル時に元アプリへフォーカスを戻せるよう直前アプリを記録する
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            if frontmost?.bundleIdentifier != Bundle.main.bundleIdentifier {
+                previousFrontmostApp = frontmost
+            } else {
+                previousFrontmostApp = nil
+            }
+        } else {
+            previousFrontmostApp = nil
+        }
+
         if let hostingView = contentView {
+            hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize
             if fittingSize.width > 0 && fittingSize.height > 0 {
                 setContentSize(fittingSize)
@@ -69,12 +113,55 @@ public final class SwitcherPanel: NSPanel {
             center()
         }
 
+        if mode == .launcher {
+            // 検索中のリサイズで検索バーが上下に移動しないよう起動時の上端座標を固定する
+            anchoredTopY = frame.maxY
+            // 日本語 IME 変換ウィンドウおよび入力ソース切替を確実に機能させるため一時的にアクティブ化する
+            NSApplication.shared.activate()
+        } else {
+            anchoredTopY = nil
+        }
+
         orderFrontRegardless()
         makeKey()
     }
 
-    /// パネルを非表示にする
-    public func hidePanel() {
+    /// 通常スイッチャー用の従来互換メソッド（画面中央表示）
+    public func showCentered() {
+        show(mode: .normal)
+    }
+
+    /// ランチャー表示中に上端位置を固定したままコンテンツ高さの変化に応じて下方向へリサイズする
+    public func updateAnchoredHeightIfNeeded() {
+        guard isVisible, currentMode == .launcher, let anchoredTopY, let hostingView = contentView else {
+            return
+        }
+
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingSize = hostingView.fittingSize
+        let targetHeight = max(fittingSize.height, 48)
+        let targetWidth = fittingSize.width > 0 ? fittingSize.width : frame.width
+
+        guard abs(frame.height - targetHeight) > 0.5 || abs(frame.width - targetWidth) > 0.5 else {
+            return
+        }
+
+        let newOriginY = anchoredTopY - targetHeight
+        setFrame(
+            NSRect(x: frame.origin.x, y: newOriginY, width: targetWidth, height: targetHeight),
+            display: true
+        )
+    }
+
+    /// パネルを非表示にし、必要であれば直前アプリへフォーカスを戻す
+    /// - Parameter restorePreviousApp: キャンセル時などに直前アプリを再アクティブ化する場合は true
+    public func hidePanel(restorePreviousApp: Bool = false) {
+        let appToRestore = restorePreviousApp ? previousFrontmostApp : nil
+        anchoredTopY = nil
+        previousFrontmostApp = nil
+        currentMode = .inactive
+
         orderOut(nil)
+        appToRestore?.activate()
     }
 }

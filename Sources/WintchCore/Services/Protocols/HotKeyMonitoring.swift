@@ -8,15 +8,27 @@ public enum ArrowDirection: Equatable, Sendable {
     case down
 }
 
+/// ホットキー監視サービスが認識する現在のアクティブモード
+public enum HotKeyMonitorMode: Equatable, Sendable {
+    /// スイッチャー非表示（起動ショートカットのみ待機）
+    case inactive
+    /// 通常スイッチャー表示中（修飾キー保持式・Esc/上下矢印をグローバル横取り）
+    case normal
+    /// ランチャーモード表示中（トグル式・検索入力および IME を優先し、再押下トグルのみ監視）
+    case launcher
+}
+
 /// スイッチャー制御のためにサービス層から通知されるグローバルキーイベント
 public enum HotKeyEvent: Equatable, Sendable {
-    /// 設定された修飾キー＋トリガーキーが押された
+    /// 設定された修飾キー＋トリガーキーが押された（通常モード）
     case triggerPressed(isShiftPressed: Bool)
-    /// 設定中の修飾キーが離された（選択確定トリガー）
+    /// ランチャー起動／トグル終了のショートカットが押された
+    case launcherTriggerPressed
+    /// 設定中の修飾キーが離された（通常モードの確定トリガー）
     case modifierReleased
-    /// Esc キーが押された（キャンセル）
+    /// Esc キーが押された（通常モードのキャンセル）
     case escapePressed
-    /// 上下矢印キーが押された（スイッチャー表示中の補助移動）
+    /// 上下矢印キーが押された（通常モード表示中の補助移動）
     case arrowPressed(direction: ArrowDirection)
 }
 
@@ -26,12 +38,22 @@ public protocol HotKeyMonitoring: AnyObject {
     /// イベント発生時のコールバックハンドラ
     var onEvent: ((HotKeyEvent) -> Void)? { get set }
 
-    /// スイッチャーが現在表示中かどうかをサービスに伝える（表示中のみ Esc や矢印キーを横取りする）
+    /// 現在のスイッチャー監視モード
+    var activeMode: HotKeyMonitorMode { get set }
+
+    /// スイッチャーが現在表示中かどうかをサービスに伝える（activeMode != .inactive と連動）
     var isSwitcherActive: Bool { get set }
 
-    /// 監視対象のショートカット設定を更新する
+    /// 設定画面でショートカットレコーダーが入力待機中の間 true にし、グローバル横取りを一時停止する
+    var isSuspendedForRecording: Bool { get set }
+
+    /// 通常スイッチャーの監視対象ショートカット設定を更新する
     /// - Parameter preference: 新しいショートカット設定
     func updateShortcut(_ preference: ShortcutPreference)
+
+    /// ランチャーモードの監視対象ショートカット設定を更新する
+    /// - Parameter preference: 新しいランチャーショートカット設定
+    func updateLauncherShortcut(_ preference: LauncherShortcutPreference)
 
     /// グローバル監視を開始する（アクセシビリティ権限が必要）
     /// - Returns: 監視の開始に成功した場合は true

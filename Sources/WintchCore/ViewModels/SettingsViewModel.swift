@@ -1,12 +1,35 @@
 import Foundation
 import Observation
 
-/// 設定画面の状態管理（ショートカット、自動起動、権限ステータス）を行う ViewModel
+/// ショートカット設定のエラー発生元セクション
+public enum ShortcutValidationTarget: Equatable, Sendable {
+    /// 通常スイッチャー設定
+    case normal
+    /// 検索ランチャー設定
+    case launcher
+}
+
+/// 設定画面の状態管理（通常/ランチャーショートカット、記録状態、自動起動、権限ステータス）を行う ViewModel
 @MainActor
 @Observable
 public final class SettingsViewModel {
-    /// 現在のショートカット設定
+    /// 現在の通常スイッチャー用ショートカット設定
     public private(set) var shortcut: ShortcutPreference
+
+    /// 現在の検索ランチャー用ショートカット設定
+    public private(set) var launcherShortcut: LauncherShortcutPreference
+
+    /// 通常スイッチャーのショートカットレコーダーがキー入力待機中かどうか
+    public private(set) var isRecordingNormalShortcut: Bool = false
+
+    /// ランチャーショートカットレコーダーがキー入力待機中かどうか
+    public private(set) var isRecordingLauncherShortcut: Bool = false
+
+    /// ショートカットの妥当性検証または重複チェックのエラーメッセージ
+    public private(set) var shortcutValidationError: String?
+
+    /// エラーを表示すべきセクション対象
+    public private(set) var shortcutValidationTarget: ShortcutValidationTarget?
 
     /// ログイン時自動起動の有効状態
     public private(set) var isLaunchAtLoginEnabled: Bool
@@ -43,22 +66,95 @@ public final class SettingsViewModel {
         self.launchAtLoginService = launchAtLoginService
         self.permissionService = permissionService
         self.shortcut = preferencesStore.loadShortcut()
+        self.launcherShortcut = preferencesStore.loadLauncherShortcut()
         self.isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         self.permissionStatus = permissionService.currentStatus()
     }
 
-    /// 修飾キーを更新して永続化および監視サービスへ即時反映する
+    /// 通常スイッチャーの修飾キーを更新し、競合がなければ永続化および監視サービスへ即時反映する（互換用）
     /// - Parameter modifier: 新しい修飾キー
     public func updateModifier(_ modifier: ModifierKeyOption) {
-        let updated = ShortcutPreference(modifier: modifier, trigger: shortcut.trigger)
-        applyShortcut(updated)
+        let candidate = ShortcutPreference(
+            keyCode: shortcut.keyCode,
+            modifiers: [modifier.shortcutModifierFlag],
+            keyLabel: shortcut.keyLabel
+        )
+        applyNormalShortcutIfValid(candidate)
     }
 
-    /// トリガーキーを更新して永続化および監視サービスへ即時反映する
+    /// 通常スイッチャーのトリガーキーを更新し、競合がなければ永続化および監視サービスへ即時反映する（互換用）
     /// - Parameter trigger: 新しいトリガーキー
     public func updateTrigger(_ trigger: TriggerKeyOption) {
-        let updated = ShortcutPreference(modifier: shortcut.modifier, trigger: trigger)
-        applyShortcut(updated)
+        let candidate = ShortcutPreference(
+            keyCode: trigger.keyCode,
+            modifiers: shortcut.modifiers,
+            keyLabel: trigger.symbol
+        )
+        applyNormalShortcutIfValid(candidate)
+    }
+
+    /// 通常スイッチャーショートカットの記録待機を開始し、グローバルホットキー監視を一時停止する
+    public func beginRecordingNormalShortcut() {
+        isRecordingLauncherShortcut = false
+        shortcutValidationError = nil
+        shortcutValidationTarget = nil
+        isRecordingNormalShortcut = true
+        hotKeyMonitor.isSuspendedForRecording = true
+    }
+
+    /// 通常スイッチャーショートカットの記録待機をキャンセル・終了し、必要なら監視を再開する
+    public func cancelRecordingNormalShortcut() {
+        guard isRecordingNormalShortcut else { return }
+        isRecordingNormalShortcut = false
+        syncRecordingSuspension()
+    }
+
+    /// レコーダーから受け取った通常スイッチャーショートカット候補を検証し、有効なら保存・反映する
+    /// - Parameter candidate: 入力された通常スイッチャーショートカット候補
+    public func recordNormalShortcut(_ candidate: ShortcutPreference) {
+        guard applyNormalShortcutIfValid(candidate) else { return }
+        cancelRecordingNormalShortcut()
+    }
+
+    /// ランチャーショートカットの記録待機を開始し、グローバルホットキー監視を一時停止する
+    public func beginRecordingLauncherShortcut() {
+        isRecordingNormalShortcut = false
+        shortcutValidationError = nil
+        shortcutValidationTarget = nil
+        isRecordingLauncherShortcut = true
+        hotKeyMonitor.isSuspendedForRecording = true
+    }
+
+    /// ランチャーショートカットの記録待機をキャンセル・終了し、必要なら監視を再開する
+    public func cancelRecordingLauncherShortcut() {
+        guard isRecordingLauncherShortcut else { return }
+        isRecordingLauncherShortcut = false
+        syncRecordingSuspension()
+    }
+
+    /// レコーダーから受け取ったランチャーショートカット候補を検証し、有効なら保存・反映する
+    /// - Parameter candidate: 入力されたショートカット候補
+    public func recordLauncherShortcut(_ candidate: LauncherShortcutPreference) {
+        let validation = ShortcutConflictValidator.validateLauncherShortcut(candidate, against: shortcut)
+        guard validation.isValid else {
+            shortcutValidationError = validation.errorMessage
+            shortcutValidationTarget = .launcher
+            return
+        }
+
+        shortcutValidationError = nil
+        shortcutValidationTarget = nil
+        launcherShortcut = candidate
+        preferencesStore.saveLauncherShortcut(candidate)
+        hotKeyMonitor.updateLauncherShortcut(candidate)
+        cancelRecordingLauncherShortcut()
+    }
+
+    /// 進行中のすべてのショートカット記録待機を解除し、ホットキー監視を再開する
+    public func cancelAllRecordings() {
+        isRecordingNormalShortcut = false
+        isRecordingLauncherShortcut = false
+        hotKeyMonitor.isSuspendedForRecording = false
     }
 
     /// ログイン時自動起動の有効・無効を切り替える
@@ -85,11 +181,28 @@ public final class SettingsViewModel {
         permissionService.openAccessibilitySettings()
     }
 
-    /// ショートカット変更を保存し、監視サービスへ即時適用する
-    /// - Parameter updated: 更新後のショートカット設定
-    private func applyShortcut(_ updated: ShortcutPreference) {
-        shortcut = updated
-        preferencesStore.saveShortcut(updated)
-        hotKeyMonitor.updateShortcut(updated)
+    /// 通常ショートカット候補をランチャーとの競合チェック付きで適用・保存する
+    /// - Parameter candidate: 変更候補のショートカット設定
+    /// - Returns: 検証を通過して適用された場合は true
+    @discardableResult
+    private func applyNormalShortcutIfValid(_ candidate: ShortcutPreference) -> Bool {
+        let validation = ShortcutConflictValidator.validateNormalShortcut(candidate, against: launcherShortcut)
+        guard validation.isValid else {
+            shortcutValidationError = validation.errorMessage
+            shortcutValidationTarget = .normal
+            return false
+        }
+
+        shortcutValidationError = nil
+        shortcutValidationTarget = nil
+        shortcut = candidate
+        preferencesStore.saveShortcut(candidate)
+        hotKeyMonitor.updateShortcut(candidate)
+        return true
+    }
+
+    /// いずれかのレコーダーが待機中かどうかに合わせて監視サスペンド状態を同期する
+    private func syncRecordingSuspension() {
+        hotKeyMonitor.isSuspendedForRecording = isRecordingNormalShortcut || isRecordingLauncherShortcut
     }
 }
