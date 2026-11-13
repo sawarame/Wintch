@@ -36,4 +36,17 @@ struct ShortcutPreferenceTests {
         let decoded = try JSONDecoder().decode(ShortcutPreference.self, from: data)
         #expect(decoded == original)
     }
+
+    /// 任意のキャプチャキー・複数修飾キーおよび旧形式 JSON からのデコード互換性を検証する
+    @Test("任意キーキャプチャの表記と旧形式 JSON の互換デコードが動作する")
+    func customCaptureAndLegacyJsonDecoding() throws {
+        let custom = ShortcutPreference(keyCode: 40, modifiers: [.control, .option], keyLabel: "K")
+        #expect(custom.displayString == "⌃ + ⌥ + K")
+        #expect(custom.reverseDisplayString == "⌃ + ⌥ + ⇧ + K")
+        #expect(custom.conflictsWithSystemSwitcher == false)
+
+        let legacyJson = #"{"modifier":"control","trigger":"grave"}"#.data(using: .utf8)!
+        let migrated = try JSONDecoder().decode(ShortcutPreference.self, from: legacyJson)
+        #expect(migrated == ShortcutPreference(modifier: .control, trigger: .grave))
+    }
 }
