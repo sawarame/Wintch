@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- 背景スクワークルのグラデーション -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B" />
+      <stop offset="100%" stop-color="#0B111E" />
+    </linearGradient>
+
+    <!-- 微かな右上スポットハイライト -->
+    <radialGradient id="topGlow" cx="68%" cy="28%" r="62%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#0B111E" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- ウィンチ・ワイヤー用アクセントグラデーション -->
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+
+    <!-- ウィンドウカードのグラデーション -->
+    <linearGradient id="winGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#E2E8F0" />
+    </linearGradient>
+
+    <!-- 外側シャドウ -->
+    <filter id="appShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#020617" flood-opacity="0.45" />
+    </filter>
+
+    <!-- 前景用シャドウ -->
+    <filter id="fgShadow" x="-15%" y="-15%" width="130%" height="135%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#020617" flood-opacity="0.42" />
+    </filter>
+
+    <!-- ウィンドウ角丸クリップ -->
+    <clipPath id="winClip">
+      <rect x="178" y="486" width="464" height="328" rx="46" />
+    </clipPath>
+  </defs>
+
+  <!-- macOS 標準スクワークル背景 -->
+  <g filter="url(#appShadow)">
+    <rect x="92" y="92" width="840" height="840" rx="190" fill="url(#bgGrad)" />
+    <rect x="92" y="92" width="840" height="840" rx="190" fill="url(#topGlow)" />
+    <rect x="94" y="94" width="836" height="836" rx="188" fill="none" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="4" />
+  </g>
+
+  <g filter="url(#fgShadow)">
+    <!-- 大きく引き上げられるシンプルなウィンドウ（傾きで引っ張り感を表現） -->
+    <g transform="rotate(-8 410 650)">
+      <g clip-path="url(#winClip)">
+        <rect x="178" y="486" width="464" height="328" fill="url(#winGrad)" />
+        <rect x="178" y="486" width="464" height="80" fill="url(#accentGrad)" fill-opacity="0.24" />
+        <line x1="178" y1="566" x2="642" y2="566" stroke="#94A3B8" stroke-opacity="0.35" stroke-width="4" />
+      </g>
+      <rect x="178" y="486" width="464" height="328" rx="46" fill="none" stroke="#FFFFFF" stroke-opacity="0.75" stroke-width="4" />
+    </g>
+
+    <!-- ウィンチドラムからウィンドウ右上を引っ張る張力ワイヤー -->
+    <path
+      d="M 656 266 L 574 494"
+      fill="none"
+      stroke="url(#accentGrad)"
+      stroke-width="28"
+      stroke-linecap="round"
+    />
+    <!-- ウィンドウに引っ掛けるフックリング -->
+    <circle cx="574" cy="496" r="32" fill="#0F172A" stroke="url(#accentGrad)" stroke-width="20" />
+
+    <!-- 存在感のあるシンプルなウィンチドラム（リング＋中心軸のみ） -->
+    <circle
+      cx="716"
+      cy="310"
+      r="96"
+      fill="#0F172A"
+      stroke="#F8FAFC"
+      stroke-width="46"
+    />
+    <circle cx="716" cy="310" r="34" fill="url(#accentGrad)" />
+  </g>
+</svg>

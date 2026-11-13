@@ -24,9 +24,9 @@ description: "Wintch MVP 実装のための依存関係順タスクリスト"
 
 **Purpose**: 外部依存ゼロの Swift Package プロジェクトおよび `.app` バンドル生成基盤を構築する
 
-- [ ] T001 `WintchCore`（ライブラリ）、`Wintch`（実行可能ターゲット）、`WintchCoreTests`（Swift Testing テストターゲット）を定義した macOS 14.0+ 向けパッケージ定義とディレクトリ構造を `Package.swift` に作成する（`dependencies: []`）
-- [ ] T002 [P] `LSUIElement = YES`（Dock 非表示）、バンドル識別子、アプリ基本メタデータを定義した `Resources/Info.plist` を作成する
-- [ ] T003 [P] `swift build` 成果物を `.build/Wintch.app` として組み立て・アドホック署名を行うビルドスクリプトを `scripts/build-app.sh` に作成し実行権限を付与する
+- [X] T001 `WintchCore`（ライブラリ）、`Wintch`（実行可能ターゲット）、`WintchCoreTests`（Swift Testing テストターゲット）を定義した macOS 14.0+ 向けパッケージ定義とディレクトリ構造を `Package.swift` に作成する（`dependencies: []`）
+- [X] T002 [P] `LSUIElement = YES`（Dock 非表示）、バンドル識別子、アプリ基本メタデータを定義した `Resources/Info.plist` を作成する
+- [X] T003 [P] `swift build` 成果物を `.build/Wintch.app` として組み立て・アドホック署名を行うビルドスクリプトを `scripts/build-app.sh` に作成し実行権限を付与する
 
 ---
 
@@ -36,12 +36,12 @@ description: "Wintch MVP 実装のための依存関係順タスクリスト"
 
 **⚠️ CRITICAL**: このフェーズが完了するまでユーザーストーリーフェーズへ進めない
 
-- [ ] T004 [P] 修飾キー選択肢（`Option`/`Control`/`Command`）、トリガーキー選択肢（`Tab`=48/`Space`=49/`Grave`=50/`Backslash`=42）、デフォルト `Option + Tab`、単体キー禁止および `Command + Tab` 競合フラグを持つ `ShortcutPreference` を `Sources/WintchCore/Domain/ShortcutPreference.swift` に実装する
-- [ ] T005 [P] 収集用候補値型 `RawWindowCandidate` および表示用純粋値型 `WindowEntry`（`Identifiable`, `Equatable`, `Sendable`）を `Sources/WintchCore/Domain/RawWindowCandidate.swift` および `Sources/WintchCore/Domain/WindowEntry.swift` に実装する
-- [ ] T006 [P] 権限状態列挙型 `AccessibilityPermissionStatus`（`.granted`, `.denied`）を `Sources/WintchCore/Domain/AccessibilityStatus.swift` に実装する
-- [ ] T007 [P] `Services/` 層の境界プロトコル（`WindowServicing`, `HotKeyMonitoring`, `AccessibilityPermissionServicing`, `PreferencesStoring`, `LaunchAtLoginServicing`, `IconProviding`）を `Sources/WintchCore/Services/Protocols/WindowServicing.swift`, `HotKeyMonitoring.swift`, `AccessibilityPermissionServicing.swift`, `PreferencesStoring.swift`, `LaunchAtLoginServicing.swift`, `IconProviding.swift` に定義する
-- [ ] T008 テスト用モックサービス群（`MockWindowService`, `MockHotKeyMonitor`, `MockAccessibilityPermissionService`, `MockPreferencesStore`, `MockLaunchAtLoginService`, `MockIconProvider`）を `Tests/WintchCoreTests/Mocks/MockServices.swift` に実装する（T004〜T007 依存）
-- [ ] T009 DI コンテナ兼アプリ状態統括を行う `AppCoordinator` の骨格を `Sources/WintchCore/App/AppCoordinator.swift` に作成し、`@main` エントリポイント骨格を `Sources/Wintch/WintchApp.swift` に作成する（T004〜T007 依存）
+- [X] T004 [P] 修飾キー選択肢（`Option`/`Control`/`Command`）、トリガーキー選択肢（`Tab`=48/`Space`=49/`Grave`=50/`Backslash`=42）、デフォルト `Option + Tab`、単体キー禁止および `Command + Tab` 競合フラグを持つ `ShortcutPreference` を `Sources/WintchCore/Domain/ShortcutPreference.swift` に実装する
+- [X] T005 [P] 収集用候補値型 `RawWindowCandidate` および表示用純粋値型 `WindowEntry`（`Identifiable`, `Equatable`, `Sendable`）を `Sources/WintchCore/Domain/RawWindowCandidate.swift` および `Sources/WintchCore/Domain/WindowEntry.swift` に実装する
+- [X] T006 [P] 権限状態列挙型 `AccessibilityPermissionStatus`（`.granted`, `.denied`）を `Sources/WintchCore/Domain/AccessibilityStatus.swift` に実装する
+- [X] T007 [P] `Services/` 層の境界プロトコル（`WindowServicing`, `HotKeyMonitoring`, `AccessibilityPermissionServicing`, `PreferencesStoring`, `LaunchAtLoginServicing`, `IconProviding`）を `Sources/WintchCore/Services/Protocols/WindowServicing.swift`, `HotKeyMonitoring.swift`, `AccessibilityPermissionServicing.swift`, `PreferencesStoring.swift`, `LaunchAtLoginServicing.swift`, `IconProviding.swift` に定義する
+- [X] T008 テスト用モックサービス群（`MockWindowService`, `MockHotKeyMonitor`, `MockAccessibilityPermissionService`, `MockPreferencesStore`, `MockLaunchAtLoginService`, `MockIconProvider`）を `Tests/WintchCoreTests/Mocks/MockServices.swift` に実装する（T004〜T007 依存）
+- [X] T009 DI コンテナ兼アプリ状態統括を行う `AppCoordinator` の骨格を `Sources/WintchCore/App/AppCoordinator.swift` に作成し、`@main` エントリポイント骨格を `Sources/Wintch/WintchApp.swift` に作成する（T004〜T007 依存）
 
 **Checkpoint**: ドメイン型・サービスプロトコル・アプリ骨格が完成し、各ユーザーストーリーの並列/順次実装が可能になる
 
@@ -57,23 +57,23 @@ description: "Wintch MVP 実装のための依存関係順タスクリスト"
 
 > **NOTE**: 純粋ロジックおよび ViewModel のテストを先に記述し、実装前に失敗することを確認する
 
-- [ ] T010 [P] [US1] ノイズ除外ルール（`isSelf == false`, `isRegularApplication == true`, `layer == 0`, `alpha > 0.0`, `bounds.width >= 50 && bounds.height >= 50`, `axSubrole` チェック）の境界値テストを `Tests/WintchCoreTests/WindowFilterTests.swift` に作成する
-- [ ] T011 [P] [US1] MRU順（`lastActivatedAt` 降順優先）および未記録時の `zOrderIndex` 昇順フォールバックのテストを `Tests/WintchCoreTests/WindowSorterTests.swift` に作成する
-- [ ] T012 [P] [US1] 初期選択インデックス算出（0件→nil, 1件→0, 2件以上→1）と Wrap-Around 次/前移動計算のテストを `Tests/WintchCoreTests/SwitcherSelectionTests.swift` に作成する
-- [ ] T013 [P] [US1] `MockServices` を用いた `SwitcherViewModel` の状態遷移（`.idle` ⇄ `.active`、確定、キャンセル、フォーカス喪失、権限未許可ガード）のテストを `Tests/WintchCoreTests/SwitcherViewModelTests.swift` に作成する
+- [X] T010 [P] [US1] ノイズ除外ルール（`isSelf == false`, `isRegularApplication == true`, `layer == 0`, `alpha > 0.0`, `bounds.width >= 50 && bounds.height >= 50`, `axSubrole` チェック）の境界値テストを `Tests/WintchCoreTests/WindowFilterTests.swift` に作成する
+- [X] T011 [P] [US1] MRU順（`lastActivatedAt` 降順優先）および未記録時の `zOrderIndex` 昇順フォールバックのテストを `Tests/WintchCoreTests/WindowSorterTests.swift` に作成する
+- [X] T012 [P] [US1] 初期選択インデックス算出（0件→nil, 1件→0, 2件以上→1）と Wrap-Around 次/前移動計算のテストを `Tests/WintchCoreTests/SwitcherSelectionTests.swift` に作成する
+- [X] T013 [P] [US1] `MockServices` を用いた `SwitcherViewModel` の状態遷移（`.idle` ⇄ `.active`、確定、キャンセル、フォーカス喪失、権限未許可ガード）のテストを `Tests/WintchCoreTests/SwitcherViewModelTests.swift` に作成する
 
 ### Implementation for User Story 1
 
-- [ ] T014 [P] [US1] ノイズウィンドウ除外純粋ロジック `WindowFilter`（`RawWindowCandidate` から有効な `WindowEntry` への変換含む）を `Sources/WintchCore/Domain/WindowFilter.swift` に実装する
-- [ ] T015 [P] [US1] MRU＋Zオーダーソート純粋ロジック `WindowSorter` を `Sources/WintchCore/Domain/WindowSorter.swift` に実装する
-- [ ] T016 [P] [US1] 初期選択および Wrap-Around 選択計算純粋ロジック `SwitcherSelection` を `Sources/WintchCore/Domain/SwitcherSelection.swift` に実装する
-- [ ] T017 [US1] `@Observable` な `SwitcherViewModel`（`.idle`/`.active` 状態管理、キーイベント処理、クリック確定、外部フォーカス喪失キャンセル）を `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` に実装する（T014〜T016 依存）
-- [ ] T018 [P] [US1] `NSRunningApplication` ベースのアプリアイコンキャッシュサービス `IconProviderService` を `Sources/WintchCore/Services/IconProviderService.swift` に実装する
-- [ ] T019 [US1] `CGWindowListCopyWindowInfo`（全操作スペース・Zオーダー）＋ `AXUIElement` / `AXObserver`（タイトル取得・MRUキャッシュ・`activate(options: [])`＋`kAXRaiseAction`＋スペース移動後再照合フォールバック、非公開API・画面収録権限一切不使用）を実装した `WindowService` を `Sources/WintchCore/Services/WindowService.swift` に実装する
-- [ ] T020 [US1] `CGEventTap`（`keyDown`/`flagsChanged` 監視、設定ショートカット・スイッチャー表示中 `Esc`/上下矢印のイベント横取り消費、タイムアウト無効化時の自動再有効化）を実装した `HotKeyMonitorService` を `Sources/WintchCore/Services/HotKeyMonitorService.swift` に実装する
-- [ ] T021 [P] [US1] SwiftUI 縦型リスト UI `SwitcherListView`（24x24アイコン・アプリ名・1行省略タイトル、ハイライト表示、`ScrollViewReader` 追従、サムネイルや操作ボタンなし）を `Sources/WintchCore/Views/SwitcherListView.swift` に実装する
-- [ ] T022 [US1] `NSPanel`（`.nonactivatingPanel`, `.floating`, `.canJoinAllSpaces`, `.fullScreenAuxiliary`、アクティブスクリーン中央配置、フォーカス喪失時キャンセルコールバック）ラッパー `SwitcherPanel` を `Sources/WintchCore/Views/SwitcherPanel.swift` に実装する（T021 依存）
-- [ ] T023 [US1] `AppCoordinator` に `WindowService`, `HotKeyMonitorService`, `IconProviderService`, `SwitcherViewModel`, `SwitcherPanel` を接続して US1 の一連の切り替えフローを統合する（`Sources/WintchCore/App/AppCoordinator.swift`）
+- [X] T014 [P] [US1] ノイズウィンドウ除外純粋ロジック `WindowFilter`（`RawWindowCandidate` から有効な `WindowEntry` への変換含む）を `Sources/WintchCore/Domain/WindowFilter.swift` に実装する
+- [X] T015 [P] [US1] MRU＋Zオーダーソート純粋ロジック `WindowSorter` を `Sources/WintchCore/Domain/WindowSorter.swift` に実装する
+- [X] T016 [P] [US1] 初期選択および Wrap-Around 選択計算純粋ロジック `SwitcherSelection` を `Sources/WintchCore/Domain/SwitcherSelection.swift` に実装する
+- [X] T017 [US1] `@Observable` な `SwitcherViewModel`（`.idle`/`.active` 状態管理、キーイベント処理、クリック確定、外部フォーカス喪失キャンセル）を `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` に実装する（T014〜T016 依存）
+- [X] T018 [P] [US1] `NSRunningApplication` ベースのアプリアイコンキャッシュサービス `IconProviderService` を `Sources/WintchCore/Services/IconProviderService.swift` に実装する
+- [X] T019 [US1] `CGWindowListCopyWindowInfo`（全操作スペース・Zオーダー）＋ `AXUIElement` / `AXObserver`（タイトル取得・MRUキャッシュ・`activate(options: [])`＋`kAXRaiseAction`＋スペース移動後再照合フォールバック、非公開API・画面収録権限一切不使用）を実装した `WindowService` を `Sources/WintchCore/Services/WindowService.swift` に実装する
+- [X] T020 [US1] `CGEventTap`（`keyDown`/`flagsChanged` 監視、設定ショートカット・スイッチャー表示中 `Esc`/上下矢印のイベント横取り消費、タイムアウト無効化時の自動再有効化）を実装した `HotKeyMonitorService` を `Sources/WintchCore/Services/HotKeyMonitorService.swift` に実装する
+- [X] T021 [P] [US1] SwiftUI 縦型リスト UI `SwitcherListView`（24x24アイコン・アプリ名・1行省略タイトル、ハイライト表示、`ScrollViewReader` 追従、サムネイルや操作ボタンなし）を `Sources/WintchCore/Views/SwitcherListView.swift` に実装する
+- [X] T022 [US1] `NSPanel`（`.nonactivatingPanel`, `.floating`, `.canJoinAllSpaces`, `.fullScreenAuxiliary`、アクティブスクリーン中央配置、フォーカス喪失時キャンセルコールバック）ラッパー `SwitcherPanel` を `Sources/WintchCore/Views/SwitcherPanel.swift` に実装する（T021 依存）
+- [X] T023 [US1] `AppCoordinator` に `WindowService`, `HotKeyMonitorService`, `IconProviderService`, `SwitcherViewModel`, `SwitcherPanel` を接続して US1 の一連の切り替えフローを統合する（`Sources/WintchCore/App/AppCoordinator.swift`）
 
 **Checkpoint**: User Story 1（中核MVP）が単独で動作し、純粋ロジックおよび ViewModel テストがすべてパスする状態
 
@@ -87,14 +87,14 @@ description: "Wintch MVP 実装のための依存関係順タスクリスト"
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T024 [P] [US2] `PermissionGuideViewModel` の権限状態検知、システム設定起動呼び出し、許可遷移時の自動クローズ通知テストを `Tests/WintchCoreTests/PermissionGuideViewModelTests.swift` に作成する
+- [X] T024 [P] [US2] `PermissionGuideViewModel` の権限状態検知、システム設定起動呼び出し、許可遷移時の自動クローズ通知テストを `Tests/WintchCoreTests/PermissionGuideViewModelTests.swift` に作成する
 
 ### Implementation for User Story 2
 
-- [ ] T025 [P] [US2] `AXIsProcessTrusted()` の確認・変更監視（ポーリング）および「システム設定 > プライバシーとセキュリティ > アクセシビリティ」ディープリンクを開く `AccessibilityPermissionService` を `Sources/WintchCore/Services/AccessibilityPermissionService.swift` に実装する
-- [ ] T026 [US2] `@Observable` な `PermissionGuideViewModel` を `Sources/WintchCore/ViewModels/PermissionGuideViewModel.swift` に実装する（T025 依存）
-- [ ] T027 [US2] 3ステップ手順案内、画面収録権限不使用の安心説明、「システム設定を開く」ボタンを含む `PermissionGuideView` を `Sources/WintchCore/Views/PermissionGuideView.swift` に実装する（T026 依存）
-- [ ] T028 [US2] `AppCoordinator` および `WintchApp` に起動時・常駐中の権限状態監視、未許可時の誘導画面自動表示、許可後の `HotKeyMonitorService` / `WindowService` 自動開始ロジックを統合する（`Sources/WintchCore/App/AppCoordinator.swift`, `Sources/Wintch/WintchApp.swift`）
+- [X] T025 [P] [US2] `AXIsProcessTrusted()` の確認・変更監視（ポーリング）および「システム設定 > プライバシーとセキュリティ > アクセシビリティ」ディープリンクを開く `AccessibilityPermissionService` を `Sources/WintchCore/Services/AccessibilityPermissionService.swift` に実装する
+- [X] T026 [US2] `@Observable` な `PermissionGuideViewModel` を `Sources/WintchCore/ViewModels/PermissionGuideViewModel.swift` に実装する（T025 依存）
+- [X] T027 [US2] 3ステップ手順案内、画面収録権限不使用の安心説明、「システム設定を開く」ボタンを含む `PermissionGuideView` を `Sources/WintchCore/Views/PermissionGuideView.swift` に実装する（T026 依存）
+- [X] T028 [US2] `AppCoordinator` および `WintchApp` に起動時・常駐中の権限状態監視、未許可時の誘導画面自動表示、許可後の `HotKeyMonitorService` / `WindowService` 自動開始ロジックを統合する（`Sources/WintchCore/App/AppCoordinator.swift`, `Sources/Wintch/WintchApp.swift`）
 
 **Checkpoint**: 権限許可・未許可のいずれの環境でもクラッシュせず安全に誘導・復帰できる状態（US1 + US2 完了）
 
@@ -108,15 +108,15 @@ description: "Wintch MVP 実装のための依存関係順タスクリスト"
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T029 [P] [US3] `ShortcutPreference` のシリアライズ・デフォルト値復元および `SettingsViewModel` の変更即時反映・エラー表示テストを `Tests/WintchCoreTests/ShortcutPreferenceTests.swift` および `Tests/WintchCoreTests/SettingsViewModelTests.swift` に作成する
+- [X] T029 [P] [US3] `ShortcutPreference` のシリアライズ・デフォルト値復元および `SettingsViewModel` の変更即時反映・エラー表示テストを `Tests/WintchCoreTests/ShortcutPreferenceTests.swift` および `Tests/WintchCoreTests/SettingsViewModelTests.swift` に作成する
 
 ### Implementation for User Story 3
 
-- [ ] T030 [P] [US3] `UserDefaults` を用いた設定永続化ストア `PreferencesStore` を `Sources/WintchCore/Services/PreferencesStore.swift` に実装する
-- [ ] T031 [P] [US3] `SMAppService.mainApp` を用いたログイン時自動起動管理サービス `LaunchAtLoginService` を `Sources/WintchCore/Services/LaunchAtLoginService.swift` に実装する
-- [ ] T032 [US3] `@Observable` な `SettingsViewModel`（修飾キー・トリガーキー変更の保存と `HotKeyMonitorService` への即時反映、自動起動トグル＋エラーメッセージ、権限状態表示）を `Sources/WintchCore/ViewModels/SettingsViewModel.swift` に実装する（T030, T031 依存）
-- [ ] T033 [US3] ショートカットピッカー（`Command + Tab` 競合警告表示含む）、自動起動トグル、権限状態表示のみのシンプル構成の `SettingsView` を `Sources/WintchCore/Views/SettingsView.swift` に実装する（T032 依存）
-- [ ] T034 [US3] `WintchApp.swift` の `MenuBarExtra`（「設定を開く...」「Wintch を終了」、権限未許可時の案内メニュー）および設定ウィンドウ表示制御を `AppCoordinator` に統合する（`Sources/Wintch/WintchApp.swift`, `Sources/WintchCore/App/AppCoordinator.swift`）
+- [X] T030 [P] [US3] `UserDefaults` を用いた設定永続化ストア `PreferencesStore` を `Sources/WintchCore/Services/PreferencesStore.swift` に実装する
+- [X] T031 [P] [US3] `SMAppService.mainApp` を用いたログイン時自動起動管理サービス `LaunchAtLoginService` を `Sources/WintchCore/Services/LaunchAtLoginService.swift` に実装する
+- [X] T032 [US3] `@Observable` な `SettingsViewModel`（修飾キー・トリガーキー変更の保存と `HotKeyMonitorService` への即時反映、自動起動トグル＋エラーメッセージ、権限状態表示）を `Sources/WintchCore/ViewModels/SettingsViewModel.swift` に実装する（T030, T031 依存）
+- [X] T033 [US3] ショートカットピッカー（`Command + Tab` 競合警告表示含む）、自動起動トグル、権限状態表示のみのシンプル構成の `SettingsView` を `Sources/WintchCore/Views/SettingsView.swift` に実装する（T032 依存）
+- [X] T034 [US3] `WintchApp.swift` の `MenuBarExtra`（「設定を開く...」「Wintch を終了」、権限未許可時の案内メニュー）および設定ウィンドウ表示制御を `AppCoordinator` に統合する（`Sources/Wintch/WintchApp.swift`, `Sources/WintchCore/App/AppCoordinator.swift`）
 
 **Checkpoint**: すべてのユーザーストーリー（US1, US2, US3）が統合され、独立して検証可能な完全な MVP 構成になる
 
@@ -126,9 +126,9 @@ description: "Wintch MVP 実装のための依存関係順タスクリスト"
 
 **Purpose**: プロジェクト憲章のコーディング規約・プライバシー/API制約の最終確認と E2E 検証
 
-- [ ] T035 [P] `Sources/` 配下の全クラス・構造体・関数・メソッドについて、日本語ドキュメントコメント（概要・`@param`・`@returns`）および日本語インラインコメントの記載漏れを監査・補完する
-- [ ] T036 [P] プロジェクト憲章違反チェック（`ScreenCaptureKit`, `CGS*`, `_AXUIElementGetWindow`, `ObservableObject`, `@Published`, 外部依存、`Services/` 外での低レイヤーAPIインポートの不在）を実施する
-- [ ] T037 `swift build` および `swift test` を実行して全テストパスを確認し、`./scripts/build-app.sh` で生成した `.build/Wintch.app` に対して [quickstart.md](file:///Users/sawarame_yasushi/dev/Wintch/specs/001-window-switcher-mvp/quickstart.md) のシナリオ A〜C を検証する
+- [X] T035 [P] `Sources/` 配下の全クラス・構造体・関数・メソッドについて、日本語ドキュメントコメント（概要・`@param`・`@returns`）および日本語インラインコメントの記載漏れを監査・補完する
+- [X] T036 [P] プロジェクト憲章違反チェック（`ScreenCaptureKit`, `CGS*`, `_AXUIElementGetWindow`, `ObservableObject`, `@Published`, 外部依存、`Services/` 外での低レイヤーAPIインポートの不在）を実施する
+- [X] T037 `swift build` および `swift test` を実行して全テストパスを確認し、`./scripts/build-app.sh` で生成した `.build/Wintch.app` に対して [quickstart.md](file:///Users/sawarame_yasushi/dev/Wintch/specs/001-window-switcher-mvp/quickstart.md) のシナリオ A〜C を検証する（ビルド・19件のユニットテスト・`.app`バンドル署名検証まで完了。実機GUI操作確認は手動検証ガイドに沿って実施）
 
 ---
 
