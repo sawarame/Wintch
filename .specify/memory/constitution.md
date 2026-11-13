@@ -1,50 +1,87 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report:
+- Version change: [CONSTITUTION_VERSION] → 1.0.0
+- List of modified principles:
+  - [PRINCIPLE_1_NAME] → 1. 最小権限の原則（Privacy by Design）
+  - [PRINCIPLE_2_NAME] → 2. 過剰機能の排除（シンプルさの徹底）
+  - [PRINCIPLE_3_NAME] → 3. 起動と応答の高速性（ゼロレイテンシ）
+  - [PRINCIPLE_4_NAME] → 4. 依存関係の最小化（外部ライブラリ依存ゼロ）
+  - [PRINCIPLE_5_NAME] → 5. 非公開APIの禁止と安全なフォールバック
+- Added sections:
+  - 技術スタックおよびアーキテクチャ制約
+  - コーディング規約・品質基準および配布方針
+- Removed sections: なし
+- Follow-up TODOs: なし
+-->
+
+# Wintch 憲章
+
+macOS向けウィンドウ単位スイッチャー「Wintch」の設計・実装における絶対的な原則、アーキテクチャ制約、品質基準を定義する。
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### 1. 最小権限の原則（Privacy by Design）
+画面収録権限（ScreenCaptureKit等）は一切使用してはならない（MUST NOT）。ウィンドウのサムネイル画像取得は行わず、アクセシビリティ権限（`AXUIElement`）およびウィンドウメタデータのみで全機能を完結させる。
+- **根拠**: ユーザーの画面情報やプライバシーを侵害するリスクを根絶し、権限要求に対する心理的ハードルを最小化するため。
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### 2. 過剰機能の排除（シンプルさの徹底）
+AltTabのような多機能化・高機能化は目指さない。設定項目やUI要素は「目的のウィンドウを素早く特定し切り替える」というコア体験に必要な最小限にとどめなければならない（MUST）。
+- **根拠**: ユーザーの認知負荷を最小化し、日常的な操作における迷いをなくすとともに、コードベースの保守性を高く維持するため。
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### 3. 起動と応答の高速性（ゼロレイテンシ）
+常駐時のCPU・メモリ消費を極限まで抑え、ショートカット入力からUI表示、ウィンドウ切り替え完了まで体感遅延ゼロ（即時応答）のレスポンシブな動作を維持しなければならない（MUST）。
+- **根拠**: ウィンドウ切り替えは1日に数十回〜数百回行われる超高頻度アクションであり、わずかな遅延も作業フローと集中力を阻害するため。
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### 4. 依存関係の最小化（外部ライブラリ依存ゼロ）
+外部サードパーティ製ライブラリ（Swift Package Manager等）の追加は原則禁止とし、Apple標準フレームワークのみで実装しなければならない（MUST）。
+- **根拠**: 外部依存によるサプライチェーンリスクの排除、長期的なメンテナンス性の確保、およびビルド速度・バイナリサイズの最適化を実現するため。
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### 5. 非公開APIの禁止と安全なフォールバック
+Appleの審査でリジェクト対象となる非公開API（`CGS*` 系のプライベート関数など）は一切使用してはならない（MUST NOT）。また、アクセシビリティ権限が未許可の状態でもアプリがクラッシュしてはならず、ユーザーに対して権限許可の手順とシステム設定への誘導画面を適切に表示しなければならない（MUST）。
+- **根拠**: 将来的な Mac App Store での公開と Homebrew 配布の両立を担保し、初回起動時や権限未許可環境でも安全かつ親切にユーザーを支援するため。
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## 技術スタックおよびアーキテクチャ制約
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### ターゲット環境および開発言語
+- **対象OS**: macOS 14.0 (Sonoma) 以降を対象とし、最新のSwift言語機能およびAPIを活用する。
+- **言語**: Swift を使用する。
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### UIフレームワーク
+- 設定画面やウィンドウリスト表示などのUIは SwiftUI で構築する。
+- 最前面フローティングパネルの挙動制御やグローバルイベントの監視など、SwiftUIのみでは実現困難な必要最小限の範囲に限り AppKit（`NSPanel` 等）を使用する。
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### アーキテクチャ（MVVM + Services）
+- **状態管理**: 状態管理には Swift 標準の `@Observable` マクロを使用する。レガシーな `ObservableObject` や `@Published` は使用してはならない（MUST NOT）。
+- **低レイヤーAPIの隔離**: macOSの低レイヤーAPI（`CGWindowListCopyWindowInfo`、`AXUIElement`、`CGEventTap` 等）はすべて `Services/` 層に隔離・カプセル化し、`Views/` や `ViewModels/` から直接呼び出してはならない（MUST NOT）。
+
+## コーディング規約・品質基準および配布方針
+
+### コードの可読性と明快さ
+- Swift初心者がメンテナンスしやすいよう、過度な抽象化、複雑な独自ジェネリクス、自作マクロの使用は避け、標準的で明快なSwiftコードを記述しなければならない（MUST）。
+- すべてのクラス、関数、メソッドには標準形式に沿ったドキュメントコメントを日本語で記述し、インラインコメントも日本語で記述する。
+
+### テスト可能性（Testability）
+- ウィンドウ一覧のフィルタリング（ノイズウィンドウの除外）、ソート、ショートカット判定などの純粋なビジネスロジックは、UIやOSイベントから完全に切り離し、ユニットテスト（Swift Testing または XCTest）が可能な構造に設計しなければならない（MUST）。
+
+### ライセンスと配布
+- すべてのソースコードは MIT License のもとで公開・管理される前提で記述する。
+- 将来的な Mac App Store 公開および Homebrew による配布の双方に対応可能な構成・品質を維持する。
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+本憲章は、Wintch プロジェクトにおける最上位の開発方針であり、すべての設計判断・コード変更・仕様策定に優先する。
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+### 遵守とレビュー方針
+- すべての実装計画、Pull Request、コードレビューにおいて本憲章への準拠を検証しなければならない（MUST）。
+- 画面収録権限の使用、サードパーティ製ライブラリの導入、非公開APIの使用、低レイヤーAPIの漏洩など、本憲章に違反する変更は原則として承認されない。
+
+### 改定プロセス（Amendment Procedure）
+- 憲章の改定は、変更理由、トレードオフの分析、および既存実装への影響評価を含むドキュメントの作成と合意を必要とする。
+
+### バージョニング方針（Versioning Policy）
+本憲章のバージョン管理はセマンティックバージョニング（`MAJOR.MINOR.PATCH`）に従う。
+- **MAJOR**: 原則の削除、大幅な方向転換、または過去の実装と非互換となる原則の再定義
+- **MINOR**: 新たな原則や制約セクションの追加、または実質的なガイダンスの拡充
+- **PATCH**: 表現の推敲、誤字脱字の修正、明確化など、非セマンティックな改定
+
+**Version**: 1.0.0 | **Ratified**: 2026-11-13 | **Last Amended**: 2026-11-13
