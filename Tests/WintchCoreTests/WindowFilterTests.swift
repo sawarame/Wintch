@@ -213,4 +213,38 @@ struct WindowFilterTests {
         #expect(result.count == 2)
         #expect(result.map(\.id) == ["cg-2107", "ax-chrome-1"])
     }
+
+    /// AX 未捕捉の別スペースにフルスクリーン本体と別座標の裏ウィンドウが並存する場合に代表 1 件のみ残ることを検証する
+    @Test("AX未捕捉アプリで別座標の裏CGWindowがあっても最大面積の代表1件だけを残す")
+    func axUncoveredPIDConsolidatesToLargestCGFallback() {
+        let candidates = [
+            // 裏ウィンドウの方が Z オーダー手前にあっても、面積最大のフルスクリーン本体が代表として選ばれる
+            RawWindowCandidate(
+                id: "cg-wezterm-hidden",
+                cgWindowID: 3001,
+                pid: 2500,
+                applicationName: "WezTerm",
+                bounds: WindowBounds(x: 100, y: 120, width: 1200, height: 600),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "cg-wezterm-fullscreen",
+                cgWindowID: 3002,
+                pid: 2500,
+                applicationName: "WezTerm",
+                bounds: WindowBounds(x: 0, y: 38, width: 1512, height: 944),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 1
+            )
+        ]
+
+        let result = WindowFilter.filterAndMap(candidates)
+        #expect(result.count == 1)
+        #expect(result[0].id == "cg-wezterm-fullscreen")
+    }
 }

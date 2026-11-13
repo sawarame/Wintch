@@ -71,9 +71,6 @@ public enum WindowFilter {
         return true
     }
 
-    /// CGWindow 補完候補同士を同一ウィンドウとして重複統合する矩形差の許容しきい値（ポイント）
-    private static let duplicateBoundsTolerance: Double = 40.0
-
     /// 生のウィンドウ候補配列からノイズを除外し、WindowEntry の配列へ変換する
     /// - Parameter candidates: 収集されたウィンドウ候補の配列
     /// - Returns: フィルタリング後のウィンドウ項目配列
@@ -83,22 +80,19 @@ public enum WindowFilter {
         // 既に AXUIElement で有効なウィンドウが捕捉されているアプリは、
         // 内部の非表示 CGWindow（Chrome の裏ウィンドウや Finder/設定の補助ウィンドウ）を補完しない
         let axCoveredPIDs = Set(validCandidates.filter { $0.hasAXInfo }.map(\.pid))
-        var emittedCGFallbackBoundsByPID: [Int32: [WindowBounds]] = [:]
+        let representativeFallbackIDs = selectRepresentativeCGFallbackIDs(
+            from: validCandidates,
+            excluding: axCoveredPIDs
+        )
+        var emittedFallbackPIDs = Set<Int32>()
 
         return validCandidates
             .filter { candidate in
                 guard !candidate.hasAXInfo else { return true }
                 guard !axCoveredPIDs.contains(candidate.pid) else { return false }
-
-                // 同一アプリ・同一座標に複数存在する CGWindow（Finder の二重サーフェス等）を 1 つに統合する
-                let existingBounds = emittedCGFallbackBoundsByPID[candidate.pid] ?? []
-                let isDuplicateBounds = existingBounds.contains { existing in
-                    boundsDistance(existing, candidate.bounds) <= duplicateBoundsTolerance
-                }
-                guard !isDuplicateBounds else { return false }
-
-                emittedCGFallbackBoundsByPID[candidate.pid, default: []].append(candidate.bounds)
-                return true
+                guard representativeFallbackIDs[candidate.pid] == candidate.id else { return false }
+                // 同一 ID が複数含まれる場合でも PID あたり代表 1 件に制限する
+                return emittedFallbackPIDs.insert(candidate.pid).inserted
             }
             .map { candidate in
                 WindowEntry(
@@ -114,12 +108,30 @@ public enum WindowFilter {
             }
     }
 
-    /// 2つのウィンドウ矩形間のマンハッタン距離を計算する
+    /// AX 未捕捉アプリ（別スペース・フルスクリーン等）の CGWindow 補完候補から、
+    /// PID ごとに代表となる 1 件の識別子を選出する（最大面積を優先し、同面積なら Z オーダー最上位を優先）
     /// - Parameters:
-    ///   - a: 比較元の矩形
-    ///   - b: 比較先の矩形
-    /// - Returns: 座標とサイズの差分合計値
-    private static func boundsDistance(_ a: WindowBounds, _ b: WindowBounds) -> Double {
-        abs(a.x - b.x) + abs(a.y - b.y) + abs(a.width - b.width) + abs(a.height - b.height)
+    ///   - candidates: 事前フィルタを通過したウィンドウ候補の配列
+    ///   - axCoveredPIDs: 既に AXUIElement で有効ウィンドウが捕捉されている PID の集合
+    /// - Returns: PID ごとに選出された代表候補 ID のマップ
+    private static func selectRepresentativeCGFallbackIDs(
+        from candidates: [RawWindowCandidate],
+        excluding axCoveredPIDs: Set<Int32>
+    ) -> [Int32: String] {
+        var bestByPID: [Int32: (id: String, area: Double, zOrder: Int)] = [:]
+
+        for candidate in candidates where !candidate.hasAXInfo && !axCoveredPIDs.contains(candidate.pid) {
+            let area = candidate.bounds.width * candidate.bounds.height
+            let zOrder = candidate.zOrderIndex
+
+            if let current = bestByPID[candidate.pid] {
+                let isLargerArea = area > current.area
+                let isSameAreaHigherZ = area == current.area && zOrder < current.zOrder
+                guard isLargerArea || isSameAreaHigherZ else { continue }
+            }
+            bestByPID[candidate.pid] = (id: candidate.id, area: area, zOrder: zOrder)
+        }
+
+        return bestByPID.mapValues(\.id)
     }
 }
