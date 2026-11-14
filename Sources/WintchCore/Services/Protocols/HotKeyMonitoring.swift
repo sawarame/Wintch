@@ -14,13 +14,13 @@ public enum HotKeyMonitorMode: Equatable, Sendable {
     case inactive
     /// 通常スイッチャー表示中（修飾キー保持式・Esc/上下矢印をグローバル横取り）
     case normal
-    /// ランチャーモード表示中（トグル式・検索入力および IME を優先し、再押下トグルのみ監視）
+    /// ランチャーモード表示中（トグル式・検索入力および IME を優先し、ランチャー再押下トグルと通常スイッチャーショートカットによる候補移動を監視）
     case launcher
 }
 
 /// スイッチャー制御のためにサービス層から通知されるグローバルキーイベント
 public enum HotKeyEvent: Equatable, Sendable {
-    /// 設定された修飾キー＋トリガーキーが押された（通常モード）
+    /// 設定された修飾キー＋トリガーキーが押された（通常モード起動/移動およびランチャーモード候補移動）
     case triggerPressed(isShiftPressed: Bool)
     /// ランチャー起動／トグル終了のショートカットが押された
     case launcherTriggerPressed

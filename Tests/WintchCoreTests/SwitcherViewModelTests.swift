@@ -167,10 +167,23 @@ struct SwitcherViewModelTests {
         viewModel.handleHotKeyEvent(.modifierReleased)
         #expect(viewModel.isPresented == true)
 
-        // ランチャー表示中に通常ショートカットが押されても無視する
+        // ランチャー表示中に通常ショートカットが押されてもランチャーを維持したまま「次へ」「前へ」移動する
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
         #expect(viewModel.mode == .launcher)
-        #expect(viewModel.selectedIndex == 1)
+        #expect(viewModel.selectedIndex == 2)
+
+        // 末尾から順方向で先頭（0）へ循環する
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.selectedIndex == 0)
+
+        // 先頭から Shift 併用（前へ）で末尾（2）へ循環し、その後の修飾キー解放でも閉じない
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.selectedIndex == 2)
+        viewModel.handleHotKeyEvent(.modifierReleased)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.isPresented == true)
 
         // 検索入力で絞り込みされ、先頭（インデックス0）に自動移動する
         viewModel.updateSearchQuery("vsc")
@@ -213,14 +226,17 @@ struct SwitcherViewModelTests {
         #expect(viewModel.mode == .inactive)
         #expect(windowService.activatedWindows.isEmpty)
 
-        // 通常モード起動中にランチャーショートカットを押しても無視される
+        // 通常モード起動中にランチャーショートカットを押しても無視され、選択位置も維持される
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
         #expect(viewModel.mode == .normal)
+        #expect(viewModel.selectedIndex == 1)
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
         #expect(viewModel.mode == .normal)
+        #expect(viewModel.selectedIndex == 1)
+        #expect(windowService.activatedWindows.isEmpty)
     }
 
-    /// ランチャー検索で 0 件となった状態での Enter 確定や上下移動が無視されパネルが閉じないことを検証する
+    /// ランチャー検索で 0 件となった状態での Enter 確定や上下移動・通常ショートカットが無視されパネルが閉じないことを検証する
     @Test("検索結果が0件の状態で確定や移動を行ってもパネルが維持される")
     @MainActor
     func zeroSearchResultsIgnoresConfirmAndMove() {
@@ -247,10 +263,68 @@ struct SwitcherViewModelTests {
         #expect(viewModel.isPresented == true)
 
         viewModel.moveSelection(.down)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
         viewModel.confirmSelection()
 
         #expect(viewModel.isPresented == true)
         #expect(viewModel.mode == .launcher)
         #expect(windowService.activatedWindows.isEmpty)
+    }
+
+    /// ランチャー絞り込み中および候補1件時に通常スイッチャーショートカットで移動・維持できることを検証する
+    @Test("ランチャー絞り込み中と候補1件時に通常ショートカットで安全に候補移動できる")
+    @MainActor
+    func launcherFilteredAndSingleResultNormalShortcutNavigation() {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Google Chrome", title: "Docs", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 20, applicationName: "Google Chrome", title: "GitHub", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", pid: 30, applicationName: "Finder", title: "Home", lastActivatedAt: now.addingTimeInterval(-20))
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider
+        )
+
+        // ランチャー起動後に "chr" で 2 件に絞り込む（先頭 w1 が選択状態）
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("chr")
+        #expect(viewModel.displayedResults.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.selectedIndex == 0)
+
+        // 順方向で w2 へ移動（検索クエリと絞り込み結果は保持される）
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.searchQuery == "chr")
+        #expect(viewModel.displayedResults.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.selectedIndex == 1)
+
+        // 逆方向で w1 へ戻る
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.selectedIndex == 0)
+
+        // 1件のみ一致する条件へ絞り込んだ場合は順・逆どちらでも先頭（0）を維持する
+        viewModel.updateSearchQuery("finder")
+        #expect(viewModel.displayedResults.map(\.id) == ["w3"])
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.modifierReleased)
+        #expect(viewModel.mode == .launcher)
+
+        // Enter で w3 を確定アクティブ化
+        viewModel.confirmSelection()
+        #expect(viewModel.mode == .inactive)
+        #expect(windowService.activatedWindows.map(\.id) == ["w3"])
     }
 }
