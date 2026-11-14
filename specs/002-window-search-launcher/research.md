@@ -114,7 +114,7 @@
 - `HotKeyMonitorService` の `TapState` でも現在のモード（`.inactive`, `.normal`, `.launcher`）を同期保持する：
   - `.inactive` 時：通常スイッチャーショートカット（順・逆）→ `.triggerPressed(isShiftPressed:)`、ランチャーショートカット → `.launcherTriggerPressed` を通知し消費。
   - `.normal` 時：従来通り `triggerPressed`、`modifierReleased`、`escapePressed`、`arrowPressed` のみ処理。**ランチャーショートカットは無視**（何も通知しない / パスまたは消費なし）。
-  - `.launcher` 時：ランチャーショートカットの再押下のみを検知して `.launcherTriggerPressed` を通知（トグル終了用）し消費。**通常スイッチャーショートカット・`modifierReleased`・`Esc`・`↑`/`↓` は `CGEventTap` では横取りしない**（`Esc`・`↑`・`↓` はパネル内のテキストフィールド／レスポンダーが IME 優先で処理する）。
+  - `.launcher` 時：ランチャーショートカットの再押下を検知して `.launcherTriggerPressed` を通知（トグル終了用）し消費するとともに、通常スイッチャーショートカット（順・逆）も `.triggerPressed(isShiftPressed:)` として通知・消費し、モードを切り替えずランチャー内の候補移動に利用する（※ `004-launcher-switcher-nav` にて改定）。**`modifierReleased`・`Esc`・`↑`/`↓` は `CGEventTap` では横取りしない**（`Esc`・`↑`・`↓` はパネル内のテキストフィールド／レスポンダーが IME 優先で処理する）。
 
 ### Rationale
 - 「通常モードは押しっぱなし確定・グローバルキー横取り」「ランチャーモードはトグル式・パネル内テキスト入力＋IME優先」という異なる2つの入力ライフサイクルが、単一の状態変数によってクリーンに分離され、一方の表示中に他方へ誤遷移するバグ（FR-004）を防止できる。

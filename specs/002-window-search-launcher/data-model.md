@@ -109,7 +109,7 @@ public enum SwitcherMode: Equatable, Sendable {
 |---|---|---|---|
 | `triggerPressed(isShiftPressed:)` | `.inactive` | `.normal`（権限あり & 1件以上） | `allEntries = sorted`, `displayedResults = 変換後全件`, `selectedIndex = initialIndex(count)` |
 | `triggerPressed(isShiftPressed:)` | `.normal` | `.normal` | `selectedIndex` を次/前へ移動 |
-| `triggerPressed(isShiftPressed:)` | `.launcher` | `.launcher` | 無視（FR-004） |
+| `triggerPressed(isShiftPressed:)` | `.launcher` | `.launcher` | `displayedResults` 件数内で次へ（順方向）/ 前へ（`isShiftPressed == true`）選択移動（0件時は変更なし、FR-004 改定 / `004-launcher-switcher-nav`） |
 | `launcherTriggerPressed` | `.inactive` | `.launcher`（権限あり & 1件以上） | `searchQuery = ""`, `allEntries = sorted`, `displayedResults = 変換後全件`, `selectedIndex = initialIndex(count)` |
 | `launcherTriggerPressed` | `.normal` | `.normal` | 無視（FR-004） |
 | `launcherTriggerPressed` | `.launcher` | `.inactive` | ウィンドウ切り替えせずパネルを閉じる（トグル終了） |
