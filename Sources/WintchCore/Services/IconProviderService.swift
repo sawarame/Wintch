@@ -22,7 +22,8 @@ public final class IconProviderService: IconProviding {
             }
             let pid = app.processIdentifier
             Task { @MainActor [weak self] in
-                self?.cache.removeValue(forKey: pid)
+                // 戻り値 NSImage? を破棄して Task<Void, Never> として推論させる（macOS 15 SDK の Sendable 制約対応）
+                _ = self?.cache.removeValue(forKey: pid)
             }
         }
     }
