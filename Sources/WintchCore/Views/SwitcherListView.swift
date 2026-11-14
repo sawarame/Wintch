@@ -54,11 +54,17 @@ public struct SwitcherListView: View {
         )
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.28), radius: 24, x: 0, y: 12)
+        .overlay {
+            ZStack {
+                // 明るい背景でも角丸の輪郭を視認できる外側の暗色ボーダー
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.black.opacity(0.16), lineWidth: 1)
+                // 暗い背景でガラス調の輪郭を際立たせる内側の明色ハイライト
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(.white.opacity(0.20), lineWidth: 1)
+                    .padding(1)
+            }
+        }
     }
 
     /// ランチャーモード上部の検索入力ヘッダ

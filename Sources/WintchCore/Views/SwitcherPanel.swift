@@ -34,11 +34,17 @@ public final class SwitcherPanel: NSPanel {
         self.isReleasedWhenClosed = false
         self.isOpaque = false
         self.backgroundColor = .clear
-        self.hasShadow = false
+        // ウィンドウ外側に自然な角丸シャドウを描画するため OS 側のシャドウを有効化する
+        self.hasShadow = true
         self.hidesOnDeactivate = false
 
         let hostingView = NSHostingView(rootView: contentView)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
+        // ホスティングビューのレイヤー自体も角丸でクリップし、四隅の描画漏れを防ぐ
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 14
+        hostingView.layer?.cornerCurve = .continuous
+        hostingView.layer?.masksToBounds = true
         self.contentView = hostingView
     }
 
@@ -59,6 +65,8 @@ public final class SwitcherPanel: NSPanel {
             NSRect(x: frame.origin.x, y: newOriginY, width: frame.width, height: targetHeight),
             display: true
         )
+        // リサイズ後の角丸形状に合わせて OS 側のウィンドウシャドウを再計算する
+        invalidateShadow()
     }
 
     /// パネル内のクリックやテキスト入力のためにキーウィンドウになれることを許可する
@@ -124,6 +132,8 @@ public final class SwitcherPanel: NSPanel {
 
         orderFrontRegardless()
         makeKey()
+        // 表示時のコンテンツサイズに合わせて OS 側のウィンドウシャドウを再計算する
+        invalidateShadow()
     }
 
     /// 通常スイッチャー用の従来互換メソッド（画面中央表示）
@@ -151,6 +161,8 @@ public final class SwitcherPanel: NSPanel {
             NSRect(x: frame.origin.x, y: newOriginY, width: targetWidth, height: targetHeight),
             display: true
         )
+        // リサイズ後の角丸形状に合わせて OS 側のウィンドウシャドウを再計算する
+        invalidateShadow()
     }
 
     /// パネルを非表示にし、必要であれば直前アプリへフォーカスを戻す
