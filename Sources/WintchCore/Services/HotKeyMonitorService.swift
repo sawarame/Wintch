@@ -3,6 +3,23 @@ import CoreGraphics
 import Foundation
 import os
 
+/// keyDown イベントに対する判定結果（通知イベント有無とイベント消費有無）
+public struct HotKeyKeyDownDecision: Equatable, Sendable {
+    /// MainActor のイベントハンドラへ通知するイベント（無視または素通しの場合は nil）
+    public let event: HotKeyEvent?
+    /// OS および背面/キーウィンドウへのイベント伝播を遮断して消費する場合は true
+    public let shouldConsume: Bool
+
+    /// キー押下判定結果を初期化する
+    /// - Parameters:
+    ///   - event: 通知する HotKeyEvent（通知しない場合は nil）
+    ///   - shouldConsume: イベントを消費して伝播を止める場合は true
+    public init(event: HotKeyEvent?, shouldConsume: Bool) {
+        self.event = event
+        self.shouldConsume = shouldConsume
+    }
+}
+
 /// CGEventTap を用いてグローバルショートカットおよびスイッチャー表示中のキー操作を監視・横取りするサービス
 @MainActor
 public final class HotKeyMonitorService: HotKeyMonitoring {
@@ -170,64 +187,99 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        // 通常スイッチャーは Shift の併用を逆順移動として許容するため Shift 以外の修飾キー一致で判定する
-        let isNormalMatch = keyCode == snapshot.shortcut.keyCode
-            && currentModifiers.subtracting(.shift) == snapshot.shortcut.modifiers
-        let isLauncherMatch = keyCode == snapshot.launcherShortcut.keyCode
-            && currentModifiers == snapshot.launcherShortcut.modifiers
+        let decision = Self.resolveKeyDown(
+            mode: snapshot.activeMode,
+            keyCode: keyCode,
+            modifiers: currentModifiers,
+            shortcut: snapshot.shortcut,
+            launcherShortcut: snapshot.launcherShortcut
+        )
+        if let hotKeyEvent = decision.event {
+            dispatchEvent(hotKeyEvent)
+        }
+        return decision.shouldConsume ? nil : Unmanaged.passUnretained(event)
+    }
 
-        switch snapshot.activeMode {
+    /// 現在の監視モードとキー入力から通知イベントおよび消費有無を判定する純粋関数
+    /// - Parameters:
+    ///   - mode: 現在の監視モード
+    ///   - keyCode: 押下されたキーの仮想キーコード
+    ///   - modifiers: 現在押されている修飾キー集合
+    ///   - shortcut: 通常スイッチャーのショートカット設定
+    ///   - launcherShortcut: 検索ランチャーのショートカット設定
+    /// - Returns: 通知イベントと消費判定を含む HotKeyKeyDownDecision
+    public nonisolated static func resolveKeyDown(
+        mode: HotKeyMonitorMode,
+        keyCode: UInt16,
+        modifiers: ShortcutModifiers,
+        shortcut: ShortcutPreference,
+        launcherShortcut: LauncherShortcutPreference
+    ) -> HotKeyKeyDownDecision {
+        // 通常スイッチャーは Shift の併用を逆順移動として許容するため Shift 以外の修飾キー一致で判定する
+        let isNormalMatch = keyCode == shortcut.keyCode
+            && modifiers.subtracting(.shift) == shortcut.modifiers
+        let isLauncherMatch = keyCode == launcherShortcut.keyCode
+            && modifiers == launcherShortcut.modifiers
+        let isShiftPressed = modifiers.contains(.shift)
+
+        switch mode {
         case .inactive:
             if isNormalMatch {
-                let isShift = flags.contains(.maskShift)
-                dispatchEvent(.triggerPressed(isShiftPressed: isShift))
-                return nil
+                return HotKeyKeyDownDecision(
+                    event: .triggerPressed(isShiftPressed: isShiftPressed),
+                    shouldConsume: true
+                )
             }
             if isLauncherMatch {
-                dispatchEvent(.launcherTriggerPressed)
-                return nil
+                return HotKeyKeyDownDecision(
+                    event: .launcherTriggerPressed,
+                    shouldConsume: true
+                )
             }
-            return Unmanaged.passUnretained(event)
+            return HotKeyKeyDownDecision(event: nil, shouldConsume: false)
 
         case .normal:
             // 通常モード表示中は Esc および上下矢印キーを横取り消費する
             switch keyCode {
             case 53: // Esc キー
-                dispatchEvent(.escapePressed)
-                return nil
+                return HotKeyKeyDownDecision(event: .escapePressed, shouldConsume: true)
             case 126: // 上矢印キー
-                dispatchEvent(.arrowPressed(direction: .up))
-                return nil
+                return HotKeyKeyDownDecision(event: .arrowPressed(direction: .up), shouldConsume: true)
             case 125: // 下矢印キー
-                dispatchEvent(.arrowPressed(direction: .down))
-                return nil
+                return HotKeyKeyDownDecision(event: .arrowPressed(direction: .down), shouldConsume: true)
             default:
                 break
             }
 
             if isNormalMatch {
-                let isShift = flags.contains(.maskShift)
-                dispatchEvent(.triggerPressed(isShiftPressed: isShift))
-                return nil
+                return HotKeyKeyDownDecision(
+                    event: .triggerPressed(isShiftPressed: isShiftPressed),
+                    shouldConsume: true
+                )
             }
             // 通常モード表示中のランチャーショートカットは無視し、裏アプリへ漏らさないよう消費する
             if isLauncherMatch {
-                return nil
+                return HotKeyKeyDownDecision(event: nil, shouldConsume: true)
             }
-            return Unmanaged.passUnretained(event)
+            return HotKeyKeyDownDecision(event: nil, shouldConsume: false)
 
         case .launcher:
-            // ランチャー再押下はトグル終了として検知・消費する
+            // ランチャー再押下はトグル終了として検知・消費する（設定重複時も最優先）
             if isLauncherMatch {
-                dispatchEvent(.launcherTriggerPressed)
-                return nil
+                return HotKeyKeyDownDecision(
+                    event: .launcherTriggerPressed,
+                    shouldConsume: true
+                )
             }
-            // ランチャー表示中の通常ショートカットは無視する
+            // ランチャー表示中の通常ショートカットは候補移動（次へ/前へ）として通知し消費する
             if isNormalMatch {
-                return nil
+                return HotKeyKeyDownDecision(
+                    event: .triggerPressed(isShiftPressed: isShiftPressed),
+                    shouldConsume: true
+                )
             }
             // Esc / 上下矢印 / 文字入力 / IME 変換操作はキーウィンドウへ通過させる
-            return Unmanaged.passUnretained(event)
+            return HotKeyKeyDownDecision(event: nil, shouldConsume: false)
         }
     }
 

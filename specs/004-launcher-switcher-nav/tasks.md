@@ -24,7 +24,7 @@ description: "検索ランチャー表示中の通常スイッチャーショー
 
 **Purpose**: 既存実装と Swift Testing テストスイートが健全であることを確認し、安全に変更を開始する
 
-- [ ] T001 リポジトリルートで `swift test` を実行し、既存のテストスイートおよびビルドがクリーンに通るベースラインを確認する（`Package.swift` 変更なし）
+- [X] T001 リポジトリルートで `swift test` を実行し、既存のテストスイートおよびビルドがクリーンに通るベースラインを確認する（`Package.swift` 変更なし）
 
 ---
 
@@ -34,8 +34,8 @@ description: "検索ランチャー表示中の通常スイッチャーショー
 
 **⚠️ CRITICAL**: このフェーズが完了するまでユーザーストーリーの実装・単体テストフェーズへ進めない
 
-- [ ] T002 [P] `HotKeyMonitorMode`（`.launcher` の説明）および `HotKeyEvent.triggerPressed(isShiftPressed:)` の日本語ドキュメントコメントを新仕様に合わせて更新する（`Sources/WintchCore/Services/Protocols/HotKeyMonitoring.swift`）
-- [ ] T003 `HotKeyKeyDownDecision`（`event: HotKeyEvent?`, `shouldConsume: Bool`）および静的純粋判定メソッド `HotKeyMonitorService.resolveKeyDown(mode:keyCode:modifiers:shortcut:launcherShortcut:)` を抽出し、`handleCGEvent` の `.keyDown` 分岐が重複なくこの判定結果に従うようリファクタリングする（`Sources/WintchCore/Services/HotKeyMonitorService.swift`）
+- [X] T002 [P] `HotKeyMonitorMode`（`.launcher` の説明）および `HotKeyEvent.triggerPressed(isShiftPressed:)` の日本語ドキュメントコメントを新仕様に合わせて更新する（`Sources/WintchCore/Services/Protocols/HotKeyMonitoring.swift`）
+- [X] T003 `HotKeyKeyDownDecision`（`event: HotKeyEvent?`, `shouldConsume: Bool`）および静的純粋判定メソッド `HotKeyMonitorService.resolveKeyDown(mode:keyCode:modifiers:shortcut:launcherShortcut:)` を抽出し、`handleCGEvent` の `.keyDown` 分岐が重複なくこの判定結果に従うようリファクタリングする（`Sources/WintchCore/Services/HotKeyMonitorService.swift`）
 
 **Checkpoint**: `HotKeyMonitorService` の `keyDown` 判定が `CGEvent` から分離され、単体テストおよび US1/US2 実装の基盤が整う
 
@@ -51,13 +51,13 @@ description: "検索ランチャー表示中の通常スイッチャーショー
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T004 [P] [US1] `.launcher` モードにおける `resolveKeyDown` の単体テスト（順方向 `isNormalMatch` で `.triggerPressed(isShiftPressed: false)` + `shouldConsume == true`、逆方向 `Shift` 併用で `.triggerPressed(isShiftPressed: true)` + `shouldConsume == true`、ランチャー再押下優先で `.launcherTriggerPressed` + `shouldConsume == true`、`Esc`/`↑`/`↓`/文字キーで `event == nil` + `shouldConsume == false`）を `Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift` に作成する（T003 依存）
-- [ ] T005 [P] [US1] `SwitcherViewModel` のランチャー内通常ショートカット移動テスト（`launcherModeSearchMoveConfirmAndMutualExclusion` 内の旧「無視」アサーション更新に加え、順方向「次へ」・末尾→先頭循環・`Shift` 併用「前へ」・先頭→末尾循環・移動後の `.modifierReleased` 無視・絞り込み後リスト内移動・0件/1件時安全動作・`Enter` 確定）を `Tests/WintchCoreTests/SwitcherViewModelTests.swift` に追加・更新する
+- [X] T004 [P] [US1] `.launcher` モードにおける `resolveKeyDown` の単体テスト（順方向 `isNormalMatch` で `.triggerPressed(isShiftPressed: false)` + `shouldConsume == true`、逆方向 `Shift` 併用で `.triggerPressed(isShiftPressed: true)` + `shouldConsume == true`、ランチャー再押下優先で `.launcherTriggerPressed` + `shouldConsume == true`、`Esc`/`↑`/`↓`/文字キーで `event == nil` + `shouldConsume == false`）を `Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift` に作成する（T003 依存）
+- [X] T005 [P] [US1] `SwitcherViewModel` のランチャー内通常ショートカット移動テスト（`launcherModeSearchMoveConfirmAndMutualExclusion` 内の旧「無視」アサーション更新に加え、順方向「次へ」・末尾→先頭循環・`Shift` 併用「前へ」・先頭→末尾循環・移動後の `.modifierReleased` 無視・絞り込み後リスト内移動・0件/1件時安全動作・`Enter` 確定）を `Tests/WintchCoreTests/SwitcherViewModelTests.swift` に追加・更新する
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] `HotKeyMonitorService.resolveKeyDown` の `.launcher` 分岐で `isLauncherMatch` 判定後に `isNormalMatch`（`keyCode == shortcut.keyCode && modifiers.subtracting(.shift) == shortcut.modifiers`）に一致した場合、`HotKeyKeyDownDecision(event: .triggerPressed(isShiftPressed: modifiers.contains(.shift)), shouldConsume: true)` を返すよう実装する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T003, T004 依存）
-- [ ] T007 [US1] `SwitcherViewModel.handleTriggerPressed(isShiftPressed:)` を更新し、`mode == .launcher` を `mode == .normal` と統合して `moveSelection(isShiftPressed ? .up : .down)` を実行（`searchQuery`・`displayedResults`・`.launcher` モードを維持し、0件時は安全に無操作）するよう実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T005 依存）
+- [X] T006 [US1] `HotKeyMonitorService.resolveKeyDown` の `.launcher` 分岐で `isLauncherMatch` 判定後に `isNormalMatch`（`keyCode == shortcut.keyCode && modifiers.subtracting(.shift) == shortcut.modifiers`）に一致した場合、`HotKeyKeyDownDecision(event: .triggerPressed(isShiftPressed: modifiers.contains(.shift)), shouldConsume: true)` を返すよう実装する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T003, T004 依存）
+- [X] T007 [US1] `SwitcherViewModel.handleTriggerPressed(isShiftPressed:)` を更新し、`mode == .launcher` を `mode == .normal` と統合して `moveSelection(isShiftPressed ? .up : .down)` を実行（`searchQuery`・`displayedResults`・`.launcher` モードを維持し、0件時は安全に無操作）するよう実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T005 依存）
 
 **Checkpoint**: User Story 1 が完全に動作し、US1 のユニットテスト（`HotKeyMonitorDecisionTests`, `SwitcherViewModelTests`）がすべてパスする
 
@@ -71,12 +71,12 @@ description: "検索ランチャー表示中の通常スイッチャーショー
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T008 [P] [US2] カスタマイズ済み通常ショートカット（例：`Control + ` `` や複数修飾キー組み合わせ）での `.launcher` 内順/逆判定テスト、外部改変等で設定重複時のランチャー優先（`.launcherTriggerPressed`）テスト、および `.normal` モード中のランチャーショートカット無視（`event == nil`, `shouldConsume == true`）テストを `Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift` に追加する（T006 依存）
-- [ ] T009 [P] [US2] `SwitcherViewModel` の `.normal` モード表示中における `.launcherTriggerPressed` 無視と通常モード維持の検証を `Tests/WintchCoreTests/SwitcherViewModelTests.swift` で確認・補強する（T007 依存）
+- [X] T008 [P] [US2] カスタマイズ済み通常ショートカット（例：`Control + ` `` や複数修飾キー組み合わせ）での `.launcher` 内順/逆判定テスト、外部改変等で設定重複時のランチャー優先（`.launcherTriggerPressed`）テスト、および `.normal` モード中のランチャーショートカット無視（`event == nil`, `shouldConsume == true`）テストを `Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift` に追加する（T006 依存）
+- [X] T009 [P] [US2] `SwitcherViewModel` の `.normal` モード表示中における `.launcherTriggerPressed` 無視と通常モード維持の検証を `Tests/WintchCoreTests/SwitcherViewModelTests.swift` で確認・補強する（T007 依存）
 
 ### Implementation for User Story 2
 
-- [ ] T010 [US2] `HotKeyMonitorService` の `updateShortcut(_:)` と `TapState` 同期経路、および `AppCoordinator` / `SettingsViewModel` からの設定反映時に `.launcher` モードでも常に最新の `shortcut` が参照されることを確認し、`.launcher` 分岐での判定優先順（`isLauncherMatch` → `isNormalMatch`）と関連日本語コメントを明文化する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T006, T008 依存）
+- [X] T010 [US2] `HotKeyMonitorService` の `updateShortcut(_:)` と `TapState` 同期経路、および `AppCoordinator` / `SettingsViewModel` からの設定反映時に `.launcher` モードでも常に最新の `shortcut` が参照されることを確認し、`.launcher` 分岐での判定優先順（`isLauncherMatch` → `isNormalMatch`）と関連日本語コメントを明文化する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T006, T008 依存）
 
 **Checkpoint**: User Story 1 と User Story 2 の双方が独立して機能し、カスタマイズ設定・通常モード排他を含む全単体テストがパスする
 
@@ -86,8 +86,8 @@ description: "検索ランチャー表示中の通常スイッチャーショー
 
 **Purpose**: コーディング規約の遵守確認、全体テスト実行、`quickstart.md` に沿った最終確認を行う
 
-- [ ] T011 [P] 変更・新規作成した全ファイル（`Sources/WintchCore/Services/Protocols/HotKeyMonitoring.swift`, `Sources/WintchCore/Services/HotKeyMonitorService.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`, `Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`, `Tests/WintchCoreTests/SwitcherViewModelTests.swift`）の日本語ドキュメントコメント（概要・`@param`・`@returns`）およびインラインコメントがプロジェクト規約に準拠しているか点検する
-- [ ] T012 リポジトリルートで `swift test` を実行して全テストスイートのパスを確認し、`specs/004-launcher-switcher-nav/quickstart.md` に記載された自動テスト・実機検証観点との整合を最終確認する
+- [X] T011 [P] 変更・新規作成した全ファイル（`Sources/WintchCore/Services/Protocols/HotKeyMonitoring.swift`, `Sources/WintchCore/Services/HotKeyMonitorService.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`, `Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`, `Tests/WintchCoreTests/SwitcherViewModelTests.swift`）の日本語ドキュメントコメント（概要・`@param`・`@returns`）およびインラインコメントがプロジェクト規約に準拠しているか点検する
+- [X] T012 リポジトリルートで `swift test` を実行して全テストスイートのパスを確認し、`specs/004-launcher-switcher-nav/quickstart.md` に記載された自動テスト・実機検証観点との整合を最終確認する
 
 ---
 

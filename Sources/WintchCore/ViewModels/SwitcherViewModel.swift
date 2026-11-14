@@ -167,18 +167,11 @@ public final class SwitcherViewModel {
     /// - Parameter isShiftPressed: Shift キーが併用されているか
     private func handleTriggerPressed(isShiftPressed: Bool) {
         switch mode {
-        case .launcher:
-            // ランチャー表示中は通常ショートカットを無視する
-            return
         case .inactive:
             present(targetMode: .normal)
-        case .normal:
-            // すでに通常モード表示中の場合は選択インデックスを移動する
-            if isShiftPressed {
-                selectedIndex = SwitcherSelection.previousIndex(current: selectedIndex, count: displayedResults.count)
-            } else {
-                selectedIndex = SwitcherSelection.nextIndex(current: selectedIndex, count: displayedResults.count)
-            }
+        case .normal, .launcher:
+            // 通常モードおよびランチャーモード表示中は、現在の表示リスト内で選択インデックスを移動する
+            moveSelection(isShiftPressed ? .up : .down)
         }
     }
 
