@@ -38,6 +38,8 @@ public final class AppCoordinator {
     private var switcherPanel: SwitcherPanel?
     /// 設定画面ウィンドウ（遅延生成）
     private var settingsWindow: NSWindow?
+    /// 「Wintchについて」ウィンドウ（遅延生成）
+    private var aboutWindow: NSWindow?
     /// 権限誘導画面ウィンドウ（遅延生成）
     private var permissionWindow: NSWindow?
     /// 開始済みフラグ
@@ -120,6 +122,14 @@ public final class AppCoordinator {
     public func openSettings() {
         settingsViewModel.refreshStatus()
         let window = ensureSettingsWindow()
+        NSApplication.shared.activate()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// 「Wintchについて」画面を最前面に表示する
+    public func openAbout() {
+        let window = ensureAboutWindow()
         NSApplication.shared.activate()
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -234,6 +244,26 @@ public final class AppCoordinator {
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
         settingsWindow = window
+        return window
+    }
+
+    /// 「Wintchについて」画面用の NSWindow を必要に応じて生成して返す
+    /// - Returns: 設定済みの NSWindow
+    private func ensureAboutWindow() -> NSWindow {
+        if let aboutWindow {
+            return aboutWindow
+        }
+        let hostingView = NSHostingView(rootView: AboutView())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Wintchについて"
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        aboutWindow = window
         return window
     }
 

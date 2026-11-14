@@ -1,0 +1,180 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - VERSION
+    tags:
+      - 'v*'
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Validate Version, Test, and Tag
+    runs-on: macos-15
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
+      is_prerelease: ${{ steps.resolve.outputs.is_prerelease }}
+      target_sha: ${{ steps.resolve.outputs.target_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version and resolve release metadata
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "VERSION" ]; then
+            echo "::error::VERSION ファイルが見つかりません。"
+            exit 1
+          fi
+
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          SEMVER_REGEX='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+
+          if [[ ! "${FILE_VERSION}" =~ ${SEMVER_REGEX} ]]; then
+            echo "::error::VERSION の値がセマンティックバージョニング形式ではありません: ${FILE_VERSION}"
+            exit 1
+          fi
+
+          EVENT_NAME="${{ github.event_name }}"
+          REF="${{ github.ref }}"
+          TARGET_VERSION="${FILE_VERSION}"
+          TAG_NAME="v${FILE_VERSION}"
+          SHOULD_CREATE_TAG="false"
+
+          if [ "${EVENT_NAME}" = "release" ]; then
+            TAG_NAME="${{ github.event.release.tag_name }}"
+            TAG_VERSION="${TAG_NAME#v}"
+            if [[ ! "${TAG_NAME}" =~ ^v ]] || [[ ! "${TAG_VERSION}" =~ ${SEMVER_REGEX} ]]; then
+              echo "::error::リリースタグ名が SemVer 形式 (vX.Y.Z) ではありません: ${TAG_NAME}"
+              exit 1
+            fi
+            if [ "${TAG_VERSION}" != "${FILE_VERSION}" ]; then
+              echo "::error::タグ (${TAG_NAME}) と VERSION ファイル (${FILE_VERSION}) が一致しません。"
+              exit 1
+            fi
+            TARGET_VERSION="${TAG_VERSION}"
+          elif [ "${EVENT_NAME}" = "push" ] && [[ "${REF}" == refs/tags/* ]]; then
+            TAG_NAME="${{ github.ref_name }}"
+            TAG_VERSION="${TAG_NAME#v}"
+            if [[ ! "${TAG_NAME}" =~ ^v ]] || [[ ! "${TAG_VERSION}" =~ ${SEMVER_REGEX} ]]; then
+              echo "::error::タグ名が SemVer 形式 (vX.Y.Z) ではありません: ${TAG_NAME}"
+              exit 1
+            fi
+            if [ "${TAG_VERSION}" != "${FILE_VERSION}" ]; then
+              echo "::error::タグ (${TAG_NAME}) と VERSION ファイル (${FILE_VERSION}) が一致しません。"
+              exit 1
+            fi
+            TARGET_VERSION="${TAG_VERSION}"
+          else
+            # main ブランチへの VERSION 更新 push または workflow_dispatch
+            if git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+              if [ "${EVENT_NAME}" = "push" ]; then
+                echo "::error::タグ ${TAG_NAME} は既に存在するため自動リリースを中止しました。"
+                exit 1
+              fi
+              echo "既存タグ ${TAG_NAME} を使用してリリース処理を継続します。"
+            else
+              SHOULD_CREATE_TAG="true"
+            fi
+          fi
+
+          IS_PRERELEASE="false"
+          if [[ "${TARGET_VERSION}" == *-* ]]; then
+            IS_PRERELEASE="true"
+          fi
+
+          echo "version=${TARGET_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag_name=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "is_prerelease=${IS_PRERELEASE}" >> "${GITHUB_OUTPUT}"
+          echo "should_create_tag=${SHOULD_CREATE_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "target_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Run unit tests
+        run: swift test
+
+      - name: Create and push tag
+        if: steps.resolve.outputs.should_create_tag == 'true'
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}"
+          git push origin "refs/tags/${TAG_NAME}"
+
+  release:
+    name: Build Universal App and Publish Release
+    needs: prepare
+    runs-on: macos-15
+    concurrency:
+      group: release-${{ needs.prepare.outputs.tag_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Build Universal Binary .app bundle
+        run: ./scripts/build-app.sh release --universal
+
+      - name: Package .app as ZIP and verify artifact
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          EXPECTED_VERSION="${{ needs.prepare.outputs.version }}"
+          ZIP_PATH="./.build/Wintch-${TAG_NAME}.zip"
+
+          ditto -c -k --keepParent ./.build/Wintch.app "${ZIP_PATH}"
+
+          ACTUAL_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ./.build/Wintch.app/Contents/Info.plist)"
+          if [ "${ACTUAL_VERSION}" != "${EXPECTED_VERSION}" ]; then
+            echo "::error::Info.plist のバージョン (${ACTUAL_VERSION}) が期待値 (${EXPECTED_VERSION}) と一致しません。"
+            exit 1
+          fi
+
+          ARCHS="$(lipo -archs ./.build/Wintch.app/Contents/MacOS/Wintch)"
+          echo "Built architectures: ${ARCHS}"
+          if [[ "${ARCHS}" != *"arm64"* ]] || [[ "${ARCHS}" != *"x86_64"* ]]; then
+            echo "::error::Universal Binary (arm64 + x86_64) の生成確認に失敗しました (${ARCHS})。"
+            exit 1
+          fi
+
+      - name: Publish or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          ZIP_PATH="./.build/Wintch-${TAG_NAME}.zip"
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" "${ZIP_PATH}" --clobber
+          else
+            CREATE_ARGS=(
+              "${TAG_NAME}"
+              "${ZIP_PATH}"
+              --target "${{ needs.prepare.outputs.target_sha }}"
+              --title "Wintch ${TAG_NAME}"
+              --generate-notes
+            )
+            if [ "${{ needs.prepare.outputs.is_prerelease }}" = "true" ]; then
+              CREATE_ARGS+=(--prerelease)
+            fi
+            gh release create "${CREATE_ARGS[@]}"
+          fi

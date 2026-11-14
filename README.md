@@ -37,6 +37,10 @@ macOS 標準の `Command + Tab` がアプリケーション単位の切り替え
 ```text
 .
 ├── Package.swift                   # Swift Package 定義（外部依存なし）
+├── VERSION                         # アプリバージョン定義（セマンティックバージョニング）
+├── .github/
+│   └── workflows/
+│       └── release.yml             # VERSION 更新・タグ作成・Universal ビルド・ZIP リリース自動化
 ├── Resources/
 │   ├── Info.plist                  # バンドル情報（LSUIElement / CFBundleIconFile 等）
 │   └── Icons/
@@ -47,14 +51,14 @@ macOS 標準の `Command + Tab` がアプリケーション単位の切り替え
 │   │   └── WintchApp.swift         # アプリエントリポイント・MenuBarExtra
 │   └── WintchCore/
 │       ├── App/                    # AppCoordinator（画面・サービス統括）
-│       ├── Domain/                 # 純粋なビジネスロジック（フィルタ・ソート・選択計算等）
+│       ├── Domain/                 # 純粋なビジネスロジック（フィルタ・ソート・選択・バージョン情報等）
 │       ├── Services/               # OS API 隔離層（AX / CGWindow / CGEventTap 等）
 │       ├── ViewModels/             # @Observable ViewModel 群
 │       └── Views/                  # SwiftUI ビュー & SwitcherPanel (NSPanel)
 ├── Tests/
-│   └── WintchCoreTests/            # Swift Testing ユニットテスト（7 スイート・21 テスト）
+│   └── WintchCoreTests/            # Swift Testing ユニットテスト
 └── scripts/
-    └── build-app.sh                # .app バンドル組み立て・アイコン生成・署名スクリプト
+    └── build-app.sh                # .app バンドル組み立て・バージョン反映・アイコン生成・署名スクリプト
 ```
 
 設計仕様やプロジェクト憲章は [constitution.md](.specify/memory/constitution.md) および [specs/001-window-switcher-mvp/](specs/001-window-switcher-mvp/) にまとめています。
@@ -96,13 +100,23 @@ swift test
 # Release ビルドを行う場合
 ./scripts/build-app.sh release
 
+# Apple Silicon + Intel 対応の Universal Binary でビルドする場合
+./scripts/build-app.sh release --universal
+
 # アプリを起動
 open .build/Wintch.app
 ```
 
 （`swift run` 単体では `.app` バンドルや `Info.plist` が構成されないため、動作確認は `./scripts/build-app.sh` 経由で `.build/Wintch.app` を起動することを推奨します）
 
-### 4. 再ビルド時のアクセシビリティ権限に関する注意
+### 4. バージョニングと自動リリース（GitHub Actions）
+
+アプリバージョンはリポジトリルートの [`VERSION`](VERSION) ファイルでセマンティックバージョニング（例: `0.1.0`、`0.2.0-beta.1`）により一元管理しています。
+
+* `./scripts/build-app.sh` 実行時に `VERSION` の値と Git コミット数が `.build/Wintch.app/Contents/Info.plist`（`CFBundleShortVersionString` / `CFBundleVersion`）へ自動反映されます。
+* `main` ブランチで `VERSION` を更新してプッシュすると、[`.github/workflows/release.yml`](.github/workflows/release.yml) が自動でテストを実行した上で `v<VERSION>` タグを作成し、Universal Binary 版の `.app` を `ditto -c -k --keepParent` で圧縮した `Wintch-v<VERSION>.zip` を GitHub Release へ自動公開します（手動での `v*` タグプッシュや GitHub Release 公開にも対応）。
+
+### 5. 再ビルド時のアクセシビリティ権限に関する注意
 
 `./scripts/build-app.sh` ではローカル開発用にアドホック署名（`codesign --force --deep --sign -`）を使用しています。macOS の仕様上、アドホック署名アプリは**ビルドごとの署名ハッシュ（`cdhash`）で権限が識別**されるため、コードを変更して再ビルドすると「システム設定」一覧上は ON に見えても内部的に権限が外れることがあります。
 

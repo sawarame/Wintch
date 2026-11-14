@@ -34,6 +34,12 @@ struct WintchApp: App {
                 Divider()
             }
 
+            Button("Wintchについて") {
+                appDelegate.coordinator.openAbout()
+            }
+
+            Divider()
+
             Button("設定を開く...") {
                 appDelegate.coordinator.openSettings()
             }
