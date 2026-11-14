@@ -82,7 +82,7 @@ public protocol HotKeyMonitoring: AnyObject {
    - **ランチャーショートカット** → もし通常ショートカットと無関係なキーでもランチャー遷移させないため、通知を行わない（FR-004）。
 4. **`activeMode == .launcher` の場合**:
    - **ランチャーショートカット**に一致 → `.launcherTriggerPressed` を通知し、消費（`nil`：トグル終了）。
-   - **通常ショートカット**（順・逆）に一致 → `.triggerPressed` は通知せず消費のみ（または無視）し、モードを切り替えない（FR-004）。
+   - **通常ショートカット**（順・逆）に一致 → `.triggerPressed(isShiftPressed:)` を通知して消費（`nil`）し、モードを切り替えずにランチャー内の選択カーソルを「次へ / 前へ」に移動する（FR-004 改定 / `004-launcher-switcher-nav`）。
    - `flagsChanged` による `.modifierReleased` は通知しない。
    - **`Esc` / `↑` / `↓` / `Enter` / `Ctrl+N` / `Ctrl+P` / 文字キーは絶対に消費しない** → すべてキーウィンドウの検索入力フィールドおよび日本語 IME へ素通しさせる（FR-012）。
 
