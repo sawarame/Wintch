@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+@preconcurrency import ScreenCaptureKit
 import Testing
 @testable import WintchCore
 
@@ -189,5 +190,57 @@ struct WindowCaptureAndMatchingTests {
                 screenBounds: screens
             )
         )
+    }
+
+    /// ScreenCaptureKit の権限拒否・エンタイトルメント不足エラーのみを失効対象として識別し、
+    /// 一時的なストリーム失敗や別ドメインエラーを誤判定しないことを検証する
+    @Test("isPermissionDeniedError は権限拒否とエンタイトルメント不足のみを識別する")
+    func permissionDeniedErrorDetectionMatchesOnlyPermissionFailures() {
+        let userDeclined = NSError(
+            domain: SCStreamError.errorDomain,
+            code: SCStreamError.userDeclined.rawValue
+        )
+        let missingEntitlements = NSError(
+            domain: SCStreamError.errorDomain,
+            code: SCStreamError.missingEntitlements.rawValue
+        )
+        let failedToStart = NSError(
+            domain: SCStreamError.errorDomain,
+            code: SCStreamError.failedToStart.rawValue
+        )
+        let otherDomain = NSError(
+            domain: NSCocoaErrorDomain,
+            code: SCStreamError.userDeclined.rawValue
+        )
+
+        #expect(WindowCaptureService.isPermissionDeniedError(userDeclined) == true)
+        #expect(WindowCaptureService.isPermissionDeniedError(missingEntitlements) == true)
+        #expect(WindowCaptureService.isPermissionDeniedError(failedToStart) == false)
+        #expect(WindowCaptureService.isPermissionDeniedError(otherDomain) == false)
+    }
+
+    /// 実行中に権限失効を検知した場合、サービスおよび共有権限サービスが未許可状態へ切り替わり、
+    /// 次回以降の captureThumbnails 呼び出しが即座に抑止されることを検証する
+    @Test("権限拒否検知時は共有権限サービスへ失効を記録し以降のステータス確認と再リクエストを抑止する")
+    @MainActor
+    func permissionDeniedMarksSessionRevokedAndSuppressesSubsequentRequests() async {
+        let permissionService = ScreenRecordingPermissionService()
+        let captureService = WindowCaptureService(screenRecordingPermissionService: permissionService)
+
+        // 権限拒否を検知すると共有サービスもセッション内失効状態へ遷移する
+        captureService.handlePermissionDenied()
+
+        #expect(permissionService.currentStatus() == .denied)
+        #expect(permissionService.requestPermission() == false)
+
+        // 失効後は captureThumbnails を呼んでも OS API に進まず安全に即終了する
+        var capturedCount = 0
+        await captureService.captureThumbnails(
+            for: [101, 102],
+            maxPixelSize: CGSize(width: 200, height: 120)
+        ) { _, _ in
+            capturedCount += 1
+        }
+        #expect(capturedCount == 0)
     }
 }

@@ -53,6 +53,7 @@ public final class AppCoordinator {
 
     /// 標準の本番サービス一式でコーディネーターを初期化する
     public convenience init() {
+        let screenRecordingPermissionService = ScreenRecordingPermissionService()
         self.init(
             windowService: WindowService(),
             hotKeyMonitor: HotKeyMonitorService(),
@@ -61,8 +62,10 @@ public final class AppCoordinator {
             launchAtLoginService: LaunchAtLoginService(),
             iconProvider: IconProviderService(),
             installedAppService: InstalledAppService(),
-            screenRecordingPermissionService: ScreenRecordingPermissionService(),
-            windowCaptureService: WindowCaptureService()
+            screenRecordingPermissionService: screenRecordingPermissionService,
+            windowCaptureService: WindowCaptureService(
+                screenRecordingPermissionService: screenRecordingPermissionService
+            )
         )
     }
 

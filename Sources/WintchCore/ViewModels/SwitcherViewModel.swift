@@ -448,9 +448,17 @@ public final class SwitcherViewModel {
 
         let shouldUseCapture = targetMode == .normal && normalDisplayStyle == .capture
         if shouldUseCapture {
+            let granted: Bool
+            if let screenRecordingPermissionService {
+                granted = screenRecordingPermissionService.currentStatus() == .granted
+            } else {
+                granted = false
+            }
+            isScreenRecordingGranted = granted
+
             // キャプチャ表示型では起動直後にキャッシュ済みサムネイルのみ即時反映し、表示遅延を起こさない
             var initialThumbnails: [UInt32: NSImage] = [:]
-            if let windowCaptureService {
+            if granted, let windowCaptureService {
                 for entry in sorted {
                     if let windowID = entry.cgWindowID,
                        let cached = windowCaptureService.cachedThumbnail(for: windowID) {
@@ -463,11 +471,6 @@ public final class SwitcherViewModel {
                 itemCount: sorted.count,
                 availableScreenWidth: availableScreenSize.width
             )
-            if let screenRecordingPermissionService {
-                isScreenRecordingGranted = screenRecordingPermissionService.currentStatus() == .granted
-            } else {
-                isScreenRecordingGranted = false
-            }
         } else {
             capturedThumbnails = [:]
             isScreenRecordingGranted = true
@@ -537,6 +540,19 @@ public final class SwitcherViewModel {
                 }
                 self.capturedThumbnails[windowID] = image
             }
+
+            // 非同期キャプチャ中に権限拒否・失効を検知した場合は、現在表示中のパネルにも即座に未許可バナーへ切り替える
+            guard let self,
+                  !Task.isCancelled,
+                  self.mode == .normal,
+                  self.normalDisplayStyle == .capture,
+                  self.presentationGeneration == capturedGeneration,
+                  let screenRecordingPermissionService = self.screenRecordingPermissionService,
+                  screenRecordingPermissionService.currentStatus() != .granted else {
+                return
+            }
+            self.isScreenRecordingGranted = false
+            self.capturedThumbnails.removeAll()
         }
     }
 

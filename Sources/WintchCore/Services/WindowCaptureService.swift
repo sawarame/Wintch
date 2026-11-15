@@ -12,6 +12,16 @@ public final class WindowCaptureService: WindowCaptureServicing {
         let value: SCWindow
     }
 
+    /// 単一ウィンドウの非同期キャプチャ結果を表す Sendable 列挙型
+    private enum SingleCaptureResult: Sendable {
+        /// サムネイル画像の取得成功
+        case captured(UInt32, CGImage)
+        /// 画面収録権限の拒否・不足による失敗
+        case permissionDenied
+        /// 権限以外の一時的失敗またはタイムアウト
+        case failed
+    }
+
     /// タイムアウト付き非同期レースの状態管理構造体
     private struct TimeoutRaceState: Sendable {
         var didResume = false
@@ -29,6 +39,12 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// 1 ウィンドウあたりのキャプチャタイムアウト時間（秒）
     private static let captureTimeoutSeconds: TimeInterval = 1.5
 
+    /// 画面収録権限状態を共有するためのサービス（省略時は内部状態と CGPreflight のみ使用）
+    private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
+
+    /// 実行中プロセス内で ScreenCaptureKit による権限拒否エラーを検知したかどうか
+    private var isAccessDeniedInSession = false
+
     /// ウィンドウ ID ごとのサムネイル画像キャッシュ（メモリ限定・ディスク非保存）
     private var thumbnailCache: [UInt32: NSImage] = [:]
 
@@ -42,7 +58,10 @@ public final class WindowCaptureService: WindowCaptureServicing {
     private var invalidatedWindowIDsDuringCapture: Set<UInt32> = []
 
     /// サービスを初期化する
-    public init() {}
+    /// - Parameter screenRecordingPermissionService: 画面収録権限状態を共有するサービス
+    public init(screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil) {
+        self.screenRecordingPermissionService = screenRecordingPermissionService
+    }
 
     /// メモリ上のキャッシュから指定ウィンドウのサムネイルを同期取得する
     /// - Parameter cgWindowID: 対象の CoreGraphics ウィンドウ ID
@@ -63,8 +82,8 @@ public final class WindowCaptureService: WindowCaptureServicing {
         maxPixelSize: CGSize,
         onCaptured: @escaping @MainActor (UInt32, NSImage) -> Void
     ) async {
-        // 防御的チェック: 権限未許可時は OS ダイアログを誘発する ScreenCaptureKit API を呼ばない
-        guard !cgWindowIDs.isEmpty, CGPreflightScreenCaptureAccess() else {
+        // 防御的チェック: 権限未許可・セッション内失効時は OS ダイアログを誘発する ScreenCaptureKit API を呼ばない
+        guard !cgWindowIDs.isEmpty, hasScreenRecordingPermission() else {
             return
         }
 
@@ -73,7 +92,10 @@ public final class WindowCaptureService: WindowCaptureServicing {
         do {
             shareableWindowsByID = try await Self.fetchShareableWindows(for: targetIDSet)
         } catch {
-            // 権限取り消しや取得失敗時は例外を投げず安全にフォールバック継続する
+            // 再ビルドや権限変更で TCC が拒否を返した場合はセッション内失効として記録し、次回以降の OS ダイアログ再発を防ぐ
+            if Self.isPermissionDeniedError(error) {
+                handlePermissionDenied()
+            }
             return
         }
 
@@ -88,7 +110,7 @@ public final class WindowCaptureService: WindowCaptureServicing {
         let capturedEpoch = cacheEpoch
         invalidatedWindowIDsDuringCapture.removeAll()
 
-        await withTaskGroup(of: (UInt32, CGImage)?.self) { group in
+        await withTaskGroup(of: SingleCaptureResult.self) { group in
             var nextIndex = 0
             let initialBatch = min(Self.maxConcurrentCaptures, orderedTargets.count)
 
@@ -106,6 +128,13 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     break
                 }
 
+                if case .permissionDenied = result {
+                    // 実行中の権限取り消しを検知した時点で残りのキャプチャを中断する
+                    handlePermissionDenied()
+                    group.cancelAll()
+                    return
+                }
+
                 if nextIndex < orderedTargets.count {
                     let target = orderedTargets[nextIndex]
                     nextIndex += 1
@@ -114,7 +143,7 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     }
                 }
 
-                if let (windowID, cgImage) = result,
+                if case let .captured(windowID, cgImage) = result,
                    !invalidatedWindowIDsDuringCapture.contains(windowID) {
                     let nsImage = NSImage(
                         cgImage: cgImage,
@@ -175,30 +204,62 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// - Parameters:
     ///   - target: 対象ウィンドウのラッパー
     ///   - maxPixelSize: 出力上限ピクセルサイズ
-    /// - Returns: 取得成功時は `(windowID, CGImage)`、失敗・タイムアウト・キャンセル時は `nil`
+    /// - Returns: 取得結果（成功時は `.captured`、権限拒否時は `.permissionDenied`、失敗・タイムアウト時は `.failed`）
     private nonisolated static func captureSingleWindow(
         _ target: SendableSCWindow,
         maxPixelSize: CGSize
-    ) async -> (UInt32, CGImage)? {
-        guard !Task.isCancelled else { return nil }
+    ) async -> SingleCaptureResult {
+        guard !Task.isCancelled else { return .failed }
 
         let windowID = target.value.windowID
         let targetSize = scaledPixelSize(for: target.value.frame.size, maxPixelSize: maxPixelSize)
 
-        let capturedImage = await runWithTimeout(seconds: captureTimeoutSeconds) {
+        let captureResult = await runWithTimeout(seconds: captureTimeoutSeconds) {
             let filter = SCContentFilter(desktopIndependentWindow: target.value)
             let config = SCStreamConfiguration()
             config.width = targetSize.width
             config.height = targetSize.height
             config.scalesToFit = true
             config.showsCursor = false
-            return try? await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: config
-            )
+            do {
+                let image = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter,
+                    configuration: config
+                )
+                return SingleCaptureResult.captured(windowID, image)
+            } catch {
+                return Self.isPermissionDeniedError(error) ? .permissionDenied : .failed
+            }
         }
-        guard !Task.isCancelled, let capturedImage else { return nil }
-        return (windowID, capturedImage)
+        guard !Task.isCancelled, let captureResult else { return .failed }
+        return captureResult
+    }
+
+    /// 現在のセッションで ScreenCaptureKit を安全に呼び出せる権限状態かどうかを確認する
+    /// - Returns: 許可されており未失効であれば true
+    private func hasScreenRecordingPermission() -> Bool {
+        guard !isAccessDeniedInSession else { return false }
+        if let screenRecordingPermissionService {
+            return screenRecordingPermissionService.currentStatus() == .granted
+        }
+        return CGPreflightScreenCaptureAccess()
+    }
+
+    /// ScreenCaptureKit 呼び出しによる権限拒否を検知した際、セッション内失効の記録とキャッシュ破棄を行う
+    func handlePermissionDenied() {
+        isAccessDeniedInSession = true
+        clearCache()
+        screenRecordingPermissionService?.markAccessRevoked()
+    }
+
+    /// 渡されたエラーが ScreenCaptureKit の画面収録権限拒否・不足に起因するものか判定する
+    /// - Parameter error: ScreenCaptureKit から返されたエラー
+    /// - Returns: 権限拒否（`userDeclined`）またはエンタイトルメント不足（`missingEntitlements`）であれば true
+    nonisolated static func isPermissionDeniedError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == SCStreamError.errorDomain else { return false }
+        return nsError.code == SCStreamError.userDeclined.rawValue
+            || nsError.code == SCStreamError.missingEntitlements.rawValue
     }
 
     /// キャンセル非対応になり得る非同期 I/O を指定秒数のタイムアウトおよび親キャンセルから隔離して実行する

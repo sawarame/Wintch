@@ -1141,4 +1141,63 @@ struct SwitcherViewModelTests {
         #expect(captureService.capturedRequestWindowIDs.count == captureCallsBeforeList)
         #expect(screenRecordingService.currentStatusCallCount == statusCallsBeforeList)
     }
+
+    /// 起動時は許可キャッシュが残っていても、非同期キャプチャ中に権限拒否（失効）が検知された場合は
+    /// 即座に未許可バナー＆プレースホルダーへ切り替え、2回目以降の起動でキャプチャを再試行しないことを検証する
+    @Test("非同期キャプチャ中の権限失効検知で即座に未許可表示へ切り替え次回以降の再要求ループを防ぐ")
+    @MainActor
+    func runtimePermissionRevocationSwitchesToDeniedAndStopsRepeatedCapture() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 301, pid: 10, applicationName: "App1", title: "Win1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 302, pid: 20, applicationName: "App2", title: "Win2", lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+        // 旧キャッシュが残っていても、権限失効後はクリア・非表示になる
+        captureService.cachedThumbnails[301] = NSImage(size: NSSize(width: 80, height: 60))
+
+        // ScreenCaptureKit 呼び出しで権限拒否を検知したケースを再現する
+        captureService.captureHandler = { _, _ in
+            captureService.clearCache()
+            screenRecordingService.markAccessRevoked()
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture
+        )
+
+        // 1回目の起動: 初回チェック時は許可扱いで開始し、非同期キャプチャ内で失効を検知して未許可へ切り替わる
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        await Task.yield()
+        await Task.yield()
+
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.isScreenRecordingGranted == false)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+        #expect(captureService.capturedRequestWindowIDs.count == 1)
+        #expect(screenRecordingService.markAccessRevokedCallCount == 1)
+
+        // 2回目の起動: 既に未許可状態が維持されているためキャプチャ API を二度と呼ばない
+        viewModel.cancel()
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        await Task.yield()
+
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.isScreenRecordingGranted == false)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+        #expect(captureService.capturedRequestWindowIDs.count == 1)
+    }
 }

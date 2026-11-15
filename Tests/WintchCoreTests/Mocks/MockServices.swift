@@ -262,6 +262,8 @@ final class MockScreenRecordingPermissionService: ScreenRecordingPermissionServi
     var requestPermissionCallCount = 0
     /// openSystemSettings が呼ばれた回数
     var openSystemSettingsCallCount = 0
+    /// markAccessRevoked が呼ばれた回数
+    var markAccessRevokedCallCount = 0
 
     /// 現在の画面収録権限状態を返す
     /// - Returns: スタブ設定された画面収録権限状態
@@ -284,6 +286,12 @@ final class MockScreenRecordingPermissionService: ScreenRecordingPermissionServi
     /// システム設定遷移要求を記録する
     func openSystemSettings() {
         openSystemSettingsCallCount += 1
+    }
+
+    /// セッション内の画面収録権限失効を記録し、以降のステータスを未許可へ切り替える
+    func markAccessRevoked() {
+        markAccessRevokedCallCount += 1
+        stubbedStatus = .denied
     }
 }
 

@@ -14,4 +14,7 @@ public protocol ScreenRecordingPermissionServicing: AnyObject {
 
     /// システム設定の「画面収録とシステムオーディオ録音」ペインを開く
     func openSystemSettings()
+
+    /// 実行中プロセス内で画面収録アクセスが拒否・失効したことを記録し、以降の判定を未許可扱いに切り替える
+    func markAccessRevoked()
 }
