@@ -528,13 +528,17 @@ struct SwitcherViewModelTests {
         #expect(viewModel.mode == .inactive)
         #expect(hotKeyMonitor.activeMode == .inactive)
 
-        // 2. ランチャーモードで最後の1件を閉じてもアプリ終了の上で自動的にパネル終了する
+        // 2. ランチャーモードで最後の1件を閉じた場合はパネルを維持し、ウィンドウ0件状態へ遷移する
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
         #expect(viewModel.mode == .launcher)
         await viewModel.closeSelectedWindow()
         #expect(windowService.terminatedPIDs == [10, 10])
-        #expect(viewModel.isPresented == false)
-        #expect(hotKeyMonitor.activeMode == .inactive)
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.hasOpenWindows == false)
+        #expect(viewModel.emptyState == .noOpenWindows)
+        #expect(hotKeyMonitor.activeMode == .launcher)
+        viewModel.cancel()
 
         // 3. ランチャーで検索結果0件のときにクローズ操作してもサービスを呼ばず維持される
         let closeCountBeforeZeroSearch = windowService.closedWindows.count
@@ -1394,5 +1398,181 @@ struct SwitcherViewModelTests {
         viewModel.updateSearchQuery("gemini")
         #expect(viewModel.displayedResults.isEmpty)
         #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Gemini"])
+    }
+
+    /// ウィンドウ0件の状態でも検索ランチャーを起動でき、アプリ検索・起動・キャンセル・権限未許可フォールバックが機能することを検証する
+    @Test("ウィンドウ0件状態でも検索ランチャーを起動してアプリを検索・起動およびキャンセルできる")
+    @MainActor
+    func launcherPresentsAndLaunchesAppsWhenNoWindowsExist() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        windowService.stubbedCandidates = []
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Safari",
+                bundleIdentifier: "com.apple.Safari",
+                bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")
+            ),
+            LaunchableApp(
+                displayName: "メモ",
+                alternateName: "Notes",
+                bundleIdentifier: "com.apple.Notes",
+                bundleURL: URL(fileURLWithPath: "/System/Applications/Notes.app")
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
+        )
+
+        // 1. ウィンドウ0件で検索ランチャーを起動すると未入力案内状態で開く
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        await Task.yield()
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.hasOpenWindows == false)
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.displayedAppResults.isEmpty)
+        #expect(viewModel.selectedIndex == 0)
+        #expect(viewModel.emptyState == .noOpenWindows)
+        #expect(viewModel.launchSectionHeaderTitle == "アプリを起動")
+        #expect(hotKeyMonitor.activeMode == .launcher)
+        #expect(installedAppService.refreshCallCount == 1)
+
+        // 空白のみの入力ではアプリ一覧を展開せず、未入力案内状態を維持する
+        viewModel.updateSearchQuery("   ")
+        #expect(viewModel.displayedAppResults.isEmpty)
+        #expect(viewModel.emptyState == .noOpenWindows)
+
+        // 2. 英語・日本語別名キーワードでアプリを起動候補として検索・確定起動できる
+        viewModel.updateSearchQuery("note")
+        #expect(viewModel.emptyState == nil)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["メモ"])
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.confirmSelection()
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["メモ"])
+        #expect(viewModel.isPresented == false)
+        #expect(hotKeyMonitor.activeMode == .inactive)
+
+        // 3. クリック選択（selectAndActivate）でも起動でき、Esc/トグル再押下では起動せず閉じる
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("saf")
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Safari"])
+        viewModel.handleHotKeyEvent(.escapePressed)
+        #expect(viewModel.isPresented == false)
+        #expect(installedAppService.launchedApps.count == 1)
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("saf")
+        viewModel.selectAndActivate(at: 0)
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["メモ", "Safari"])
+        #expect(viewModel.isPresented == false)
+
+        // 4. 権限未許可時はウィンドウ0件でもランチャーを開かず権限誘導通知を呼ぶ
+        var deniedNotified = false
+        viewModel.onPermissionDenied = { deniedNotified = true }
+        permissionService.stubbedStatus = .denied
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.isPresented == false)
+        #expect(deniedNotified == true)
+    }
+
+    /// ウィンドウ0件時の通常スイッチャー非起動維持・最後のウィンドウ終了時のランチャー継続・検索0件およびクリア遷移を検証する
+    @Test("ウィンドウ0件の通常スイッチャー非起動とランチャーでの最後1枚クローズ維持および境界状態が安全に動作する")
+    @MainActor
+    func zeroWindowRoleSeparationAndLastWindowCloseInLauncher() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Safari",
+                bundleIdentifier: "com.apple.Safari",
+                bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")
+            ),
+            LaunchableApp(
+                displayName: "Slack",
+                bundleIdentifier: "com.tinyspeck.slackmacgap",
+                bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
+        )
+
+        // 1. ウィンドウ0件のときは通常スイッチャー（順方向・逆方向とも）を開かない
+        windowService.stubbedCandidates = []
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == false)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.isPresented == false)
+
+        // 2. 検索語入力中に最後の1枚のウィンドウを閉じてもパネルが維持され、アプリ起動候補が再評価される
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "only-safari",
+                pid: 42,
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari",
+                title: "Start Page"
+            )
+        ]
+        var focusRestoredModes: [SwitcherMode] = []
+        var searchResultsUpdatedCount = 0
+        viewModel.onPanelFocusRestoreNeeded = { focusRestoredModes.append($0) }
+        viewModel.onSearchResultsUpdated = { searchResultsUpdatedCount += 1 }
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("s")
+        #expect(viewModel.displayedResults.map(\.entry.applicationName) == ["Safari"])
+        // 上に Safari ウィンドウがあるため下のアプリ起動候補には Slack のみが出ている
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack"])
+
+        let updatesBeforeClose = searchResultsUpdatedCount
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [42])
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.hasOpenWindows == false)
+        #expect(viewModel.displayedResults.isEmpty)
+        // Safari のウィンドウが閉じたため、検索語 "s" に対するアプリ起動候補へ Safari も再出現する
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Safari", "Slack"])
+        #expect(viewModel.selectedIndex == 0)
+        #expect(viewModel.emptyState == nil)
+        #expect(viewModel.launchSectionHeaderTitle == "アプリを起動")
+        #expect(searchResultsUpdatedCount > updatesBeforeClose)
+        #expect(focusRestoredModes.last == .launcher)
+
+        // 3. 検索語をすべて削除するとウィンドウ0件時の案内状態へ戻る
+        viewModel.updateSearchQuery("")
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.displayedAppResults.isEmpty)
+        #expect(viewModel.emptyState == .noOpenWindows)
+
+        // 4. 一致するアプリもない検索時は .noMatchingApps となり、Enter・移動・クローズが無視される
+        viewModel.updateSearchQuery("zzzz-not-found")
+        #expect(viewModel.emptyState == .noMatchingApps)
+        viewModel.moveSelection(.down)
+        viewModel.confirmSelection()
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isPresented == true)
+        #expect(installedAppService.launchedApps.isEmpty)
+        #expect(windowService.closedWindows.isEmpty)
     }
 }

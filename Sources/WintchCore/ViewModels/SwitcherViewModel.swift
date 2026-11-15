@@ -60,6 +60,30 @@ public final class SwitcherViewModel {
         mode == .launcher && !displayedAppResults.isEmpty
     }
 
+    /// 現在の表示セッションで保持している有効な通常ウィンドウが 1 件以上存在するか
+    public var hasOpenWindows: Bool {
+        !allEntries.isEmpty
+    }
+
+    /// ランチャー表示中に候補が 0 件の場合の空状態種別（非表示時・通常モード・候補あり時は nil）
+    public var emptyState: LauncherEmptyState? {
+        guard mode == .launcher else { return nil }
+        return LauncherEmptyState.resolve(
+            hasOpenWindows: hasOpenWindows,
+            searchQuery: searchQuery,
+            displayedWindowCount: displayedResults.count,
+            displayedAppCount: displayedAppResults.count
+        )
+    }
+
+    /// アプリ起動候補セクションに表示する見出し文言
+    public var launchSectionHeaderTitle: String {
+        if hasOpenWindows && displayedResults.isEmpty {
+            return "一致するウィンドウがないため、アプリを起動"
+        }
+        return "アプリを起動"
+    }
+
     /// 現在選択操作の対象となっている全候補（ウィンドウ＋ランチャー時はアプリ起動候補）の合計件数
     private var activeResultCount: Int {
         displayedResults.count + (mode == .launcher ? displayedAppResults.count : 0)
@@ -288,8 +312,8 @@ public final class SwitcherViewModel {
             allEntries.removeAll { $0.id == target.id }
         }
 
-        if allEntries.isEmpty {
-            // 開いている通常ウィンドウが全件0件になった場合はパネルを自動的に閉じる
+        if allEntries.isEmpty && targetMode == .normal {
+            // 通常スイッチャーでは開いている通常ウィンドウが 0 件になった時点でパネルを自動的に閉じる
             dismiss(reason: .cancelled)
             return
         }
@@ -432,12 +456,12 @@ public final class SwitcherViewModel {
         let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
         let sorted = WindowSorter.sortByMRU(filtered)
 
-        // 通常スイッチャーは直前のウィンドウ（2番目）、検索ランチャーは先頭ウィンドウ（1番目）を初期選択する
-        guard let initial = SwitcherSelection.initialIndex(
+        // 通常スイッチャーは有効ウィンドウ 0 件時は起動せず、検索ランチャーは 0 件でもアプリ起動用に開く
+        let initial = SwitcherSelection.initialIndex(
             count: sorted.count,
             preferSecondItem: targetMode != .launcher
-        ) else {
-            // 有効なウィンドウが 0 件の場合はパネルを表示しない
+        )
+        if initial == nil && targetMode != .launcher {
             return
         }
 
@@ -445,7 +469,7 @@ public final class SwitcherViewModel {
         searchQuery = ""
         displayedResults = sorted.map { WindowSearchResult(entry: $0) }
         displayedAppResults = []
-        selectedIndex = initial
+        selectedIndex = initial ?? 0
         presentationGeneration += 1
         mode = targetMode
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
