@@ -32,6 +32,12 @@ public final class WindowService: WindowServicing {
     /// 監視中フラグ
     private var isObserving = false
 
+    /// 照合および補完候補として許可する CoreGraphics ウィンドウレイヤー（通常・フローティング）
+    private static let allowedCGWindowLayers: Set<Int> = [
+        Int(CGWindowLevelForKey(.normalWindow)),
+        Int(CGWindowLevelForKey(.floatingWindow))
+    ]
+
     /// WindowService を初期化する
     public init() {}
 
@@ -213,7 +219,7 @@ public final class WindowService: WindowServicing {
         // 2. Wintch 起動前から別スペースに存在し AX 未キャッシュの CGWindow を補完追加する
         for (index, cgInfo) in cgWindows.enumerated() {
             guard !matchedCGWindowIDs.contains(cgInfo.windowID) else { continue }
-            guard cgInfo.layer == 0 else { continue }
+            guard Self.allowedCGWindowLayers.contains(cgInfo.layer) else { continue }
             guard let app = appMap[cgInfo.pid],
                   app.activationPolicy == .regular else { continue }
 
@@ -420,15 +426,14 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// 指定 PID のアプリから現在の kAXWindowsAttribute を読み取りキャッシュを更新する
+    /// 指定 PID のアプリから現在の AX ウィンドウ一覧を読み取りキャッシュを更新する
     /// - Parameters:
     ///   - pid: 対象プロセス ID
     ///   - markFrontmostAsActive: 最前面アプリの先頭ウィンドウをアクティブとして記録するか
     private func refreshAXWindows(for pid: Int32, markFrontmostAsActive: Bool) {
         let appElement = AXUIElementCreateApplication(pid)
-        var windowsRef: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
-        guard result == .success, let axWindows = windowsRef as? [AXUIElement] else {
+        let axWindows = collectAXWindows(for: appElement)
+        guard !axWindows.isEmpty else {
             return
         }
 
@@ -498,7 +503,9 @@ public final class WindowService: WindowServicing {
         for (pid, list) in cachedWindowsByPID {
             let pidCGEntries = cgEntriesByPID[pid] ?? []
             let hasSubstantialCGWindow = pidCGEntries.contains { entry in
-                entry.info.layer == 0 && entry.info.bounds.width >= 200 && entry.info.bounds.height >= 165
+                Self.allowedCGWindowLayers.contains(entry.info.layer)
+                    && entry.info.bounds.width >= 200
+                    && entry.info.bounds.height >= 165
             }
             let filtered = list.filter { cached in
                 // AX 属性にアクセスできれば生存している（または別スペースにある）
@@ -533,14 +540,22 @@ public final class WindowService: WindowServicing {
         in entries: [(zOrder: Int, info: CGWindowMeta)],
         excluding excludedIDs: Set<UInt32>
     ) -> (zOrder: Int, info: CGWindowMeta)? {
-        let available = entries.filter { !excludedIDs.contains($0.info.windowID) && $0.info.layer == 0 }
+        let available = entries.filter {
+            !excludedIDs.contains($0.info.windowID)
+                && Self.allowedCGWindowLayers.contains($0.info.layer)
+        }
         guard let axBounds = cached.bounds else {
             return nil
         }
 
-        // 1. 許容誤差 40pt 以内で最も位置・サイズが近い CGWindow を優先する
+        // 1. 許容誤差 40pt 以内で最も位置・サイズが近い CGWindow を優先する（同距離なら通常レイヤー優先）
         if let exactMatch = available.min(by: { lhs, rhs in
-            boundsDistance(axBounds, lhs.info.bounds) < boundsDistance(axBounds, rhs.info.bounds)
+            let lhsDist = boundsDistance(axBounds, lhs.info.bounds)
+            let rhsDist = boundsDistance(axBounds, rhs.info.bounds)
+            if lhsDist != rhsDist {
+                return lhsDist < rhsDist
+            }
+            return lhs.info.layer < rhs.info.layer
         }), boundsDistance(axBounds, exactMatch.info.bounds) <= 40.0 {
             return exactMatch
         }
@@ -690,15 +705,42 @@ public final class WindowService: WindowServicing {
         }
 
         let appElement = AXUIElementCreateApplication(pid)
-        var windowsRef: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
-        if status == .success, let axWindows = windowsRef as? [AXUIElement] {
+        let axWindows = collectAXWindows(for: appElement)
+        if !axWindows.isEmpty {
             return axWindows.contains { CFEqual($0, axElement) }
         }
 
         // ウィンドウ一覧取得に失敗した場合は対象要素のロール読み取り可否で生存確認する
         var roleRef: CFTypeRef?
         return AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleRef) == .success
+    }
+
+    /// アプリケーション要素から kAXWindowsAttribute に加え、フォーカス／メインウィンドウを重複排除して収集する
+    /// - Parameter appElement: 対象アプリケーションの AXUIElement
+    /// - Returns: 重複のないウィンドウ AXUIElement 配列
+    private func collectAXWindows(for appElement: AXUIElement) -> [AXUIElement] {
+        var result: [AXUIElement] = []
+        var windowsRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+           let axWindows = windowsRef as? [AXUIElement] {
+            result = axWindows
+        }
+
+        // kAXWindowsAttribute に含まれないフローティングパネルや別スペースの現在ウィンドウを補完する
+        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+            var extraRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appElement, attribute as CFString, &extraRef) == .success,
+                  let extraValue = extraRef,
+                  CFGetTypeID(extraValue) == AXUIElementGetTypeID() else {
+                continue
+            }
+            let extraWindow = extraValue as! AXUIElement
+            if !result.contains(where: { CFEqual($0, extraWindow) }) {
+                result.append(extraWindow)
+            }
+        }
+
+        return result
     }
 
     /// クローズ確認済みのウィンドウを内部キャッシュから除去する

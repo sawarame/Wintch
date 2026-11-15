@@ -247,4 +247,139 @@ struct WindowFilterTests {
         #expect(result.count == 1)
         #expect(result[0].id == "cg-wezterm-fullscreen")
     }
+
+    /// 実質サイズを持つフローティングウィンドウ（layer=3 / AXFloatingWindow）が通過し、小サイズ補助窓が除外されることを検証する
+    @Test("通常サイズのフローティングウィンドウを通過させ小サイズのフローティング補助窓を除外する")
+    func floatingWindowsAreFilteredBySubstantialSize() {
+        let candidates = [
+            // Gemini ミニチャット等の通常サイズフローティングウィンドウ（AX 情報あり）
+            RawWindowCandidate(
+                id: "ax-gemini-floating",
+                cgWindowID: 3026,
+                pid: 4000,
+                applicationName: "Gemini",
+                title: "Gemini",
+                layer: 3,
+                bounds: WindowBounds(x: 267, y: 149, width: 1386, height: 811),
+                axRole: "AXWindow",
+                axSubrole: "AXFloatingWindow",
+                hasAXInfo: true
+            ),
+            // システムフローティングサブロールかつ十分大きいパネル
+            RawWindowCandidate(
+                id: "ax-system-floating",
+                cgWindowID: 3027,
+                pid: 4001,
+                applicationName: "QuickNote",
+                title: "メモ",
+                layer: 3,
+                bounds: WindowBounds(x: 100, y: 100, width: 400, height: 300),
+                axRole: "AXWindow",
+                axSubrole: "AXSystemFloatingWindow",
+                hasAXInfo: true
+            ),
+            // 64x64 のフルスクリーン補助窓（layer=3）は除外される
+            RawWindowCandidate(
+                id: "cg-floating-thumbnail",
+                cgWindowID: 2959,
+                pid: 4000,
+                applicationName: "Gemini",
+                layer: 3,
+                bounds: WindowBounds(x: 903, y: 953, width: 64, height: 64),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false
+            ),
+            // 小サイズのフローティングツールパレット（AXFloatingWindow でも最小サイズ未満は除外）
+            RawWindowCandidate(
+                id: "ax-tiny-palette",
+                cgWindowID: 3030,
+                pid: 4002,
+                applicationName: "Designer",
+                title: "Colors",
+                layer: 3,
+                bounds: WindowBounds(x: 10, y: 10, width: 150, height: 120),
+                axRole: "AXWindow",
+                axSubrole: "AXFloatingWindow",
+                hasAXInfo: true
+            )
+        ]
+
+        let result = WindowFilter.filterAndMap(candidates)
+        #expect(result.map(\.id) == ["ax-gemini-floating", "ax-system-floating"])
+    }
+
+    /// AX 未捕捉のアプリで画面表示中（isOnScreen == true）の実サイズ CGWindow のみが存在する場合に救済されることを検証する
+    @Test("AX未捕捉で表示中の実サイズウィンドウのみ存在するアプリは代表1件を救済し、AX捕捉済みアプリの裏窓は除外する")
+    func onScreenFallbackRescuesUncoveredAppWithoutLeakingCoveredOverlays() {
+        let candidates = [
+            // AX で捕捉できなかった表示中のフローティングウィンドウとフルスクリーン本体（未捕捉 PID）
+            RawWindowCandidate(
+                id: "cg-gemini-floating",
+                cgWindowID: 3026,
+                pid: 5000,
+                applicationName: "Gemini",
+                layer: 3,
+                bounds: WindowBounds(x: 267, y: 149, width: 1386, height: 811),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: true,
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "cg-gemini-main",
+                cgWindowID: 2958,
+                pid: 5000,
+                applicationName: "Gemini",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 1080),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: true,
+                zOrderIndex: 1
+            ),
+            // ツールバー帯は表示中フォールバックでも除外される
+            RawWindowCandidate(
+                id: "cg-gemini-toolbar",
+                cgWindowID: 3135,
+                pid: 5000,
+                applicationName: "Gemini",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 52),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: true,
+                zOrderIndex: 2
+            ),
+            // 既に AX で捕捉されている別アプリの isOnScreen == true 内部オーバーレイは引き続き除外される
+            RawWindowCandidate(
+                id: "ax-covered-main",
+                cgWindowID: 6001,
+                pid: 5001,
+                applicationName: "Browser",
+                title: "Main",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 0, width: 1200, height: 800),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                zOrderIndex: 3
+            ),
+            RawWindowCandidate(
+                id: "cg-covered-overlay",
+                cgWindowID: 6002,
+                pid: 5001,
+                applicationName: "Browser",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 0, width: 800, height: 600),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: true,
+                zOrderIndex: 4
+            )
+        ]
+
+        let result = WindowFilter.filterAndMap(candidates)
+        #expect(result.map(\.id) == ["cg-gemini-main", "ax-covered-main"])
+    }
 }
