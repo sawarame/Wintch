@@ -1,4 +1,4 @@
-# Phase 1 データモデルおよび状態遷移設計: スイッチャーおよび検索ランチャーからの選択中ウィンドウ終了
+# Phase 1 データモデルおよび状態遷移設計: スイッチャーおよび検索ランチャーからの選択中ウィンドウ／アプリ終了
 
 **Feature**: `005-close-selected-window`  
 **Date**: 2026-11-15  
@@ -6,85 +6,61 @@
 
 ## 1. エンティティと型拡張
 
-本機能は永続ストレージ（`UserDefaults`）に新しい設定キーを追加せず、インメモリのイベント型・ドメインヘルパー・状態管理プロパティの拡張のみで構成される。
-
 ### 1.1 `HotKeyEvent`（`Services/Protocols/HotKeyMonitoring.swift`）
+- 変更なし（`.closeSelectedWindowPressed` を継続使用）。
 
-グローバルキー監視サービスから `SwitcherViewModel` へ通知されるイベント列挙型に 1 ケースを追加する。
+### 1.2 `WindowServicing`（`Services/Protocols/WindowServicing.swift`）
 
-| ケース | 説明 | 発生モード |
+| メソッド | 責務 | 戻り値 |
 |---|---|---|
-| `.triggerPressed(isShiftPressed: Bool)` | 通常スイッチャー起動または候補移動（既存） | `.inactive`, `.normal`, `.launcher` |
-| `.launcherTriggerPressed` | ランチャー起動またはトグル終了（既存） | `.inactive`, `.launcher` |
-| `.modifierReleased` | 必須修飾キー解放による確定（既存） | `.normal` |
-| `.escapePressed` | `Esc` キーによるキャンセル（既存） | `.normal` |
-| `.arrowPressed(direction: ArrowDirection)` | 上下矢印キーによる移動（既存） | `.normal` |
-| **`.closeSelectedWindowPressed`** | **設定中の通常スイッチャー必須修飾キー + `Q` キー押下（新規）** | **`.normal`, `.launcher`** |
+| `closeWindow(_ entry: WindowEntry) async -> Bool` | 選択中ウィンドウ 1 枚のみを閉じる（未キャッシュの別スペースウィンドウ時は対象スペースへ一時移動して `AXUIElement` を解決後クローズ） | 消滅確認できたら `true`、残存時は `false` |
+| `terminateApplication(pid: Int32) async -> Bool` | ウィンドウが 1 枚のみのアプリケーション全体を通常終了する（`NSRunningApplication.terminate()`） | プロセス終了を確認できたら `true`、未終了時は `false` |
 
-### 1.2 `CloseWindowKeySpec`（判定定数・純粋ロジック）
+### 1.3 `SwitcherViewModel` 内部状態拡張
 
-- **トリガー仮想キーコード**: `12`（ANSI `Q` キー）
-- **修飾キー判定ルール**: `modifiers.subtracting(.shift) == shortcut.modifiers`
-  - 既存の `ShortcutConflictValidator` の不変条件により `shortcut.modifiers` には必ず `Command` / `Option` / `Control` のいずれか 1 つ以上が含まれ、`.shift` は含まれない。
-  - よって、`[]`（単体 `Q`）や `[.shift]`（`Shift + Q`）には決して一致しない。
-
-### 1.3 `SwitcherSelection`（`Domain/SwitcherSelection.swift`）
-
-ウィンドウ 1 件除外後の選択インデックス補正を行う純粋関数を追加する。
-
-| メソッド | 入力 | 出力 / ルール |
+| プロパティ / コールバック | 型 | 役割 |
 |---|---|---|
-| `indexAfterRemoval(current: Int, remainingCount: Int) -> Int` | 除外前の選択インデックス `current`、除外後の候補件数 `remainingCount` | `remainingCount <= 0` の場合は `0`、それ以外は `min(max(current, 0), remainingCount - 1)` |
+| `isClosingWindow` | `Bool` | クローズ／終了処理中の多重実行防止、および処理中の一時的な `resignedActive` による誤キャンセル抑止 |
+| `presentationGeneration` | `Int` | 非同期待機中にセッションが終了・再開された場合の古い完了イベント無視用世代トークン |
+| `onPanelFocusRestoreNeeded` | `((SwitcherMode) -> Void)?` | スペース移動等に伴うクローズ完了後にパネルの前面表示・キーフォーカスを回復させる通知 |
 
 ---
 
-## 2. 状態遷移（State Transitions）
-
-### 2.1 クローズ要求受信から完了までの状態遷移
+## 2. 状態遷移（分岐付きクローズ／アプリ終了フロー）
 
 ```text
 [表示中: mode == .normal または .launcher]
    │
    ▼ HotKeyEvent.closeSelectedWindowPressed
 [事前チェック]
-   ├─ isClosingWindow == true ──────────────► 無視（多重実行防止）
-   ├─ displayedResults が空（0件）──────────► 無視（何もしない）
-   └─ 選択対象 target = displayedResults[selectedIndex].entry
+   ├─ isClosingWindow == true ──────────────► 無視
+   ├─ displayedResults が空（0件）──────────► 無視
+   └─ target = displayedResults[selectedIndex].entry
          │
-         ▼ isClosingWindow = true
-   [WindowServicing.closeWindow(target) 実行]
+         ▼ sameAppWindowCount = allEntries.filter { $0.pid == target.pid }.count
+         ▼ isClosingWindow = true（この間 .resignedActive キャンセルを抑止）
          │
-         ├─ 結果: false（閉じられず存続 / 非対応 / 未保存確認ダイアログ表示）
-         │     └─ isClosingWindow = false
-         │     └─ リスト・選択インデックス・パネル表示は変更せず維持
+         ├─ sameAppWindowCount <= 1 の場合:
+         │     └─ await windowService.terminateApplication(pid: target.pid)
          │
-         └─ 結果: true（対象ウィンドウの消滅を確認）
-               ├─ isClosingWindow = false
-               ├─ allEntries から target.id を除外
-               │
-               ├─ allEntries.isEmpty == true（全通常ウィンドウが 0 件）
-               │     └─ dismiss(reason: .cancelled) → パネルを閉じて .inactive へ遷移
-               │
-               └─ allEntries.isEmpty == false（残余ウィンドウあり）
-                     ├─ mode == .normal の場合:
-                     │     └─ displayedResults = allEntries.map { WindowSearchResult(entry: $0) }
-                     │     └─ selectedIndex = SwitcherSelection.indexAfterRemoval(current: previousIndex, remainingCount: displayedResults.count)
-                     │     └─ パネルリサイズ通知を発火（パネル維持）
-                     │
-                     └─ mode == .launcher の場合:
-                           └─ displayedResults = WindowSearchEngine.search(query: searchQuery, in: allEntries)
-                           └─ displayedResults.isEmpty == true の場合:
-                           │     └─ selectedIndex = 0（0件案内表示、検索語・パネル維持）
-                           └─ displayedResults.isEmpty == false の場合:
-                           │     └─ selectedIndex = SwitcherSelection.indexAfterRemoval(current: previousIndex, remainingCount: displayedResults.count)
-                           └─ パネルリサイズ通知を発火（パネル維持）
+         └─ sameAppWindowCount >= 2 の場合:
+               └─ await windowService.closeWindow(target)
+                     （※未キャッシュの別スペースなら対象スペースへ一時移動して AX 取得後クローズ）
+         │
+         ▼ await 復帰（defer: isClosingWindow = false）
+         ├─ mode != targetMode または世代不一致 ─► 何もしない
+         │
+         ├─ didSucceed == false（確認ダイアログ残存・クローズ不可等）
+         │     └─ 一覧・選択位置は変更せず、パネルフォーカス回復通知（必要時）を発火
+         │
+         └─ didSucceed == true（消滅／終了確認済み）
+               ├─ singleWindow 終了なら `pid == target.pid`（＝`target.id`）を除外、
+               │  複数ウィンドウクローズなら `target.id` のみ除外
+               ├─ allEntries.isEmpty == true
+               │     └─ dismiss(reason: .cancelled) → パネル自動終了
+               └─ allEntries.isEmpty == false
+                     ├─ モード別（.normal / .launcher）で displayedResults 再構築
+                     ├─ selectedIndex = SwitcherSelection.indexAfterRemoval(...)
+                     ├─ onSearchResultsUpdated?()
+                     └─ onPanelFocusRestoreNeeded?(targetMode)
 ```
-
-### 2.2 境界条件の検証ルール
-
-- **クローズ処理中のパネル終了（Race Condition 対策）**:
-  - `await windowService.closeWindow(target)` の待機中にユーザーが `Esc` を押した、パネル外をクリックして `resignedActive` になった、あるいは修飾キーを離して別確定が起きた場合（`mode == .inactive` になった場合）は、完了後のリスト更新や `onSearchResultsUpdated` を実行せず安全にリターンする。
-- **キャッシュ同期とクローズ後確定**:
-  - クローズが成功して `allEntries` から除外された後、ユーザーがそのままパネル上で別のウィンドウを選択・確定した場合は、除外されずに残っている最新の選択ウィンドウがアクティブ化される。
-- **ランチャーで最後の 1 件を閉じた場合のフォーカス復元**:
-  - 全ウィンドウが 0 件になり `dismiss(reason: .cancelled)` が呼ばれた場合、他にアクティブにすべき対象ウィンドウが存在しないため安全にパネルが非表示になる。

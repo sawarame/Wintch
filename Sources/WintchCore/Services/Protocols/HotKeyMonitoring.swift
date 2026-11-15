@@ -12,9 +12,9 @@ public enum ArrowDirection: Equatable, Sendable {
 public enum HotKeyMonitorMode: Equatable, Sendable {
     /// スイッチャー非表示（起動ショートカットのみ待機）
     case inactive
-    /// 通常スイッチャー表示中（修飾キー保持式・Esc/上下矢印をグローバル横取り）
+    /// 通常スイッチャー表示中（修飾キー保持式・Esc/上下矢印/選択ウィンドウ終了をグローバル横取り）
     case normal
-    /// ランチャーモード表示中（トグル式・検索入力および IME を優先し、ランチャー再押下トグルと通常スイッチャーショートカットによる候補移動を監視）
+    /// ランチャーモード表示中（トグル式・検索入力および IME を優先し、ランチャー再押下トグル・通常スイッチャー候補移動・選択ウィンドウ終了を監視）
     case launcher
 }
 
@@ -30,6 +30,8 @@ public enum HotKeyEvent: Equatable, Sendable {
     case escapePressed
     /// 上下矢印キーが押された（通常モード表示中の補助移動）
     case arrowPressed(direction: ArrowDirection)
+    /// 通常スイッチャー必須修飾キー＋Q が押された（現在選択中ウィンドウ1枚の終了要求）
+    case closeSelectedWindowPressed
 }
 
 /// グローバルキーボードショートカットの監視とイベント消費を行うサービス契約

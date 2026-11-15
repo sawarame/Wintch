@@ -30,4 +30,17 @@ struct SwitcherSelectionTests {
         #expect(SwitcherSelection.previousIndex(current: 1, count: 3) == 0)
         #expect(SwitcherSelection.previousIndex(current: 0, count: 1) == 0)
     }
+
+    /// 1件除外後のインデックス補正ロジックを検証する
+    @Test("項目除外後のインデックスが範囲内に安全に補正される")
+    func indexAfterRemovalCalculation() {
+        // 先頭・中間を除外した場合は同じ位置を保つ
+        #expect(SwitcherSelection.indexAfterRemoval(current: 0, remainingCount: 2) == 0)
+        #expect(SwitcherSelection.indexAfterRemoval(current: 1, remainingCount: 2) == 1)
+        // 末尾を除外して件数が減った場合は新しい末尾へ補正する
+        #expect(SwitcherSelection.indexAfterRemoval(current: 2, remainingCount: 2) == 1)
+        // 最後の1件を除外した（残余0件）場合や負インデックスも安全に0へ丸める
+        #expect(SwitcherSelection.indexAfterRemoval(current: 0, remainingCount: 0) == 0)
+        #expect(SwitcherSelection.indexAfterRemoval(current: -1, remainingCount: 3) == 0)
+    }
 }

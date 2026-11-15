@@ -24,7 +24,7 @@ description: "スイッチャーおよび検索ランチャーからの選択中
 
 **Purpose**: 既存実装と Swift Testing テストスイートが健全であることを確認し、安全に変更を開始する
 
-- [ ] T001 リポジトリルートで `swift test` を実行し、既存のテストスイートおよびビルドがクリーンに通るベースラインを確認する（`Package.swift` 変更なし）
+- [X] T001 リポジトリルートで `swift test` を実行し、既存のテストスイートおよびビルドがクリーンに通るベースラインを確認する（`Package.swift` 変更なし）
 
 ---
 
@@ -34,11 +34,11 @@ description: "スイッチャーおよび検索ランチャーからの選択中
 
 **⚠️ CRITICAL**: このフェーズが完了するまでユーザーストーリーの実装・単体テストフェーズへ進めない
 
-- [ ] T002 [P] `HotKeyEvent` に `.closeSelectedWindowPressed` ケースを追加し、`HotKeyMonitorMode`（`.normal` / `.launcher`）の日本語ドキュメントコメントを更新する（`Sources/WintchCore/Services/Protocols/HotKeyMonitoring.swift`）
-- [ ] T003 [P] `WindowServicing` プロトコルに単一ウィンドウを閉じて消滅確認結果を返すメソッド `closeWindow(_ entry: WindowEntry) async -> Bool` を追加し、日本語ドキュメントコメントを記述する（`Sources/WintchCore/Services/Protocols/WindowServicing.swift`）
-- [ ] T004 [P] `SwitcherSelection` に 1 件除外後のインデックス補正を行う純粋関数 `indexAfterRemoval(current:remainingCount:)`（`remainingCount <= 0` の場合は `0`、それ以外は `min(max(current, 0), remainingCount - 1)`）を追加する（`Sources/WintchCore/Domain/SwitcherSelection.swift`）
-- [ ] T005 [P] `MockWindowService` に `closeWindow(_:)` 実装、ウィンドウ ID ごとの結果スタブ（`stubbedCloseWindowResults` / `closeWindowDefaultResult`）、および呼び出し履歴（`closedWindows`）を追加する（`Tests/WintchCoreTests/Mocks/MockServices.swift`、T003 依存）
-- [ ] T006 `SwitcherSelectionTests` に `indexAfterRemoval(current:remainingCount:)` の境界値テスト（先頭・中間・末尾・最後の1件・負インデックス・0件）を追加する（`Tests/WintchCoreTests/SwitcherSelectionTests.swift`、T004 依存）
+- [X] T002 [P] `HotKeyEvent` に `.closeSelectedWindowPressed` ケースを追加し、`HotKeyMonitorMode`（`.normal` / `.launcher`）の日本語ドキュメントコメントを更新する（`Sources/WintchCore/Services/Protocols/HotKeyMonitoring.swift`）
+- [X] T003 [P] `WindowServicing` プロトコルに単一ウィンドウを閉じて消滅確認結果を返すメソッド `closeWindow(_ entry: WindowEntry) async -> Bool` を追加し、日本語ドキュメントコメントを記述する（`Sources/WintchCore/Services/Protocols/WindowServicing.swift`）
+- [X] T004 [P] `SwitcherSelection` に 1 件除外後のインデックス補正を行う純粋関数 `indexAfterRemoval(current:remainingCount:)`（`remainingCount <= 0` の場合は `0`、それ以外は `min(max(current, 0), remainingCount - 1)`）を追加する（`Sources/WintchCore/Domain/SwitcherSelection.swift`）
+- [X] T005 [P] `MockWindowService` に `closeWindow(_:)` 実装、ウィンドウ ID ごとの結果スタブ（`stubbedCloseWindowResults` / `closeWindowDefaultResult`）、および呼び出し履歴（`closedWindows`）を追加する（`Tests/WintchCoreTests/Mocks/MockServices.swift`、T003 依存）
+- [X] T006 `SwitcherSelectionTests` に `indexAfterRemoval(current:remainingCount:)` の境界値テスト（先頭・中間・末尾・最後の1件・負インデックス・0件）を追加する（`Tests/WintchCoreTests/SwitcherSelectionTests.swift`、T004 依存）
 
 **Checkpoint**: 基盤となるプロトコル・純粋ロジック・テストモックが揃い、各ユーザーストーリーの実装と単体テストに着手可能になる
 
@@ -54,15 +54,15 @@ description: "スイッチャーおよび検索ランチャーからの選択中
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T007 [P] [US1] `HotKeyMonitorDecisionTests` に `.normal` モードで仮想キーコード `12`（`Q`）と必須修飾キー一致（`Shift` 併用許容）が `.closeSelectedWindowPressed` + `shouldConsume == true` を返すこと、および `Esc` / 矢印 / 通常移動 / ランチャーショートカットとの優先順位を検証するテストを追加する（`Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`、T002 依存）
-- [ ] T008 [P] [US1] `SwitcherViewModelTests` に通常スイッチャー表示中のウィンドウクローズテスト（中間項目のクローズ後パネル維持と同インデックス選択、末尾項目クローズ後の新末尾選択、連続クローズ後に修飾キー解放で残りウィンドウへ確定切り替え、`Esc` キャンセル）を追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T005 依存）
+- [X] T007 [P] [US1] `HotKeyMonitorDecisionTests` に `.normal` モードで仮想キーコード `12`（`Q`）と必須修飾キー一致（`Shift` 併用許容）が `.closeSelectedWindowPressed` + `shouldConsume == true` を返すこと、および `Esc` / 矢印 / 通常移動 / ランチャーショートカットとの優先順位を検証するテストを追加する（`Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`、T002 依存）
+- [X] T008 [P] [US1] `SwitcherViewModelTests` に通常スイッチャー表示中のウィンドウクローズテスト（中間項目のクローズ後パネル維持と同インデックス選択、末尾項目クローズ後の新末尾選択、連続クローズ後に修飾キー解放で残りウィンドウへ確定切り替え、`Esc` キャンセル）を追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T005 依存）
 
 ### Implementation for User Story 1
 
-- [ ] T009 [P] [US1] `HotKeyMonitorService` に `Q` キー定数（仮想キーコード `12`）および `isCloseWindowMatch`（`keyCode == 12 && modifiers.subtracting(.shift) == shortcut.modifiers`）を追加し、`resolveKeyDown` の `.normal` 分岐（`Esc`/矢印/`isNormalMatch`/`isLauncherMatch` の後）で `.closeSelectedWindowPressed` + `shouldConsume: true` を返すよう実装する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T002, T007 依存）
-- [ ] T010 [P] [US1] `WindowService` に `closeWindow(_ entry: WindowEntry) async -> Bool` を実装し、キャッシュおよび再スキャンフォールバックによる `AXUIElement` 解決、`kAXCloseButtonAttribute` / `kAXEnabledAttribute` 検証、`kAXPressAction` 実行、最大約 150ms・15ms 間隔での消滅確認ポーリング、消滅確認時のキャッシュ除去を行う（`Sources/WintchCore/Services/WindowService.swift`、T003 依存）
-- [ ] T011 [US1] `SwitcherViewModel` に `isClosingWindow` 再入防止フラグ、`.closeSelectedWindowPressed` ハンドリング、および `closeSelectedWindow() async`（`allEntries` からの除外、`.normal` 時の `displayedResults` 再構築、`SwitcherSelection.indexAfterRemoval` によるインデックス補正、`onSearchResultsUpdated?()` 発火）を実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T004, T006, T008, T009, T010 依存）
-- [ ] T012 [US1] `SwitcherPanel` の `updateAnchoredHeight(to:)` および `updateAnchoredHeightIfNeeded()` を拡張し、`.normal` モード表示中にウィンドウクローズで候補行数が減った際もコンテンツの `fittingSize` に合わせてパネル高さとシャドウ（`invalidateShadow()`）を更新するよう実装する（`Sources/WintchCore/Views/SwitcherPanel.swift`、T011 依存）
+- [X] T009 [P] [US1] `HotKeyMonitorService` に `Q` キー定数（仮想キーコード `12`）および `isCloseWindowMatch`（`keyCode == 12 && modifiers.subtracting(.shift) == shortcut.modifiers`）を追加し、`resolveKeyDown` の `.normal` 分岐（`Esc`/矢印/`isNormalMatch`/`isLauncherMatch` の後）で `.closeSelectedWindowPressed` + `shouldConsume: true` を返すよう実装する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T002, T007 依存）
+- [X] T010 [P] [US1] `WindowService` に `closeWindow(_ entry: WindowEntry) async -> Bool` を実装し、キャッシュおよび再スキャンフォールバックによる `AXUIElement` 解決、`kAXCloseButtonAttribute` / `kAXEnabledAttribute` 検証、`kAXPressAction` 実行、最大約 150ms・15ms 間隔での消滅確認ポーリング、消滅確認時のキャッシュ除去を行う（`Sources/WintchCore/Services/WindowService.swift`、T003 依存）
+- [X] T011 [US1] `SwitcherViewModel` に `isClosingWindow` 再入防止フラグ、`.closeSelectedWindowPressed` ハンドリング、および `closeSelectedWindow() async`（`allEntries` からの除外、`.normal` 時の `displayedResults` 再構築、`SwitcherSelection.indexAfterRemoval` によるインデックス補正、`onSearchResultsUpdated?()` 発火）を実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T004, T006, T008, T009, T010 依存）
+- [X] T012 [US1] `SwitcherPanel` の `updateAnchoredHeight(to:)` および `updateAnchoredHeightIfNeeded()` を拡張し、`.normal` モード表示中にウィンドウクローズで候補行数が減った際もコンテンツの `fittingSize` に合わせてパネル高さとシャドウ（`invalidateShadow()`）を更新するよう実装する（`Sources/WintchCore/Views/SwitcherPanel.swift`、T011 依存）
 
 **Checkpoint**: User Story 1 が完全に動作し、通常スイッチャーからの単一ウィンドウ連続クローズに関する単体テストがすべてパスする
 
@@ -76,13 +76,13 @@ description: "スイッチャーおよび検索ランチャーからの選択中
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T013 [P] [US2] `HotKeyMonitorDecisionTests` に `.launcher` モードにおけるデフォルト/カスタム修飾キー（`Control`、`Command`、複数修飾キー）+ `Q` の `.closeSelectedWindowPressed` + `shouldConsume == true` テスト、単体 `Q` / `Shift + Q` の非消費通過（`event == nil, shouldConsume == false`）テスト、およびランチャー再押下・通常移動優先テストを追加する（`Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`、T009 依存）
-- [ ] T014 [P] [US2] `SwitcherViewModelTests` に検索ランチャー表示中のクローズテスト（検索キーワード維持のまま対象ウィンドウを除外、絞り込み中インデックス補正、絞り込み後 0 件時の 0 件案内維持と検索語・パネル継続、検索語消去後に閉じたウィンドウが復活しないことの確認）を追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T011 依存）
+- [X] T013 [P] [US2] `HotKeyMonitorDecisionTests` に `.launcher` モードにおけるデフォルト/カスタム修飾キー（`Control`、`Command`、複数修飾キー）+ `Q` の `.closeSelectedWindowPressed` + `shouldConsume == true` テスト、単体 `Q` / `Shift + Q` の非消費通過（`event == nil, shouldConsume == false`）テスト、およびランチャー再押下・通常移動優先テストを追加する（`Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`、T009 依存）
+- [X] T014 [P] [US2] `SwitcherViewModelTests` に検索ランチャー表示中のクローズテスト（検索キーワード維持のまま対象ウィンドウを除外、絞り込み中インデックス補正、絞り込み後 0 件時の 0 件案内維持と検索語・パネル継続、検索語消去後に閉じたウィンドウが復活しないことの確認）を追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T011 依存）
 
 ### Implementation for User Story 2
 
-- [ ] T015 [US2] `HotKeyMonitorService.resolveKeyDown` の `.launcher` 分岐で `isLauncherMatch`・`isNormalMatch` の後に `isCloseWindowMatch` を評価し、`.closeSelectedWindowPressed` + `shouldConsume: true` を返す（単体 `Q` / `Shift + Q` は消費せず通過させ、`Option + Q` 等の特殊文字入力混入を防ぐ）よう実装する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T009, T013 依存）
-- [ ] T016 [US2] `SwitcherViewModel.closeSelectedWindow()` の `.launcher` 分岐にて、`allEntries` 更新後に `WindowSearchEngine.search(query: searchQuery, in: allEntries)` で絞り込み結果を再計算し、絞り込み 0 件時は `selectedIndex = 0` のまま検索語とパネルを維持する処理を実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T011, T014 依存）
+- [X] T015 [US2] `HotKeyMonitorService.resolveKeyDown` の `.launcher` 分岐で `isLauncherMatch`・`isNormalMatch` の後に `isCloseWindowMatch` を評価し、`.closeSelectedWindowPressed` + `shouldConsume: true` を返す（単体 `Q` / `Shift + Q` は消費せず通過させ、`Option + Q` 等の特殊文字入力混入を防ぐ）よう実装する（`Sources/WintchCore/Services/HotKeyMonitorService.swift`、T009, T013 依存）
+- [X] T016 [US2] `SwitcherViewModel.closeSelectedWindow()` の `.launcher` 分岐にて、`allEntries` 更新後に `WindowSearchEngine.search(query: searchQuery, in: allEntries)` で絞り込み結果を再計算し、絞り込み 0 件時は `selectedIndex = 0` のまま検索語とパネルを維持する処理を実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T011, T014 依存）
 
 **Checkpoint**: User Story 1 と User Story 2 の双方が独立して機能し、通常スイッチャー・検索ランチャー双方でのウィンドウクローズおよび検索文字入力との非競合がテストで保証される
 
@@ -96,13 +96,13 @@ description: "スイッチャーおよび検索ランチャーからの選択中
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T017 [P] [US3] `HotKeyMonitorDecisionTests` に通常スイッチャーの必須修飾キーが `Command` に設定されている場合の `Command + Q` が `.normal` / `.launcher` 双方で `.closeSelectedWindowPressed` + `shouldConsume == true` となりアプリ終了へ漏れないことを検証するテストを追加する（`Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`、T015 依存）
-- [ ] T018 [P] [US3] `SwitcherViewModelTests` に境界ケーステスト（`closeWindow` が `false` を返した場合の一覧・選択位置・パネル維持、最後の 1 件を閉じて `allEntries` が 0 件になった場合の `.normal` / `.launcher` 双方での自動 `dismiss`、検索結果 0 件時の `.closeSelectedWindowPressed` 無視、クローズ待機中の再入ガードと途中キャンセル時安全リターン）を追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T016 依存）
+- [X] T017 [P] [US3] `HotKeyMonitorDecisionTests` に通常スイッチャーの必須修飾キーが `Command` に設定されている場合の `Command + Q` が `.normal` / `.launcher` 双方で `.closeSelectedWindowPressed` + `shouldConsume == true` となりアプリ終了へ漏れないことを検証するテストを追加する（`Tests/WintchCoreTests/HotKeyMonitorDecisionTests.swift`、T015 依存）
+- [X] T018 [P] [US3] `SwitcherViewModelTests` に境界ケーステスト（`closeWindow` が `false` を返した場合の一覧・選択位置・パネル維持、最後の 1 件を閉じて `allEntries` が 0 件になった場合の `.normal` / `.launcher` 双方での自動 `dismiss`、検索結果 0 件時の `.closeSelectedWindowPressed` 無視、クローズ待機中の再入ガードと途中キャンセル時安全リターン）を追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T016 依存）
 
 ### Implementation for User Story 3
 
-- [ ] T019 [US3] `WindowService.closeWindow(_:)` において、`kAXCloseButtonAttribute` 未存在・`kAXEnabledAttribute == false`・`AXUIElementPerformAction` エラー・消滅確認タイムアウト時（未保存確認ダイアログ表示中等）のすべてのケースでクラッシュせずキャッシュ保持のまま安全に `false` を返すフォールバック処理を確認・強化する（`Sources/WintchCore/Services/WindowService.swift`、T010 依存）
-- [ ] T020 [US3] `SwitcherViewModel.closeSelectedWindow()` における最後の 1 件クローズ後の `allEntries.isEmpty` 自動終了（`dismiss(reason: .cancelled)`）、および `await` 復帰時の `mode == .inactive` チェックと `defer { isClosingWindow = false }` による再入・レース防止を検証・補強する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T011, T018 依存）
+- [X] T019 [US3] `WindowService.closeWindow(_:)` において、`kAXCloseButtonAttribute` 未存在・`kAXEnabledAttribute == false`・`AXUIElementPerformAction` エラー・消滅確認タイムアウト時（未保存確認ダイアログ表示中等）のすべてのケースでクラッシュせずキャッシュ保持のまま安全に `false` を返すフォールバック処理を確認・強化する（`Sources/WintchCore/Services/WindowService.swift`、T010 依存）
+- [X] T020 [US3] `SwitcherViewModel.closeSelectedWindow()` における最後の 1 件クローズ後の `allEntries.isEmpty` 自動終了（`dismiss(reason: .cancelled)`）、および `await` 復帰時の `mode == .inactive` チェックと `defer { isClosingWindow = false }` による再入・レース防止を検証・補強する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T011, T018 依存）
 
 **Checkpoint**: すべてのユーザーストーリー（US1・US2・US3）と境界条件が満たされ、安全性・信頼性を含む単体テストがすべてパスする
 
@@ -112,8 +112,22 @@ description: "スイッチャーおよび検索ランチャーからの選択中
 
 **Purpose**: プロジェクト規約および憲章への完全準拠を確認し、全体ビルド・テストと手動検証準備を完了する
 
-- [ ] T021 [P] 変更した全ソースおよびテストファイル（`HotKeyMonitoring.swift`, `WindowServicing.swift`, `SwitcherSelection.swift`, `HotKeyMonitorService.swift`, `WindowService.swift`, `SwitcherViewModel.swift`, `SwitcherPanel.swift`, `MockServices.swift`, `HotKeyMonitorDecisionTests.swift`, `SwitcherSelectionTests.swift`, `SwitcherViewModelTests.swift`）の日本語ドキュメントコメント（概要・`@param`・`@returns`）、日本語インラインコメント、および憲章遵守（画面収録権限不使用、非公開 API 不使用、MVVM+Services 境界）を点検する
-- [ ] T022 リポジトリルートで `swift build` および `swift test` を実行して全テストスイートのパスを確認し、`specs/005-close-selected-window/quickstart.md` に記載された自動テスト・手動検証観点との整合を最終確認する
+- [X] T021 [P] 変更した全ソースおよびテストファイル（`HotKeyMonitoring.swift`, `WindowServicing.swift`, `SwitcherSelection.swift`, `HotKeyMonitorService.swift`, `WindowService.swift`, `SwitcherViewModel.swift`, `SwitcherPanel.swift`, `MockServices.swift`, `HotKeyMonitorDecisionTests.swift`, `SwitcherSelectionTests.swift`, `SwitcherViewModelTests.swift`）の日本語ドキュメントコメント（概要・`@param`・`@returns`）、日本語インラインコメント、および憲章遵守（画面収録権限不使用、非公開 API 不使用、MVVM+Services 境界）を点検する
+- [X] T022 リポジトリルートで `swift build` および `swift test` を実行して全テストスイートのパスを確認し、`specs/005-close-selected-window/quickstart.md` に記載された自動テスト・手動検証観点との整合を最終確認する
+
+---
+
+## Phase 7: Revision — 単一ウィンドウアプリ終了・別スペース自動移動フォールバック・フォーカス保護
+
+**Purpose**: 最後の1枚を閉じる際の残存CGWindowによる再出現防止、別スペース上ウィンドウへの自動 `AXUIElement` 取得・クローズ対応（案B）、および処理中のフォーカス喪失キャンセル抑止と復元を実装・検証する
+
+- [X] T023 [P] `WindowServicing` プロトコルに `terminateApplication(pid: Int32) async -> Bool` を追加する（`Sources/WintchCore/Services/Protocols/WindowServicing.swift`）
+- [X] T024 [P] `MockWindowService` に `terminateApplication(pid:)`、`terminatedPIDs`、`stubbedTerminateResults`、`terminateDefaultResult`、`terminateHandler` を追加する（`Tests/WintchCoreTests/Mocks/MockServices.swift`、T023 依存）
+- [X] T025 [P] `WindowService` に `terminateApplication(pid:)`（`NSRunningApplication.terminate()` 非強制終了 + 最大約500ms終了確認 + キャッシュ/オブザーバ掃除）および `resolveCachedWindowWithSpaceFallback(_:)`（未キャッシュ `cg-*` ウィンドウに対する `app.activate()` 自動スペース移動 + `AXUIElement` 再スキャン）を実装する（`Sources/WintchCore/Services/WindowService.swift`、T023 依存）
+- [X] T026 [P] `SwitcherPanel` に `restoreFocusIfNeeded(mode:)` を追加し、`AppCoordinator` で `switcherViewModel.onPanelFocusRestoreNeeded` と配線する（`Sources/WintchCore/Views/SwitcherPanel.swift`, `Sources/WintchCore/App/AppCoordinator.swift`）
+- [X] T027 `SwitcherViewModel` に `allEntries` 全候補ベースの同PID残余ウィンドウ数判定（1件以下なら `terminateApplication`、2件以上なら `closeWindow`）、処理中 `isClosingWindow` 間の `.resignedActive` キャンセル抑止、および完了・失敗時の `onPanelFocusRestoreNeeded?(targetMode)` 通知を実装する（`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`、T023, T025, T026 依存）
+- [X] T028 `SwitcherViewModelTests` を改訂仕様に合わせて更新し、検索絞り込み中でも全候補基準でウィンドウ数判定されるテスト、同一アプリ2枚→1枚目の `closeWindow` / 2枚目の `terminateApplication` 切替テスト、クローズ待機中の `.resignedActive` 無視および完了後フォーカス復元テストを追加する（`Tests/WintchCoreTests/SwitcherViewModelTests.swift`、T024, T027 依存）
+- [X] T029 リポジトリルートで `swift build` および `swift test` を再実行し、全テストスイートと全日本語コメント・憲章準拠の最終確認を完了する
 
 ---
 

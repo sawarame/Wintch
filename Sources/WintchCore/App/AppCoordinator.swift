@@ -202,6 +202,10 @@ public final class AppCoordinator {
             self?.updatePermissionState(.denied)
         }
 
+        switcherViewModel.onPanelFocusRestoreNeeded = { [weak self] mode in
+            self?.switcherPanel?.restoreFocusIfNeeded(mode: mode)
+        }
+
         permissionGuideViewModel.onPermissionGranted = { [weak self] in
             self?.updatePermissionState(.granted)
         }

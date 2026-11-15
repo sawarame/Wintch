@@ -48,10 +48,10 @@ public final class SwitcherPanel: NSPanel {
         self.contentView = hostingView
     }
 
-    /// ランチャー表示中に上端位置を固定したまま指定高さへ下方向リサイズする
+    /// 表示中に上端位置を固定したまま指定高さへ下方向リサイズする
     /// - Parameter height: 新しいコンテンツ高さ
     public func updateAnchoredHeight(to height: CGFloat) {
-        guard isVisible, currentMode == .launcher, let anchoredTopY else {
+        guard isVisible, currentMode != .inactive, let anchoredTopY else {
             return
         }
 
@@ -121,13 +121,11 @@ public final class SwitcherPanel: NSPanel {
             center()
         }
 
+        // 表示中のウィンドウクローズ等で高さが変わった際に上端位置を維持するため両モードで上端座標を記録する
+        anchoredTopY = frame.maxY
         if mode == .launcher {
-            // 検索中のリサイズで検索バーが上下に移動しないよう起動時の上端座標を固定する
-            anchoredTopY = frame.maxY
             // 日本語 IME 変換ウィンドウおよび入力ソース切替を確実に機能させるため一時的にアクティブ化する
             NSApplication.shared.activate()
-        } else {
-            anchoredTopY = nil
         }
 
         orderFrontRegardless()
@@ -141,9 +139,9 @@ public final class SwitcherPanel: NSPanel {
         show(mode: .normal)
     }
 
-    /// ランチャー表示中に上端位置を固定したままコンテンツ高さの変化に応じて下方向へリサイズする
+    /// 表示中に上端位置を固定したままコンテンツ高さの変化に応じて下方向へリサイズする
     public func updateAnchoredHeightIfNeeded() {
-        guard isVisible, currentMode == .launcher, let anchoredTopY, let hostingView = contentView else {
+        guard isVisible, currentMode != .inactive, let anchoredTopY, let hostingView = contentView else {
             return
         }
 
@@ -175,5 +173,17 @@ public final class SwitcherPanel: NSPanel {
 
         orderOut(nil)
         appToRestore?.activate()
+    }
+
+    /// ウィンドウクローズ時の自動 Space 移動等で一時的に失われたパネルの前面表示・フォーカスを復元する
+    /// - Parameter mode: 復元対象の現在モード
+    public func restoreFocusIfNeeded(mode: SwitcherMode) {
+        guard isVisible, currentMode == mode, mode != .inactive else { return }
+        if mode == .launcher {
+            // ランチャーモードではキーボード入力を受け付けるためアプリ自体も最前面へ戻す
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        orderFrontRegardless()
+        makeKey()
     }
 }

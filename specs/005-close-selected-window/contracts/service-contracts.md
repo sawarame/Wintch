@@ -1,110 +1,67 @@
-# サービスおよび ViewModel 契約 (Contracts): スイッチャーおよび検索ランチャーからの選択中ウィンドウ終了
+# サービスおよび ViewModel 契約 (Contracts): スイッチャーおよび検索ランチャーからの選択中ウィンドウ／アプリ終了
 
 **Feature**: `005-close-selected-window`  
 **Date**: 2026-11-15  
-**Purpose**: `HotKeyMonitoring`、`WindowServicing`、`SwitcherViewModel`、および `SwitcherPanel` 間のインターフェース契約と不変条件を定義する。
+**Purpose**: `HotKeyMonitoring`、`WindowServicing`、`SwitcherViewModel`、および `SwitcherPanel` 間のインターフェース契約を定義する。
 
 ---
 
 ## 1. `HotKeyMonitoring` / `HotKeyMonitorService` 契約
 
-### 1.1 `HotKeyEvent` 拡張
-
-```swift
-public enum HotKeyEvent: Equatable, Sendable {
-    case triggerPressed(isShiftPressed: Bool)
-    case launcherTriggerPressed
-    case modifierReleased
-    case escapePressed
-    case arrowPressed(direction: ArrowDirection)
-    case closeSelectedWindowPressed
-}
-```
-
-### 1.2 `HotKeyMonitorService.resolveKeyDown(...)` 判定契約
-
-- `Q` キー判定定数: 仮想キーコード `12`（ANSI `Q`）かつ `modifiers.subtracting(.shift) == shortcut.modifiers`。
-- モード別優先順位（上から順に評価し、最初に一致した分岐を返す）:
-
-1. **`.inactive`**:
-   - 既存と変更なし（`isNormalMatch` → `isLauncherMatch` → 非消費通過）。
-2. **`.normal`**:
-   - `Esc (53)` / `↑ (126)` / `↓ (125)` → 各対応イベント通知・消費
-   - `isNormalMatch` → `.triggerPressed(isShiftPressed:)` 通知・消費
-   - `isLauncherMatch` → イベント通知なし（無視）・消費
-   - **`isCloseWindowMatch`** → **`.closeSelectedWindowPressed` 通知・消費（`shouldConsume: true`）**
-   - その他 → 非消費通過
-3. **`.launcher`**:
-   - `isLauncherMatch` → `.launcherTriggerPressed` 通知・消費
-   - `isNormalMatch` → `.triggerPressed(isShiftPressed:)` 通知・消費
-   - **`isCloseWindowMatch`** → **`.closeSelectedWindowPressed` 通知・消費（`shouldConsume: true`）**
-   - その他（単体 `Q`、`Shift + Q`、`Esc`、矢印、文字入力、IME 操作等）→ 非消費通過（`shouldConsume: false`）
-
-- **不変条件**:
-  - 単体 `Q`（`modifiers == []`）および `Shift + Q`（`modifiers == [.shift]`）は `shortcut.modifiers` に必ず必須修飾キーが含まれるため、`isCloseWindowMatch` に一致しない。
-  - `isCloseWindowMatch` が成立した場合、`shouldConsume` は必ず `true` であり、背面アプリおよび検索欄への文字・`Command + Q` 伝播を遮断する。
+初版（仮想キーコード `12` + `modifiers.subtracting(.shift) == shortcut.modifiers` で `.closeSelectedWindowPressed` を `.normal` / `.launcher` 双方にて通知・消費、単体 `Q` / `Shift + Q` は通過）から変更なし。
 
 ---
 
 ## 2. `WindowServicing` / `WindowService` 契約
 
-### 2.1 プロトコルメソッド追加
+### 2.1 プロトコル定義
 
 ```swift
 @MainActor
 public protocol WindowServicing: AnyObject {
-    // 既存メソッド（省略なし）
     func startObserving()
     func stopObserving()
     func fetchRawWindowCandidates() -> [RawWindowCandidate]
     func activateWindow(_ entry: WindowEntry)
-
-    /// 指定されたウィンドウ1枚のみを閉じる操作を実行し、実際にウィンドウが閉じられたかを返す
-    /// - Parameter entry: クローズ対象のウィンドウ項目
-    /// - Returns: ウィンドウの消滅を確認できた場合は true、未対応や未保存確認ダイアログ等で開いたまま残った場合は false
     func closeWindow(_ entry: WindowEntry) async -> Bool
+    func terminateApplication(pid: Int32) async -> Bool
 }
 ```
 
-### 2.2 実装仕様契約（`WindowService`）
+### 2.2 `closeWindow(_ entry: WindowEntry) async -> Bool` 契約
 
-1. **対象 `AXUIElement` の解決**:
-   - `cachedWindowsByPID[entry.pid]` から `entry.id` で検索する。
-   - 見つからない場合（`cg-*` 補完候補等）は `refreshAXWindows(for: entry.pid, markFrontmostAsActive: false)` を実行後、`entry.id` または `entry.windowTitle` で照合する。
-   - それでも解決できない場合は `false` を返す（クラッシュしない）。
-2. **クローズ実行**:
-   - `kAXCloseButtonAttribute` を取得する。存在しない場合は `false` を返す。
-   - `kAXEnabledAttribute` が存在し、かつ `false` の場合はクローズ不可として `false` を返す。
-   - `AXUIElementPerformAction(closeButton, kAXPressAction as CFString)` を実行する。`.success` 以外でも、対象アプリによっては非同期閉じが起きないため直ちに `false` とせず、原則 `.success` 時のみ消滅確認へ進む（エラー時は安全に `false`）。
-3. **消滅確認とキャッシュ除去**:
-   - 最大約 150ms の範囲で短い間隔（例: 15ms ごと）に対象ウィンドウが依然として生存しているか（`kAXRoleAttribute` 取得および該当 PID の `kAXWindowsAttribute` 残存確認）を確認する。
-   - 消滅が確認できた時点で即座に `cachedWindowsByPID[entry.pid]` から該当エントリを削除し `true` を返す。
-   - タイムアウト時点で依然としてウィンドウが存在する場合（未保存確認ダイアログ表示中等）はキャッシュを維持したまま `false` を返す。
+1. **キャッシュ解決および別スペース自動移動フォールバック**:
+   - `cachedWindowsByPID[entry.pid]` → `refreshAXWindows` の順で対象 `AXUIElement` を解決する。
+   - いずれでも解決できない（別スペースの未訪問ウィンドウ `cg-*` 等）場合、`NSRunningApplication(processIdentifier: entry.pid)?.activate(options: [])` を実行して操作スペースを切り替え、最大約 600ms（40ms 間隔 × 15 回）`refreshAXWindows` して対象 `AXUIElement`（`entry.id` / `entry.cgWindowID` / タイトル照合）を取得する。
+   - それでも解決できない場合は `false` を返す。
+2. **クローズ実行と消滅確認**:
+   - `kAXCloseButtonAttribute` 取得・`kAXEnabledAttribute` 確認・`kAXPressAction` 実行後、最大約 150ms（15ms 間隔 × 10 回）で消滅確認を行う。
+   - 消滅確認できた場合はキャッシュから該当ウィンドウを除去し `true`、残存時は `false` を返す。
+
+### 2.3 `terminateApplication(pid: Int32) async -> Bool` 契約
+
+1. `NSRunningApplication(processIdentifier: pid)` を取得する。アプリが見つからない、または既に `isTerminated == true` の場合は該当 PID のキャッシュと `AXObserver` を解放して `true` を返す。
+2. `app.terminate()` を呼び出す（`forceTerminate()` は使用禁止）。拒否された（`false`）場合は `false` を返す。
+3. 最大約 500ms（20ms 間隔 × 25 回）で `app.isTerminated` を確認する。
+4. 終了を確認できた場合は `cachedWindowsByPID.removeValue(forKey: pid)` と `unregisterObserver(for: pid)` を行って `true` を返す。確認ダイアログ表示等で未終了のままタイムアウトした場合は `false` を返す。
 
 ---
 
 ## 3. `SwitcherViewModel` 契約
 
-- `handleHotKeyEvent(.closeSelectedWindowPressed)` 受信時：
-  - `mode == .inactive`、`isClosingWindow == true`、または `!displayedResults.indices.contains(selectedIndex)` の場合は何もしない。
-  - 非同期タスクを起動して `closeSelectedWindow()` を実行する（テスト容易性のために `public func closeSelectedWindow() async` としても呼び出し可能にする）。
-- `closeSelectedWindow()` の契約：
-  1. `guard mode != .inactive, !isClosingWindow, displayedResults.indices.contains(selectedIndex) else { return }`
-  2. `isClosingWindow = true` とし、`defer { isClosingWindow = false }` を保証する。
-  3. 実行前に対象 `target = displayedResults[selectedIndex].entry` と `previousIndex = selectedIndex` を保持し、`let closed = await windowService.closeWindow(target)` を呼ぶ。
-  4. `await` 復帰後に `mode == .inactive` になっていた場合（処理中のキャンセル・確定等）、または `!closed` の場合は何も変更せず終了する。
-  5. `allEntries.removeAll { $0.id == target.id }` を実行する。
-  6. `allEntries.isEmpty` の場合は `dismiss(reason: .cancelled)` を実行して終了する。
-  7. 残余がある場合、モードに応じて `displayedResults` を再生成する：
-     - `.normal`: `displayedResults = allEntries.map { WindowSearchResult(entry: $0) }`
-     - `.launcher`: `displayedResults = WindowSearchEngine.search(query: searchQuery, in: allEntries)`
-  8. `selectedIndex = SwitcherSelection.indexAfterRemoval(current: previousIndex, remainingCount: displayedResults.count)` を設定する。
-  9. `onSearchResultsUpdated?()` を呼び出し、パネル高さの再調整を通知する。
+- **`cancel(reason:)` の保護**:
+  - `if reason == .resignedActive && isClosingWindow { return }` により、クローズ／終了処理に伴う一時的な別スペース切り替え等で発生したフォーカス喪失ではパネルを閉じない。
+- **`closeSelectedWindow()` の分岐と更新契約**:
+  1. 絞り込み前の有効一覧 `allEntries` から `sameAppCount = allEntries.filter { $0.pid == target.pid }.count` を算出する。
+  2. `sameAppCount <= 1` なら `await windowService.terminateApplication(pid: target.pid)`、`sameAppCount >= 2` なら `await windowService.closeWindow(target)` を呼び出す。
+  3. 待機後、別セッションへ遷移済み（`mode != targetMode || presentationGeneration != capturedGeneration`）なら何もせず終了する。
+  4. 失敗（`false`）なら一覧を変更せず、`onPanelFocusRestoreNeeded?(targetMode)` のみ呼んで終了する。
+  5. 成功（`true`）なら `allEntries` から対象を除外し、`allEntries.isEmpty` なら `dismiss(reason: .cancelled)` を呼ぶ。
+  6. 残余がある場合はモード別に `displayedResults` を再構築し、`selectedIndex = SwitcherSelection.indexAfterRemoval(...)` へ更新して `onSearchResultsUpdated?()` および `onPanelFocusRestoreNeeded?(targetMode)` を呼び出す。
 
 ---
 
-## 4. `SwitcherPanel` UI 契約
+## 4. `SwitcherPanel` / `AppCoordinator` 契約
 
-- `updateAnchoredHeight(to:)` および `updateAnchoredHeightIfNeeded()` は、`.launcher` モードだけでなく `.normal` モード表示中の高さ変化（ウィンドウクローズに伴うリスト縮小）にも対応する。
-- `.launcher` モード時は従来通り上端座標 `anchoredTopY` を固定して下方向へ伸縮する。
-- `.normal` モード時は現在のパネル中心 Y 座標（または上端座標）を基準に `fittingSize` へリサイズし、`invalidateShadow()` によって角丸シャドウを再計算する。
+- `SwitcherPanel.restoreFocusIfNeeded(mode: SwitcherMode)` を追加し、`mode == .launcher` 時は `NSApplication.shared.activate()` + `orderFrontRegardless()` + `makeKey()`、`mode == .normal` 時は `orderFrontRegardless()` + `makeKey()` でパネルの前面表示とキーフォーカスを回復する。
+- `AppCoordinator` は `switcherViewModel.onPanelFocusRestoreNeeded` を `switcherPanel?.restoreFocusIfNeeded(mode:)` に接続する。

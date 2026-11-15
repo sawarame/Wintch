@@ -57,8 +57,17 @@ public final class SwitcherViewModel {
     /// 権限未許可の状態で起動操作が行われた際に呼ばれる通知ハンドラ
     public var onPermissionDenied: (() -> Void)?
 
+    /// 自動 Space 移動等のクローズ操作完了後にパネルのフォーカス復元が必要な際に呼ばれる通知ハンドラ
+    public var onPanelFocusRestoreNeeded: ((SwitcherMode) -> Void)?
+
     /// 起動時に取得した全有効ウィンドウ一覧（MRU ソート済み）
     private var allEntries: [WindowEntry] = []
+
+    /// ウィンドウクローズ処理の多重実行を防止するロックフラグ
+    private var isClosingWindow = false
+
+    /// 表示セッションを識別する世代カウンタ（非同期クローズ復帰時のセッション跨ぎ防止用）
+    private var presentationGeneration: Int = 0
 
     /// ウィンドウ取得・アクティブ化サービス
     private let windowService: any WindowServicing
@@ -111,7 +120,76 @@ public final class SwitcherViewModel {
             cancel()
         case let .arrowPressed(direction):
             moveSelection(direction)
+        case .closeSelectedWindowPressed:
+            Task { @MainActor [weak self] in
+                await self?.closeSelectedWindow()
+            }
         }
+    }
+
+    /// 現在選択中の対象を閉じる（同アプリに複数ウィンドウがあれば1枚のみ閉じ、最後の1枚ならアプリごと終了する）
+    public func closeSelectedWindow() async {
+        // 非表示中・クローズ処理中・選択候補なし（0件等）の場合は安全に無視する
+        guard mode != .inactive,
+              !isClosingWindow,
+              displayedResults.indices.contains(selectedIndex) else {
+            return
+        }
+
+        isClosingWindow = true
+        defer { isClosingWindow = false }
+
+        let targetMode = mode
+        let capturedGeneration = presentationGeneration
+        let target = displayedResults[selectedIndex].entry
+        let previousIndex = selectedIndex
+        // ランチャー検索による絞り込みに左右されないよう、全候補一覧を基準に同アプリの残余ウィンドウ数を判定する
+        let isSingleWindowForApp = allEntries.filter { $0.pid == target.pid }.count <= 1
+
+        let didSucceed: Bool
+        if isSingleWindowForApp {
+            didSucceed = await windowService.terminateApplication(pid: target.pid)
+        } else {
+            didSucceed = await windowService.closeWindow(target)
+        }
+
+        // 待機中に別セッションへ遷移・終了済みの場合は状態を変更せず抜ける
+        guard mode == targetMode, presentationGeneration == capturedGeneration else { return }
+
+        guard didSucceed else {
+            // 自動 Space 移動等が発生した失敗ケースでもパネルの前面・フォーカスを維持する
+            onPanelFocusRestoreNeeded?(targetMode)
+            return
+        }
+
+        if isSingleWindowForApp {
+            allEntries.removeAll { $0.pid == target.pid || $0.id == target.id }
+        } else {
+            allEntries.removeAll { $0.id == target.id }
+        }
+
+        if allEntries.isEmpty {
+            // 開いている通常ウィンドウが全件0件になった場合はパネルを自動的に閉じる
+            dismiss(reason: .cancelled)
+            return
+        }
+
+        switch targetMode {
+        case .normal:
+            displayedResults = allEntries.map { WindowSearchResult(entry: $0) }
+        case .launcher:
+            // 検索キーワードを維持したまま最新の残余ウィンドウで絞り込みを再評価する
+            displayedResults = WindowSearchEngine.search(query: searchQuery, in: allEntries)
+        case .inactive:
+            return
+        }
+
+        selectedIndex = SwitcherSelection.indexAfterRemoval(
+            current: previousIndex,
+            remainingCount: displayedResults.count
+        )
+        onSearchResultsUpdated?()
+        onPanelFocusRestoreNeeded?(targetMode)
     }
 
     /// ランチャーモードの検索文字列を更新し、ファジー検索結果と選択位置を再計算する
@@ -160,6 +238,10 @@ public final class SwitcherViewModel {
     /// - Parameter reason: パネル終了の理由（デフォルトは明示的キャンセル）
     public func cancel(reason: SwitcherDismissReason = .cancelled) {
         guard mode != .inactive else { return }
+        // クローズ処理中の自動 Space 移動に伴う一時的な非アクティブ化ではパネルを閉じない
+        if reason == .resignedActive && isClosingWindow {
+            return
+        }
         dismiss(reason: reason)
     }
 
@@ -210,6 +292,7 @@ public final class SwitcherViewModel {
         searchQuery = ""
         displayedResults = sorted.map { WindowSearchResult(entry: $0) }
         selectedIndex = initial
+        presentationGeneration += 1
         mode = targetMode
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
 
@@ -220,6 +303,7 @@ public final class SwitcherViewModel {
     /// パネル表示状態をリセットして閉じる
     /// - Parameter reason: パネル終了の理由
     private func dismiss(reason: SwitcherDismissReason) {
+        presentationGeneration += 1
         mode = .inactive
         hotKeyMonitor.activeMode = .inactive
         allEntries = []

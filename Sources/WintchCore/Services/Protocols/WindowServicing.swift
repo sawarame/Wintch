@@ -16,4 +16,14 @@ public protocol WindowServicing: AnyObject {
     /// 指定されたウィンドウを最前面にアクティブ化する（必要なら操作スペース移動・最小化解除を含む）
     /// - Parameter entry: アクティブ化対象のウィンドウ項目
     func activateWindow(_ entry: WindowEntry)
+
+    /// 指定されたウィンドウ1枚のみを閉じる操作を実行し、実際に閉じられたかを返す
+    /// - Parameter entry: クローズ対象のウィンドウ項目
+    /// - Returns: ウィンドウの消滅を確認できた場合は true、非対応や確認ダイアログ等で残存した場合は false
+    func closeWindow(_ entry: WindowEntry) async -> Bool
+
+    /// 指定された PID のアプリケーションに対して通常の終了要求（強制終了ではない）を送信し、終了したかを返す
+    /// - Parameter pid: 終了対象のプロセス ID
+    /// - Returns: アプリケーションの終了を確認できた場合は true、保存確認ダイアログ等でキャンセル・残存した場合は false
+    func terminateApplication(pid: Int32) async -> Bool
 }
