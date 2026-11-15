@@ -20,6 +20,14 @@ public struct SettingsView: View {
         )
     }
 
+    /// 通常スイッチャー表示形式用の双方向バインディング
+    private var normalDisplayStyleBinding: Binding<SwitcherDisplayStyle> {
+        Binding(
+            get: { viewModel.normalDisplayStyle },
+            set: { viewModel.updateNormalDisplayStyle($0) }
+        )
+    }
+
     /// ビューの本体構築
     public var body: some View {
         Form {
@@ -67,6 +75,53 @@ public struct SettingsView: View {
                     Text("⌘ / ⌥ / ⌃ のいずれか1つ以上を含めて入力してください（⇧ は逆順移動用）。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Picker("表示形式", selection: normalDisplayStyleBinding) {
+                    ForEach(SwitcherDisplayStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+
+                if viewModel.normalDisplayStyle == .capture {
+                    if viewModel.screenRecordingStatus == .denied {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(
+                                "ウィンドウのキャプチャ表示には「画面収録」権限の許可が必要です。",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+
+                            HStack(spacing: 12) {
+                                Button("権限をリクエスト") {
+                                    viewModel.requestScreenRecordingPermission()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+
+                                Button("システム設定を開く") {
+                                    viewModel.openScreenRecordingSettings()
+                                }
+                                .buttonStyle(.link)
+                                .font(.caption)
+
+                                Button("再確認") {
+                                    viewModel.refreshStatus()
+                                }
+                                .buttonStyle(.link)
+                                .font(.caption)
+                            }
+
+                            Text("※ macOS の仕様上、権限を許可した後にアプリの再起動が必要になる場合があります。")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("ウィンドウのサムネイルをグリッド表示します（リスト型より多くのメモリを使用する場合があります）。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -125,10 +180,29 @@ public struct SettingsView: View {
                         }
                     }
                 }
+
+                // オプトイン原則に従い、キャプチャ表示型が選択されている場合のみ画面収録権限欄を表示する
+                if viewModel.normalDisplayStyle == .capture {
+                    LabeledContent("画面収録権限") {
+                        if viewModel.screenRecordingStatus == .granted {
+                            Label("許可済み", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            HStack(spacing: 8) {
+                                Label("未許可", systemImage: "exclamationmark.circle.fill")
+                                    .foregroundStyle(.orange)
+                                Button("設定を開く") {
+                                    viewModel.openScreenRecordingSettings()
+                                }
+                                .buttonStyle(.link)
+                            }
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 430)
+        .frame(width: 480, height: 500)
         .onAppear {
             viewModel.refreshStatus()
         }

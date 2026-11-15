@@ -39,7 +39,7 @@ public struct PermissionGuideView: View {
             .background(Color.secondary.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            Text("※ プライバシー保護のため、「画面収録」権限は一切使用しません。")
+            Text("※ リスト型および検索ランチャーでは「画面収録」権限を使用しません（キャプチャ表示型を選択した場合のみ任意で使用します）。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

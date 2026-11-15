@@ -8,6 +8,9 @@ public final class SwitcherPanel: NSPanel {
     /// パネルが外部クリック等でフォーカスを失った際に呼ばれるキャンセル通知
     public var onResignActive: (() -> Void)?
 
+    /// レイアウト計算直前に表示先ディスプレイの利用可能サイズを伝える通知
+    public var onPrepareScreenSize: ((CGSize) -> Void)?
+
     /// ランチャー表示中に上端位置を固定するための Y 座標アンカー（AppKit 座標系での frame.maxY）
     private var anchoredTopY: CGFloat?
 
@@ -18,8 +21,8 @@ public final class SwitcherPanel: NSPanel {
     private var currentMode: SwitcherMode = .inactive
 
     /// パネルを初期化する
-    /// - Parameter contentView: パネル内にホストする SwiftUI リストビュー
-    public init(contentView: SwitcherListView) {
+    /// - Parameter contentView: パネル内にホストする SwiftUI コンテンツビュー
+    public init(contentView: SwitcherContentView) {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
@@ -48,21 +51,29 @@ public final class SwitcherPanel: NSPanel {
         self.contentView = hostingView
     }
 
-    /// 表示中に上端位置を固定したまま指定高さへ下方向リサイズする
+    /// 表示中に上端位置を固定したまま指定高さへ下方向リサイズする（リスト型互換）
     /// - Parameter height: 新しいコンテンツ高さ
     public func updateAnchoredHeight(to height: CGFloat) {
+        updateAnchoredSize(to: CGSize(width: frame.width, height: height))
+    }
+
+    /// 表示中に上端位置および水平中心を維持したまま指定サイズへリサイズする
+    /// - Parameter size: 新しいコンテンツサイズ
+    public func updateAnchoredSize(to size: CGSize) {
         guard isVisible, currentMode != .inactive, let anchoredTopY else {
             return
         }
 
-        let targetHeight = max(height, 48)
-        guard abs(frame.height - targetHeight) > 0.5 else {
+        let targetWidth = max(size.width, 200)
+        let targetHeight = max(size.height, 48)
+        guard abs(frame.height - targetHeight) > 0.5 || abs(frame.width - targetWidth) > 0.5 else {
             return
         }
 
         let newOriginY = anchoredTopY - targetHeight
+        let newOriginX = frame.midX - (targetWidth / 2.0)
         setFrame(
-            NSRect(x: frame.origin.x, y: newOriginY, width: frame.width, height: targetHeight),
+            NSRect(x: newOriginX, y: newOriginY, width: targetWidth, height: targetHeight),
             display: true
         )
         // リサイズ後の角丸形状に合わせて OS 側のウィンドウシャドウを再計算する
@@ -99,6 +110,16 @@ public final class SwitcherPanel: NSPanel {
             previousFrontmostApp = nil
         }
 
+        // マウスカーソルが存在するディスプレイ（見つからない場合はメインディスプレイ）を特定し、
+        // コンテンツの列数・最大高さ計算に必要な利用可能サイズを先に反映する
+        let mouseLocation = NSEvent.mouseLocation
+        let targetScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) })
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        if let visibleSize = targetScreen?.visibleFrame.size {
+            onPrepareScreenSize?(visibleSize)
+        }
+
         if let hostingView = contentView {
             hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize
@@ -106,12 +127,6 @@ public final class SwitcherPanel: NSPanel {
                 setContentSize(fittingSize)
             }
         }
-
-        // マウスカーソルが存在するディスプレイ（見つからない場合はメインディスプレイ）の中央を計算する
-        let mouseLocation = NSEvent.mouseLocation
-        let targetScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) })
-            ?? NSScreen.main
-            ?? NSScreen.screens.first
 
         if let screenFrame = targetScreen?.visibleFrame {
             let originX = screenFrame.midX - (frame.width / 2.0)
@@ -155,8 +170,9 @@ public final class SwitcherPanel: NSPanel {
         }
 
         let newOriginY = anchoredTopY - targetHeight
+        let newOriginX = frame.midX - (targetWidth / 2.0)
         setFrame(
-            NSRect(x: frame.origin.x, y: newOriginY, width: targetWidth, height: targetHeight),
+            NSRect(x: newOriginX, y: newOriginY, width: targetWidth, height: targetHeight),
             display: true
         )
         // リサイズ後の角丸形状に合わせて OS 側のウィンドウシャドウを再計算する

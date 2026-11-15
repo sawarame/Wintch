@@ -23,6 +23,9 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
     /// 最小化状態かどうか
     public let isMinimized: Bool
 
+    /// 現在の操作スペース上で画面表示中かどうか（取得可能な場合）
+    public let isOnScreen: Bool?
+
     /// MRU 並び替えに使用する直近アクティブ日時
     public let lastActivatedAt: Date?
 
@@ -38,6 +41,7 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
     ///   - applicationName: アプリケーション名
     ///   - windowTitle: ウィンドウタイトル
     ///   - isMinimized: 最小化状態かどうか
+    ///   - isOnScreen: 現在の操作スペース上で表示中かどうか
     ///   - lastActivatedAt: 直近アクティブ日時
     ///   - zOrderIndex: 重なり順
     public init(
@@ -48,6 +52,7 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
         applicationName: String,
         windowTitle: String,
         isMinimized: Bool = false,
+        isOnScreen: Bool? = nil,
         lastActivatedAt: Date? = nil,
         zOrderIndex: Int = 0
     ) {
@@ -58,6 +63,7 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
         self.applicationName = applicationName
         self.windowTitle = windowTitle
         self.isMinimized = isMinimized
+        self.isOnScreen = isOnScreen
         self.lastActivatedAt = lastActivatedAt
         self.zOrderIndex = zOrderIndex
     }

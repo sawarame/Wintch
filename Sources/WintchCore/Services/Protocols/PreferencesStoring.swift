@@ -17,4 +17,12 @@ public protocol PreferencesStoring: Sendable {
     /// ランチャーのショートカット設定を保存する
     /// - Parameter preference: 保存するランチャーショートカット設定
     func saveLauncherShortcut(_ preference: LauncherShortcutPreference)
+
+    /// 保存されている通常スイッチャーの表示形式設定を読み込む
+    /// - Returns: 保存された表示形式設定（未保存時はデフォルトのリスト型）
+    func loadNormalDisplayStyle() -> SwitcherDisplayStyle
+
+    /// 通常スイッチャーの表示形式設定を保存する
+    /// - Parameter style: 保存する表示形式設定
+    func saveNormalDisplayStyle(_ style: SwitcherDisplayStyle)
 }

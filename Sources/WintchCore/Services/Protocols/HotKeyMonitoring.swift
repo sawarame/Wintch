@@ -2,10 +2,14 @@ import Foundation
 
 /// 矢印キーの移動方向
 public enum ArrowDirection: Equatable, Sendable {
-    /// 上方向（前の項目へ移動）
+    /// 上方向（前の項目または上の行へ移動）
     case up
-    /// 下方向（次の項目へ移動）
+    /// 下方向（次の項目または下の行へ移動）
     case down
+    /// 左方向（前の項目へ移動）
+    case left
+    /// 右方向（次の項目へ移動）
+    case right
 }
 
 /// ホットキー監視サービスが認識する現在のアクティブモード

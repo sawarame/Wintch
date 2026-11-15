@@ -8,6 +8,9 @@ public final class PreferencesStore: PreferencesStoring {
     /// ランチャー設定の永続化に使用する UserDefaults キー
     private static let launcherShortcutKey = "dev.wintch.launcherShortcutPreference"
 
+    /// 通常スイッチャー表示形式の永続化に使用する UserDefaults キー
+    private static let normalDisplayStyleKey = "dev.wintch.normalDisplayStyle"
+
     /// 使用する UserDefaults スイート名（nil の場合は standard）
     private let suiteName: String?
 
@@ -51,6 +54,22 @@ public final class PreferencesStore: PreferencesStoring {
     public func saveLauncherShortcut(_ preference: LauncherShortcutPreference) {
         guard let data = try? JSONEncoder().encode(preference) else { return }
         resolveDefaults().set(data, forKey: Self.launcherShortcutKey)
+    }
+
+    /// 保存されている通常スイッチャーの表示形式設定を読み込む
+    /// - Returns: 保存された表示形式設定（未保存または不正値の場合はデフォルトの .list）
+    public func loadNormalDisplayStyle() -> SwitcherDisplayStyle {
+        guard let rawValue = resolveDefaults().string(forKey: Self.normalDisplayStyleKey),
+              let style = SwitcherDisplayStyle(rawValue: rawValue) else {
+            return .default
+        }
+        return style
+    }
+
+    /// 通常スイッチャーの表示形式設定を保存する
+    /// - Parameter style: 保存する表示形式設定
+    public func saveNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
+        resolveDefaults().set(style.rawValue, forKey: Self.normalDisplayStyleKey)
     }
 
     /// 設定用の UserDefaults インスタンスを解決する

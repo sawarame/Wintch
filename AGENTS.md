@@ -76,8 +76,8 @@ Swift Package Manager（`Package.swift`, Swift 6.0, macOS 14.0+）で構成さ�
 ```
 
 ### アーキテクチャ上の厳守事項
-- **最上位方針**: [`.specify/memory/constitution.md`](.specify/memory/constitution.md) を遵守すること。
-  - `ScreenCaptureKit` などの画面収録権限・サムネイル取得は一切使用しない。
+- **最上位方針**: [`.specify/memory/constitution.md`](.specify/memory/constitution.md)（v2.0.0）を遵守すること。
+  - リスト型スイッチャーおよび検索ランチャーでは画面収録権限を一切要求・使用しない（オプトインで「キャプチャ表示型」を選択した場合のみ `ScreenCaptureKit` による一時メモリ表示を使用してよい。ディスク保存・外部送信は禁止）。
   - 外部ライブラリ（サードパーティ SPM パッケージ）を追加せず、Apple 標準フレームワークのみを使用する。
   - `CGS*` 等の非公開 API は一切使用しない。
 - **低レイヤー API の隔離**: `CGWindowListCopyWindowInfo`、`AXUIElement`、`AXObserver`、`CGEventTap`、`NSWorkspace` などの OS 依存処理は `Sources/WintchCore/Services/` に隔離し、`Views/` や `ViewModels/` から直接呼び出さない。

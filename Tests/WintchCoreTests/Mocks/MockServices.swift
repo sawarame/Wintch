@@ -200,10 +200,14 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var storedShortcut: ShortcutPreference = .default
     /// メモリ上に保持しているランチャーショートカット設定
     var storedLauncherShortcut: LauncherShortcutPreference = .default
+    /// メモリ上に保持している通常スイッチャーの表示形式設定
+    var storedNormalDisplayStyle: SwitcherDisplayStyle = .default
     /// saveShortcut が呼ばれた回数
     var saveCallCount = 0
     /// saveLauncherShortcut が呼ばれた回数
     var saveLauncherCallCount = 0
+    /// saveNormalDisplayStyle が呼ばれた回数
+    var saveNormalDisplayStyleCallCount = 0
 
     /// メモリ上の通常ショートカット設定を読み込む
     /// - Returns: 保持している設定
@@ -229,6 +233,121 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     func saveLauncherShortcut(_ preference: LauncherShortcutPreference) {
         storedLauncherShortcut = preference
         saveLauncherCallCount += 1
+    }
+
+    /// メモリ上の通常スイッチャー表示形式を読み込む
+    /// - Returns: 保持している表示形式設定
+    func loadNormalDisplayStyle() -> SwitcherDisplayStyle {
+        storedNormalDisplayStyle
+    }
+
+    /// メモリ上の通常スイッチャー表示形式を保存する
+    /// - Parameter style: 保存する表示形式設定
+    func saveNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
+        storedNormalDisplayStyle = style
+        saveNormalDisplayStyleCallCount += 1
+    }
+}
+
+/// テスト用の画面収録権限サービスモック
+@MainActor
+final class MockScreenRecordingPermissionService: ScreenRecordingPermissionServicing {
+    /// 返却する画面収録権限状態スタブ
+    var stubbedStatus: ScreenRecordingPermissionStatus = .granted
+    /// requestPermission() の戻り値スタブ（nil の場合は stubbedStatus == .granted）
+    var requestPermissionResult: Bool?
+    /// currentStatus が呼ばれた回数
+    var currentStatusCallCount = 0
+    /// requestPermission が呼ばれた回数
+    var requestPermissionCallCount = 0
+    /// openSystemSettings が呼ばれた回数
+    var openSystemSettingsCallCount = 0
+
+    /// 現在の画面収録権限状態を返す
+    /// - Returns: スタブ設定された画面収録権限状態
+    func currentStatus() -> ScreenRecordingPermissionStatus {
+        currentStatusCallCount += 1
+        return stubbedStatus
+    }
+
+    /// 画面収録権限リクエストを記録する
+    /// - Returns: 設定されたスタブ結果
+    @discardableResult
+    func requestPermission() -> Bool {
+        requestPermissionCallCount += 1
+        if let requestPermissionResult {
+            return requestPermissionResult
+        }
+        return stubbedStatus == .granted
+    }
+
+    /// システム設定遷移要求を記録する
+    func openSystemSettings() {
+        openSystemSettingsCallCount += 1
+    }
+}
+
+/// テスト用のウィンドウキャプチャサービスモック
+@MainActor
+final class MockWindowCaptureService: WindowCaptureServicing {
+    /// メモリキャッシュとして返却するサムネイルマップ
+    var cachedThumbnails: [UInt32: NSImage] = [:]
+    /// 非同期取得時に返却・差し込みを行うスタブサムネイルマップ
+    var stubbedAsyncThumbnails: [UInt32: NSImage] = [:]
+    /// captureThumbnails の非同期挙動を差し込む任意フック
+    var captureHandler: (([UInt32], @escaping @MainActor (UInt32, NSImage) -> Void) async -> Void)?
+    /// captureThumbnails が呼ばれた際の引数履歴
+    var capturedRequestWindowIDs: [[UInt32]] = []
+    /// invalidateThumbnail が呼ばれたウィンドウ ID 履歴
+    var invalidatedWindowIDs: [UInt32] = []
+    /// clearCache が呼ばれた回数
+    var clearCacheCallCount = 0
+
+    /// キャッシュ済みサムネイルを返す
+    /// - Parameter cgWindowID: CoreGraphics ウィンドウ ID
+    /// - Returns: キャッシュにあれば画像、なければ nil
+    func cachedThumbnail(for cgWindowID: UInt32) -> NSImage? {
+        cachedThumbnails[cgWindowID]
+    }
+
+    /// 非同期キャプチャ取得を実行し、完了ごとにコールバックとキャッシュ更新を行う
+    /// - Parameters:
+    ///   - cgWindowIDs: 取得対象のウィンドウ ID 配列
+    ///   - maxPixelSize: 上限ピクセルサイズ
+    ///   - onCaptured: 取得完了コールバック
+    func captureThumbnails(
+        for cgWindowIDs: [UInt32],
+        maxPixelSize: CGSize,
+        onCaptured: @escaping @MainActor (UInt32, NSImage) -> Void
+    ) async {
+        capturedRequestWindowIDs.append(cgWindowIDs)
+        if let captureHandler {
+            await captureHandler(cgWindowIDs) { [weak self] windowID, image in
+                self?.cachedThumbnails[windowID] = image
+                onCaptured(windowID, image)
+            }
+            return
+        }
+        for windowID in cgWindowIDs {
+            if Task.isCancelled { break }
+            if let image = stubbedAsyncThumbnails[windowID] {
+                cachedThumbnails[windowID] = image
+                onCaptured(windowID, image)
+            }
+        }
+    }
+
+    /// 指定ウィンドウのキャッシュを削除する
+    /// - Parameter cgWindowID: 削除対象のウィンドウ ID
+    func invalidateThumbnail(for cgWindowID: UInt32) {
+        invalidatedWindowIDs.append(cgWindowID)
+        cachedThumbnails.removeValue(forKey: cgWindowID)
+    }
+
+    /// 全キャッシュを破棄する
+    func clearCache() {
+        clearCacheCallCount += 1
+        cachedThumbnails.removeAll()
     }
 }
 

@@ -40,6 +40,21 @@ public final class SwitcherViewModel {
     /// ランチャーモードでウィンドウ一覧の下に表示するアプリ起動候補一覧（表示中のウィンドウと同アプリは除外）
     public private(set) var displayedAppResults: [AppSearchResult] = []
 
+    /// 通常スイッチャーの現在の表示形式（リスト型／キャプチャ表示型）
+    public private(set) var normalDisplayStyle: SwitcherDisplayStyle
+
+    /// キャプチャ表示型で使用するウィンドウごとのサムネイル画像（cgWindowID キー、メモリ限定）
+    public private(set) var capturedThumbnails: [UInt32: NSImage] = [:]
+
+    /// キャプチャ表示型における画面収録権限の許可状態（未許可時はバナー案内とプレースホルダー表示へフォールバック）
+    public private(set) var isScreenRecordingGranted: Bool = true
+
+    /// キャプチャグリッドで現在適用中の 1 行あたり列数（上下矢印の行間移動計算に使用）
+    public private(set) var gridColumnCount: Int = 1
+
+    /// アクティブディスプレイの利用可能サイズ（グリッド列数および最大高さ算出用）
+    public private(set) var availableScreenSize: CGSize = CGSize(width: 1280, height: 800)
+
     /// 現在アプリ起動候補を表示中かどうか（ランチャーモードかつアプリ起動候補が 1 件以上ある場合）
     public var isShowingLaunchCandidates: Bool {
         mode == .launcher && !displayedAppResults.isEmpty
@@ -73,6 +88,9 @@ public final class SwitcherViewModel {
     /// 自動 Space 移動等のクローズ操作完了後にパネルのフォーカス復元が必要な際に呼ばれる通知ハンドラ
     public var onPanelFocusRestoreNeeded: ((SwitcherMode) -> Void)?
 
+    /// キャプチャ表示型パネル上から画面収録権限の設定画面を開くよう要求された際に呼ばれる通知ハンドラ
+    public var onOpenScreenRecordingSettingsRequested: (() -> Void)?
+
     /// 起動時に取得した全有効ウィンドウ一覧（MRU ソート済み）
     private var allEntries: [WindowEntry] = []
 
@@ -92,8 +110,14 @@ public final class SwitcherViewModel {
     private let iconProvider: any IconProviding
     /// インストール済みアプリ取得・起動サービス
     private let installedAppService: (any InstalledAppServicing)?
+    /// 画面収録権限確認・遷移サービス（キャプチャ表示型選択時のみ使用）
+    private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
+    /// ウィンドウサムネイルキャプチャサービス（キャプチャ表示型選択時のみ使用）
+    private let windowCaptureService: (any WindowCaptureServicing)?
     /// インストール済みアプリ一覧のバックグラウンド更新タスク
     private var installedAppsRefreshTask: Task<Void, Never>?
+    /// ウィンドウサムネイルのバックグラウンド取得タスク
+    private var captureRefreshTask: Task<Void, Never>?
 
     /// スイッチャー ViewModel を初期化する
     /// - Parameters:
@@ -102,18 +126,27 @@ public final class SwitcherViewModel {
     ///   - permissionService: 権限確認サービス
     ///   - iconProvider: アイコン取得サービス
     ///   - installedAppService: インストール済みアプリ取得・起動サービス（省略時はアプリ起動候補なし）
+    ///   - screenRecordingPermissionService: 画面収録権限サービス（省略時は未設定）
+    ///   - windowCaptureService: ウィンドウキャプチャサービス（省略時は未設定）
+    ///   - normalDisplayStyle: 通常スイッチャーの初期表示形式
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
         permissionService: any AccessibilityPermissionServicing,
         iconProvider: any IconProviding,
-        installedAppService: (any InstalledAppServicing)? = nil
+        installedAppService: (any InstalledAppServicing)? = nil,
+        screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil,
+        windowCaptureService: (any WindowCaptureServicing)? = nil,
+        normalDisplayStyle: SwitcherDisplayStyle = .default
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
         self.permissionService = permissionService
         self.iconProvider = iconProvider
         self.installedAppService = installedAppService
+        self.screenRecordingPermissionService = screenRecordingPermissionService
+        self.windowCaptureService = windowCaptureService
+        self.normalDisplayStyle = normalDisplayStyle
     }
 
     /// 指定されたプロセス ID のアプリアイコンを取得する
@@ -133,6 +166,52 @@ public final class SwitcherViewModel {
     /// ランチャー検索用にインストール済みアプリ一覧をバックグラウンドで事前取得する
     public func preloadInstalledApps() {
         scheduleInstalledAppsRefresh()
+    }
+
+    /// 通常スイッチャーの表示形式を更新し、リスト型へ戻った場合は一時キャプチャキャッシュを即時破棄する
+    /// - Parameter style: 新しい表示形式
+    public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
+        normalDisplayStyle = style
+        if style == .list {
+            captureRefreshTask?.cancel()
+            captureRefreshTask = nil
+            capturedThumbnails.removeAll()
+            isScreenRecordingGranted = true
+            windowCaptureService?.clearCache()
+        }
+    }
+
+    /// キャプチャグリッドで現在適用されている列数を更新する
+    /// - Parameter columns: 1 以上の列数
+    public func updateGridColumnCount(_ columns: Int) {
+        gridColumnCount = max(columns, 1)
+    }
+
+    /// 表示対象ディスプレイの利用可能サイズを更新し、必要ならグリッド列数も再計算する
+    /// - Parameter size: 利用可能なディスプレイ領域サイズ
+    public func updateAvailableScreenSize(_ size: CGSize) {
+        availableScreenSize = size
+        if !displayedResults.isEmpty {
+            gridColumnCount = SwitcherGridLayout.columnsCount(
+                itemCount: displayedResults.count,
+                availableScreenWidth: size.width
+            )
+        }
+    }
+
+    /// 指定ウィンドウに対応するサムネイル画像（未取得時は nil）を返す
+    /// - Parameter entry: 対象のウィンドウ項目
+    /// - Returns: メモリ上に保持しているキャプチャサムネイル（未取得・対象外時は nil）
+    public func thumbnail(for entry: WindowEntry) -> NSImage? {
+        guard let cgWindowID = entry.cgWindowID else { return nil }
+        return capturedThumbnails[cgWindowID]
+    }
+
+    /// キャプチャパネル上の案内バナーから画面収録権限のシステム設定を開き、パネルを安全に閉じる
+    public func openScreenRecordingSettings() {
+        cancel(reason: .cancelled)
+        screenRecordingPermissionService?.openSystemSettings()
+        onOpenScreenRecordingSettingsRequested?()
     }
 
     /// サービス層から通知されたキーイベントを処理する
@@ -195,8 +274,17 @@ public final class SwitcherViewModel {
         }
 
         if isSingleWindowForApp {
+            let removedIDs = allEntries.filter { $0.pid == target.pid || $0.id == target.id }.compactMap(\.cgWindowID)
+            for windowID in removedIDs {
+                capturedThumbnails.removeValue(forKey: windowID)
+                windowCaptureService?.invalidateThumbnail(for: windowID)
+            }
             allEntries.removeAll { $0.pid == target.pid || $0.id == target.id }
         } else {
+            if let windowID = target.cgWindowID {
+                capturedThumbnails.removeValue(forKey: windowID)
+                windowCaptureService?.invalidateThumbnail(for: windowID)
+            }
             allEntries.removeAll { $0.id == target.id }
         }
 
@@ -210,6 +298,12 @@ public final class SwitcherViewModel {
         case .normal:
             displayedResults = allEntries.map { WindowSearchResult(entry: $0) }
             displayedAppResults = []
+            if normalDisplayStyle == .capture {
+                gridColumnCount = SwitcherGridLayout.columnsCount(
+                    itemCount: displayedResults.count,
+                    availableScreenWidth: availableScreenSize.width
+                )
+            }
         case .launcher:
             // 検索キーワードを維持したまま最新の残余ウィンドウおよびアプリ起動候補を再評価する
             updateLauncherSearchResults(for: searchQuery)
@@ -236,15 +330,26 @@ public final class SwitcherViewModel {
         onSearchResultsUpdated?()
     }
 
-    /// 選択カーソルを上下に移動する（リストが空の場合は何もしない）
+    /// 選択カーソルを指定方向へ移動する（リストが空の場合は何もしない）
     /// - Parameter direction: 移動方向
     public func moveSelection(_ direction: ArrowDirection) {
         let count = activeResultCount
         guard mode != .inactive, count > 0 else { return }
+
+        if mode == .normal && normalDisplayStyle == .capture {
+            selectedIndex = SwitcherGridLayout.moveIndex(
+                current: selectedIndex,
+                direction: direction,
+                count: count,
+                columns: gridColumnCount
+            )
+            return
+        }
+
         switch direction {
-        case .up:
+        case .up, .left:
             selectedIndex = SwitcherSelection.previousIndex(current: selectedIndex, count: count)
-        case .down:
+        case .down, .right:
             selectedIndex = SwitcherSelection.nextIndex(current: selectedIndex, count: count)
         }
     }
@@ -295,8 +400,8 @@ public final class SwitcherViewModel {
         case .inactive:
             present(targetMode: .normal)
         case .normal, .launcher:
-            // 通常モードおよびランチャーモード表示中は、現在の表示リスト内で選択インデックスを移動する
-            moveSelection(isShiftPressed ? .up : .down)
+            // 通常モードおよびランチャーモード表示中は、現在の表示候補の MRU 順に沿って前後へ移動する
+            moveSelection(isShiftPressed ? .left : .right)
         }
     }
 
@@ -340,6 +445,33 @@ public final class SwitcherViewModel {
         mode = targetMode
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
 
+        let shouldUseCapture = targetMode == .normal && normalDisplayStyle == .capture
+        if shouldUseCapture {
+            // キャプチャ表示型では起動直後にキャッシュ済みサムネイルのみ即時反映し、表示遅延を起こさない
+            var initialThumbnails: [UInt32: NSImage] = [:]
+            if let windowCaptureService {
+                for entry in sorted {
+                    if let windowID = entry.cgWindowID,
+                       let cached = windowCaptureService.cachedThumbnail(for: windowID) {
+                        initialThumbnails[windowID] = cached
+                    }
+                }
+            }
+            capturedThumbnails = initialThumbnails
+            gridColumnCount = SwitcherGridLayout.columnsCount(
+                itemCount: sorted.count,
+                availableScreenWidth: availableScreenSize.width
+            )
+            if let screenRecordingPermissionService {
+                isScreenRecordingGranted = screenRecordingPermissionService.currentStatus() == .granted
+            } else {
+                isScreenRecordingGranted = false
+            }
+        } else {
+            capturedThumbnails = [:]
+            isScreenRecordingGranted = true
+        }
+
         if targetMode == .launcher {
             // 新規インストール済みアプリを反映するためバックグラウンドでキャッシュを最新化する
             scheduleInstalledAppsRefresh()
@@ -347,6 +479,10 @@ public final class SwitcherViewModel {
 
         onPresentationChanged?(true)
         onModePresentationChanged?(targetMode, nil)
+
+        if shouldUseCapture && isScreenRecordingGranted {
+            scheduleWindowCaptureRefresh(for: sorted)
+        }
     }
 
     /// パネル表示状態をリセットして閉じる
@@ -355,15 +491,90 @@ public final class SwitcherViewModel {
         presentationGeneration += 1
         installedAppsRefreshTask?.cancel()
         installedAppsRefreshTask = nil
+        captureRefreshTask?.cancel()
+        captureRefreshTask = nil
         mode = .inactive
         hotKeyMonitor.activeMode = .inactive
         allEntries = []
         searchQuery = ""
         displayedResults = []
         displayedAppResults = []
+        capturedThumbnails = [:]
+        isScreenRecordingGranted = true
         selectedIndex = 0
         onPresentationChanged?(false)
         onModePresentationChanged?(.inactive, reason)
+    }
+
+    /// バックグラウンドでウィンドウの最新サムネイルを非同期取得し、同一セッションかつ表示中項目にのみ反映する
+    /// - Parameter entries: キャプチャ対象のウィンドウ項目一覧
+    private func scheduleWindowCaptureRefresh(for entries: [WindowEntry]) {
+        captureRefreshTask?.cancel()
+        guard let windowCaptureService else { return }
+
+        let targetIDs = Self.prioritizedCaptureWindowIDs(
+            from: entries,
+            cachedThumbnails: capturedThumbnails
+        )
+        guard !targetIDs.isEmpty else { return }
+
+        let capturedGeneration = presentationGeneration
+        let maxPixelSize = CGSize(width: 432, height: 270)
+
+        captureRefreshTask = Task { @MainActor [weak self] in
+            await windowCaptureService.captureThumbnails(
+                for: targetIDs,
+                maxPixelSize: maxPixelSize
+            ) { [weak self] windowID, image in
+                guard let self,
+                      !Task.isCancelled,
+                      self.mode == .normal,
+                      self.normalDisplayStyle == .capture,
+                      self.presentationGeneration == capturedGeneration,
+                      self.allEntries.contains(where: { $0.cgWindowID == windowID }) else {
+                    return
+                }
+                self.capturedThumbnails[windowID] = image
+            }
+        }
+    }
+
+    /// 画面表示中かつ未キャッシュのウィンドウを最優先し、取得不要な別スペース/最小化キャッシュ済みを省いたキャプチャ対象 ID 順を返す
+    /// - Parameters:
+    ///   - entries: 表示対象ウィンドウ項目一覧（MRU 順）
+    ///   - cachedThumbnails: 既にメモリ上に保持しているサムネイルマップ
+    /// - Returns: キャプチャ優先度順に並べた CGWindow ID 配列
+    static func prioritizedCaptureWindowIDs(
+        from entries: [WindowEntry],
+        cachedThumbnails: [UInt32: NSImage]
+    ) -> [UInt32] {
+        var uncachedOnScreen: [UInt32] = []
+        var cachedOnScreen: [UInt32] = []
+        var uncachedOffScreen: [UInt32] = []
+        var uncachedMinimized: [UInt32] = []
+
+        for entry in entries {
+            guard let windowID = entry.cgWindowID else { continue }
+            let isCached = cachedThumbnails[windowID] != nil
+            let isOnScreen = (entry.isOnScreen != false) && !entry.isMinimized
+
+            if isOnScreen {
+                if isCached {
+                    cachedOnScreen.append(windowID)
+                } else {
+                    uncachedOnScreen.append(windowID)
+                }
+            } else if !isCached {
+                // 別スペース・最小化済みでも既にキャッシュがある場合は最終フレームを維持し、未取得分のみ後方優先で試行する
+                if entry.isMinimized {
+                    uncachedMinimized.append(windowID)
+                } else {
+                    uncachedOffScreen.append(windowID)
+                }
+            }
+        }
+
+        return uncachedOnScreen + cachedOnScreen + uncachedOffScreen + uncachedMinimized
     }
 
     /// 検索クエリを用いてウィンドウ検索結果とアプリ起動候補（表示中ウィンドウと重複するアプリを除外）を更新する

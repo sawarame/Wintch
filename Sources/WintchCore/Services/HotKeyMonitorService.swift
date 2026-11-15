@@ -673,7 +673,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             return HotKeyKeyDownDecision(event: nil, shouldConsume: false)
 
         case .normal:
-            // 通常モード表示中は Esc および上下矢印キーを横取り消費する
+            // 通常モード表示中は Esc および上下左右矢印キーを横取り消費する
             switch keyCode {
             case 53: // Esc キー
                 return HotKeyKeyDownDecision(event: .escapePressed, shouldConsume: true)
@@ -681,6 +681,10 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
                 return HotKeyKeyDownDecision(event: .arrowPressed(direction: .up), shouldConsume: true)
             case 125: // 下矢印キー
                 return HotKeyKeyDownDecision(event: .arrowPressed(direction: .down), shouldConsume: true)
+            case 123: // 左矢印キー
+                return HotKeyKeyDownDecision(event: .arrowPressed(direction: .left), shouldConsume: true)
+            case 124: // 右矢印キー
+                return HotKeyKeyDownDecision(event: .arrowPressed(direction: .right), shouldConsume: true)
             default:
                 break
             }

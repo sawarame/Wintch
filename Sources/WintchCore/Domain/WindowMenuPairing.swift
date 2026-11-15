@@ -1,0 +1,300 @@
+import Foundation
+
+/// アプリケーションの「ウィンドウ」メニューから取得した 1 項目分のスナップショット
+public struct WindowMenuItemSnapshot: Sendable, Equatable {
+    /// メニュー項目の表示タイトル
+    public let title: String
+    /// AXIdentifier 属性値（AppKit 標準のウィンドウ項目では "makeKeyAndOrderFront:"）
+    public let identifier: String?
+    /// チェックマーク等の状態記号（現在のアクティブウィンドウでは "✓" などが入る）
+    public let mark: String?
+    /// コマンドキーショートカットが割り当てられているか
+    public let hasCommandKey: Bool
+    /// サブメニューを持つか
+    public let hasSubmenu: Bool
+    /// メニュー項目が有効状態か
+    public let isEnabled: Bool
+    /// 元のメニュー子要素配列内におけるインデックス
+    public let index: Int
+
+    /// メニュー項目を初期化する
+    /// - Parameters:
+    ///   - title: メニュー項目の表示タイトル
+    ///   - identifier: AXIdentifier 属性値
+    ///   - mark: チェックマーク等の状態記号
+    ///   - hasCommandKey: コマンドキーショートカットの有無
+    ///   - hasSubmenu: サブメニューの有無
+    ///   - isEnabled: 有効状態かどうか
+    ///   - index: 元の配列インデックス
+    public init(
+        title: String,
+        identifier: String? = nil,
+        mark: String? = nil,
+        hasCommandKey: Bool = false,
+        hasSubmenu: Bool = false,
+        isEnabled: Bool = true,
+        index: Int
+    ) {
+        self.title = title
+        self.identifier = identifier
+        self.mark = mark
+        self.hasCommandKey = hasCommandKey
+        self.hasSubmenu = hasSubmenu
+        self.isEnabled = isEnabled
+        self.index = index
+    }
+
+    /// 該当メニュー項目がアクティブ印（チェックマーク等）を持つか
+    public var isChecked: Bool {
+        guard let mark else { return false }
+        return !mark.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// AXMenuBar の「ウィンドウ」メニュー項目列から実在するウィンドウ一覧を抽出する純粋ロジック
+public enum WindowMenuExtractor {
+    /// 標準ウィンドウ一覧アクション識別子（Cocoa / Electron / Chromium 共通）
+    public static let standardWindowActionIdentifier = "makeKeyAndOrderFront:"
+
+    /// ウィンドウ一覧メニューとして認識するメニューバー項目名（小文字正規化済み）
+    private static let recognizedMenuTitles: Set<String> = [
+        "window",
+        "ウィンドウ",
+        "ウインドウ"
+    ]
+
+    /// フォールバック判定時にウィンドウ以外として確実に除外する識別子
+    private static let excludedIdentifiers: Set<String> = [
+        "_toggleIPad:"
+    ]
+
+    /// メニューバー項目タイトルが「ウィンドウ」メニューを表すかを判定する
+    /// - Parameter title: メニューバー項目のタイトル文字列
+    /// - Returns: 「ウィンドウ」系メニューであれば true
+    public static func isWindowMenuBarTitle(_ title: String) -> Bool {
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return recognizedMenuTitles.contains(normalized)
+    }
+
+    /// 「ウィンドウ」メニューの全項目スナップショットから、現在開いているウィンドウに対応する項目のみを抽出する
+    /// - Parameter items: メニュー配下の全子要素スナップショット配列（セパレータ含む順序保持）
+    /// - Returns: 開いているウィンドウ一覧に対応する項目配列
+    public static func extractWindowListItems(from items: [WindowMenuItemSnapshot]) -> [WindowMenuItemSnapshot] {
+        // 1. 最優先：AppKit / Electron / Chromium 標準の "makeKeyAndOrderFront:" 識別子を持つ有効項目のみ抽出する
+        let standardItems = items.filter { item in
+            item.identifier == standardWindowActionIdentifier
+                && item.isEnabled
+                && !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if !standardItems.isEmpty {
+            return standardItems
+        }
+
+        // 2. フォールバック：標準識別子を使わないアプリ向けに、チェックマーク付き項目を含む末尾側の連続ブロックを探す
+        let checkedIndices = items.indices.filter { isFallbackCandidate(items[$0]) && items[$0].isChecked }
+        guard let anchorIndex = checkedIndices.last else {
+            return []
+        }
+
+        // チェックマーク付き項目の前後でセパレータ（空タイトル等）に挟まれた連続範囲のみを切り出す
+        var startIndex = anchorIndex
+        while startIndex > items.startIndex && isFallbackCandidate(items[startIndex - 1]) {
+            startIndex -= 1
+        }
+        var endIndex = anchorIndex
+        while endIndex + 1 < items.endIndex && isFallbackCandidate(items[endIndex + 1]) {
+            endIndex += 1
+        }
+
+        return Array(items[startIndex...endIndex])
+    }
+
+    /// フォールバック走査時に「ウィンドウ一覧の1行」になり得る項目かを判定する
+    /// - Parameter item: 判定対象のメニュー項目
+    /// - Returns: セパレータやシステム予約項目ではなくウィンドウ候補となり得る場合は true
+    private static func isFallbackCandidate(_ item: WindowMenuItemSnapshot) -> Bool {
+        let trimmedTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return false }
+        guard item.isEnabled, !item.hasSubmenu, !item.hasCommandKey else { return false }
+        if let id = item.identifier {
+            if excludedIdentifiers.contains(id) || id.hasPrefix("_NS:") {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+/// 同一 PID 内の生ウィンドウ候補（AX 取得済み＋CGWindow 補完）と Window メニュー項目を対応付ける純粋ロジック
+public enum WindowMenuCandidatePairing {
+    /// 同一 PID に属する生ウィンドウ候補へ Window メニューのタイトルを補完適用し、余剰なゴースト CGWindow 候補を整理する
+    /// - Parameters:
+    ///   - candidates: 同一 PID の生ウィンドウ候補一覧（hasAXInfo == true と false が混在可）
+    ///   - menuItems: `WindowMenuExtractor.extractWindowListItems` で抽出済みの実オープンウィンドウ項目
+    /// - Returns: タイトル補完および不要ゴースト候補除外済みの候補一覧
+    public static func applyMenuTitles(
+        to candidates: [RawWindowCandidate],
+        menuItems: [WindowMenuItemSnapshot]
+    ) -> [RawWindowCandidate] {
+        // Window メニューからウィンドウ一覧が取得できないアプリでは既存候補を変更せず返す
+        guard !menuItems.isEmpty else {
+            return candidates
+        }
+
+        var axCandidates: [RawWindowCandidate] = []
+        var cgCandidates: [RawWindowCandidate] = []
+        for candidate in candidates {
+            if candidate.hasAXInfo {
+                axCandidates.append(candidate)
+            } else {
+                cgCandidates.append(candidate)
+            }
+        }
+
+        // すでに AX 情報で捕捉済みのウィンドウタイトルを消費し、別スペース等にしかない未捕捉項目のみ残す
+        var unmatchedMenuItems = consumeCoveredMenuItems(
+            menuItems: menuItems,
+            axCandidates: axCandidates
+        )
+
+        // チェックマーク付きの項目（アプリ内の直近アクティブウィンドウ）を優先し、残りはメニュー順を保持する
+        unmatchedMenuItems.sort { lhs, rhs in
+            if lhs.isChecked != rhs.isChecked {
+                return lhs.isChecked && !rhs.isChecked
+            }
+            return lhs.index < rhs.index
+        }
+
+        // WindowFilter の通常判定を通過できる実質的な CGWindow 補完候補のみをペアリング対象にする
+        // （極小 1x1 やツールバー帯に貴重なメニュータイトルが奪われるのを防ぐ）
+        let pairableCGIndices = cgCandidates.indices.filter { WindowFilter.isValid(cgCandidates[$0]) }
+        let sortedPairableIndices = pairableCGIndices.sorted { lhsIdx, rhsIdx in
+            cgCandidatePriority(cgCandidates[lhsIdx]) < cgCandidatePriority(cgCandidates[rhsIdx])
+        }
+
+        let pairCount = min(unmatchedMenuItems.count, sortedPairableIndices.count)
+        var pairedCGCandidates: [RawWindowCandidate] = []
+        pairedCGCandidates.reserveCapacity(pairCount)
+
+        for i in 0..<pairCount {
+            let source = cgCandidates[sortedPairableIndices[i]]
+            let assignedTitle = unmatchedMenuItems[i].title
+            pairedCGCandidates.append(replacingTitle(of: source, with: assignedTitle))
+        }
+
+        // Window メニューで全実ウィンドウを把握できるアプリにおいて、
+        // ペア数を超過して残った cg-* 候補は裏方の不可視/ゴーストウィンドウであるため除外する
+        return axCandidates + pairedCGCandidates
+    }
+
+    /// ウィンドウタイトル同士が一致するか判定する（Chrome 等による中央省略「…」の補助照合を含む）
+    /// - Parameters:
+    ///   - fullOrCandidate: AX ウィンドウ等から得たタイトル
+    ///   - menuTitle: Window メニューから得たタイトル（または比較先タイトル）
+    /// - Returns: 同一ウィンドウのタイトルとみなせる場合は true
+    public static func titlesMatch(_ fullOrCandidate: String, _ menuTitle: String) -> Bool {
+        let a = fullOrCandidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = menuTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        if a == b { return true }
+
+        // 片方が単一の中央省略記号「…」を含む場合、前後両端の一致で照合する
+        if matchesEllipsisPattern(candidate: a, patternWithEllipsis: b)
+            || matchesEllipsisPattern(candidate: b, patternWithEllipsis: a) {
+            return true
+        }
+        return false
+    }
+
+    /// AX 候補群が既にカバーしているタイトル分をメニュー項目列から差し引き、未捕捉のメニュー項目のみを返す
+    /// - Parameters:
+    ///   - menuItems: 抽出済みのウィンドウメニュー項目
+    ///   - axCandidates: すでに AX 情報付きで構築された候補群
+    /// - Returns: 未捕捉分のウィンドウメニュー項目一覧
+    private static func consumeCoveredMenuItems(
+        menuItems: [WindowMenuItemSnapshot],
+        axCandidates: [RawWindowCandidate]
+    ) -> [WindowMenuItemSnapshot] {
+        var remainingAXTitles = axCandidates.compactMap { candidate -> String? in
+            guard let title = candidate.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else {
+                return nil
+            }
+            return title
+        }
+
+        // まず完全一致を優先消費し、残りで省略一致を消費する
+        var consumedMenuIndices = Set<Int>()
+        for (menuPos, item) in menuItems.enumerated() {
+            let trimmedMenuTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let exactIdx = remainingAXTitles.firstIndex(of: trimmedMenuTitle) {
+                remainingAXTitles.remove(at: exactIdx)
+                consumedMenuIndices.insert(menuPos)
+            }
+        }
+
+        var unmatched: [WindowMenuItemSnapshot] = []
+        for (menuPos, item) in menuItems.enumerated() {
+            guard !consumedMenuIndices.contains(menuPos) else { continue }
+            if let fuzzyIdx = remainingAXTitles.firstIndex(where: { titlesMatch($0, item.title) }) {
+                remainingAXTitles.remove(at: fuzzyIdx)
+                continue
+            }
+            unmatched.append(item)
+        }
+        return unmatched
+    }
+
+    /// CGWindow 候補同士のペアリング優先順位タプルを構築する（小さいほど優先）
+    /// - Parameter candidate: 比較対象の CGWindow 補完候補
+    /// - Returns: 比較可能な優先順位タプル
+    private static func cgCandidatePriority(_ candidate: RawWindowCandidate) -> (Int, Int, Int) {
+        let onScreenPriority = (candidate.isOnScreen == true) ? 0 : 1
+        let layerPriority = (candidate.layer == 0) ? 0 : 1
+        return (onScreenPriority, layerPriority, candidate.zOrderIndex)
+    }
+
+    /// RawWindowCandidate の title のみを差し替えた新しいインスタンスを返す
+    /// - Parameters:
+    ///   - candidate: 元の候補
+    ///   - title: 設定する新しいタイトル
+    /// - Returns: タイトル更新済みの RawWindowCandidate
+    private static func replacingTitle(of candidate: RawWindowCandidate, with title: String) -> RawWindowCandidate {
+        RawWindowCandidate(
+            id: candidate.id,
+            cgWindowID: candidate.cgWindowID,
+            pid: candidate.pid,
+            bundleIdentifier: candidate.bundleIdentifier,
+            applicationName: candidate.applicationName,
+            title: title,
+            layer: candidate.layer,
+            bounds: candidate.bounds,
+            alpha: candidate.alpha,
+            isRegularApplication: candidate.isRegularApplication,
+            isSelf: candidate.isSelf,
+            isMinimized: candidate.isMinimized,
+            axRole: candidate.axRole,
+            axSubrole: candidate.axSubrole,
+            hasAXInfo: candidate.hasAXInfo,
+            isOnScreen: candidate.isOnScreen,
+            lastActivatedAt: candidate.lastActivatedAt,
+            zOrderIndex: candidate.zOrderIndex
+        )
+    }
+
+    /// 「…」による中央または末尾省略を含むパターンと対象文字列が一致するか判定する
+    /// - Parameters:
+    ///   - candidate: 省略なしの可能性がある文字列
+    ///   - patternWithEllipsis: 「…」を含む省略済み文字列
+    /// - Returns: 両端が一致し文字数整合が取れている場合 true
+    private static func matchesEllipsisPattern(candidate: String, patternWithEllipsis: String) -> Bool {
+        let parts = patternWithEllipsis.components(separatedBy: "…")
+        guard parts.count == 2 else { return false }
+        let prefix = parts[0]
+        let suffix = parts[1]
+        // 省略前の文字列が短すぎたり両端が空の場合は誤マッチ防止のため不採用とする
+        guard (prefix.count + suffix.count) >= 4 else { return false }
+        guard candidate.count >= prefix.count + suffix.count else { return false }
+        return candidate.hasPrefix(prefix) && candidate.hasSuffix(suffix)
+    }
+}
