@@ -55,12 +55,12 @@ struct WintchApp: App {
             if let menuBarImage = Self.loadMenuBarIcon() {
                 Image(nsImage: menuBarImage)
             } else {
-                Image(systemName: "circle.circle")
+                Image(systemName: "macwindow.on.rectangle")
             }
         }
     }
 
-    /// バンドル内のメニューバー用ウィンチ SVG アイコンをテンプレート画像として読み込む
+    /// バンドル内のメニューバー用 SVG アイコンをテンプレート画像として読み込む
     /// - Returns: テンプレート設定済みの NSImage（未バンドル実行時は nil）
     private static func loadMenuBarIcon() -> NSImage? {
         guard let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "svg"),
