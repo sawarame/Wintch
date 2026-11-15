@@ -117,7 +117,7 @@ jobs:
           git push origin "refs/tags/${TAG_NAME}"
 
   release:
-    name: Build Universal App and Publish Release
+    name: Build, Notarize, and Publish Release
     needs: prepare
     runs-on: macos-15
     concurrency:
@@ -130,18 +130,59 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag_name }}
           fetch-depth: 0
 
-      - name: Build Universal Binary .app bundle
-        run: ./scripts/build-app.sh release --universal
-
-      - name: Package .app as ZIP and verify artifact
+      - name: Validate required secrets
+        env:
+          MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
-          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          for var in MACOS_CERT_BASE64 MACOS_CERT_PASSWORD MACOS_SIGN_IDENTITY NOTARY_KEY_BASE64 NOTARY_KEY_ID; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::必須の GitHub Secret (${var}) が設定されていません。"
+              exit 1
+            fi
+          done
+          if [ "${{ needs.prepare.outputs.is_prerelease }}" != "true" ] && [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::error::安定版リリースには HOMEBREW_TAP_TOKEN が必要です。"
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="${RUNNER_TEMP}/cert.p12"
+          trap 'rm -f "${CERT_PATH}"' EXIT
+
+          # Base64 化された .p12 証明書を一時ファイルへ復元する
+          printf '%s' "${MACOS_CERT_BASE64}" | tr -d '[:space:]' | base64 --decode > "${CERT_PATH}"
+
+          # ビルド・署名用の一時キーチェーンを作成して証明書をインポートする
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -P "${MACOS_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security list-keychain -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+      - name: Build and sign Universal Binary .app bundle
+        env:
+          WINTCH_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: ./scripts/build-app.sh release --universal
+
+      - name: Verify bundle metadata and architectures
+        run: |
+          set -euo pipefail
           EXPECTED_VERSION="${{ needs.prepare.outputs.version }}"
-          ZIP_PATH="./.build/Wintch-${TAG_NAME}.zip"
-
-          ditto -c -k --keepParent ./.build/Wintch.app "${ZIP_PATH}"
-
           ACTUAL_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ./.build/Wintch.app/Contents/Info.plist)"
           if [ "${ACTUAL_VERSION}" != "${EXPECTED_VERSION}" ]; then
             echo "::error::Info.plist のバージョン (${ACTUAL_VERSION}) が期待値 (${EXPECTED_VERSION}) と一致しません。"
@@ -154,6 +195,78 @@ jobs:
             echo "::error::Universal Binary (arm64 + x86_64) の生成確認に失敗しました (${ARCHS})。"
             exit 1
           fi
+
+      - name: Notarize, staple, and package release ZIP
+        id: package
+        env:
+          NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          NOTARIZE_ZIP="./.build/Wintch-notarize.zip"
+          FINAL_ZIP="./.build/Wintch-${TAG_NAME}.zip"
+          KEY_PATH="${RUNNER_TEMP}/AuthKey.p8"
+          trap 'rm -f "${KEY_PATH}" "${NOTARIZE_ZIP}"' EXIT
+
+          # 公証提出用の一時 ZIP を作成する
+          ditto -c -k --keepParent ./.build/Wintch.app "${NOTARIZE_ZIP}"
+
+          # App Store Connect API Key を復元して権限を制限する
+          printf '%s' "${NOTARY_KEY_BASE64}" | tr -d '[:space:]' | base64 --decode > "${KEY_PATH}"
+          chmod 600 "${KEY_PATH}"
+
+          NOTARY_AUTH_ARGS=(
+            --key "${KEY_PATH}"
+            --key-id "${NOTARY_KEY_ID}"
+          )
+          if [ -n "${NOTARY_ISSUER_ID:-}" ]; then
+            NOTARY_AUTH_ARGS+=(--issuer "${NOTARY_ISSUER_ID}")
+          fi
+
+          # Apple 公証サーバーへ提出して結果を待機する
+          set +e
+          SUBMIT_JSON="$(xcrun notarytool submit "${NOTARIZE_ZIP}" "${NOTARY_AUTH_ARGS[@]}" --wait --output-format json)"
+          SUBMIT_EXIT=$?
+          set -e
+          echo "${SUBMIT_JSON}"
+
+          PARSED_RESULT="$(SUBMIT_JSON="${SUBMIT_JSON}" python3 -c 'import json, os; d = json.loads(os.environ.get("SUBMIT_JSON") or "{}"); print(d.get("status", "")); print(d.get("id", ""))')"
+          NOTARY_STATUS="$(printf '%s\n' "${PARSED_RESULT}" | sed -n '1p')"
+          SUBMISSION_ID="$(printf '%s\n' "${PARSED_RESULT}" | sed -n '2p')"
+
+          if [ "${SUBMIT_EXIT}" -ne 0 ] || [ "${NOTARY_STATUS}" != "Accepted" ]; then
+            echo "::error::Apple 公証に失敗しました (status=${NOTARY_STATUS:-unknown}, id=${SUBMISSION_ID:-unknown})。"
+            if [ -n "${SUBMISSION_ID}" ]; then
+              xcrun notarytool log "${SUBMISSION_ID}" "${NOTARY_AUTH_ARGS[@]}" || true
+            fi
+            exit 1
+          fi
+
+          # チケット反映遅延に備えてリトライしながら Staple を実行する
+          STAPLED="false"
+          for attempt in 1 2 3 4 5; do
+            if xcrun stapler staple ./.build/Wintch.app; then
+              STAPLED="true"
+              break
+            fi
+            echo "stapler staple のリトライを待機しています (${attempt}/5)..."
+            sleep 10
+          done
+          if [ "${STAPLED}" != "true" ]; then
+            echo "::error::公証チケットの添付 (stapler staple) に失敗しました。"
+            exit 1
+          fi
+
+          xcrun stapler validate ./.build/Wintch.app
+          spctl -a -vvv -t exec ./.build/Wintch.app
+
+          # 公証チケット添付済みの最終配布 ZIP と SHA256 を生成する
+          ditto -c -k --keepParent ./.build/Wintch.app "${FINAL_ZIP}"
+          SHA256="$(shasum -a 256 "${FINAL_ZIP}" | awk '{print $1}')"
+          echo "Release ZIP SHA256: ${SHA256}"
+          echo "sha256=${SHA256}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish or update GitHub Release
         env:
@@ -178,3 +291,73 @@ jobs:
             fi
             gh release create "${CREATE_ARGS[@]}"
           fi
+
+      - name: Update Homebrew Tap Cask
+        if: needs.prepare.outputs.is_prerelease != 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          TAP_DIR="${RUNNER_TEMP}/homebrew-tap"
+          rm -rf "${TAP_DIR}"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_OWNER}/homebrew-tap.git" "${TAP_DIR}"
+          cd "${TAP_DIR}"
+
+          CASK_FILE="Casks/wintch.rb"
+          if [ ! -f "${CASK_FILE}" ]; then
+            echo "::error::${TAP_OWNER}/homebrew-tap に ${CASK_FILE} が見つかりません。"
+            exit 1
+          fi
+
+          # Cask 定義の version と sha256 を新しいリリース情報で更新する
+          python3 -c '
+          import os, re
+
+          cask_path = "Casks/wintch.rb"
+          version = os.environ["VERSION"]
+          sha256 = os.environ["SHA256"]
+          q = chr(34)
+
+          with open(cask_path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          updated, ver_count = re.subn(
+              r"^(\s*version\s+)" + q + r"[^" + q + r"]*" + q,
+              rf"\g<1>{q}{version}{q}",
+              content,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if ver_count != 1:
+              raise RuntimeError("Casks/wintch.rb 内の version 行を更新できませんでした")
+
+          updated, sha_count = re.subn(
+              r"^(\s*sha256\s+)(?::no_check|" + q + r"[^" + q + r"]*" + q + r")",
+              rf"\g<1>{q}{sha256}{q}",
+              updated,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if sha_count != 1:
+              raise RuntimeError("Casks/wintch.rb 内の sha256 行を更新できませんでした")
+
+          with open(cask_path, "w", encoding="utf-8") as f:
+              f.write(updated)
+          '
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${CASK_FILE}"
+          if ! git diff --cached --quiet; then
+            git commit -m "wintch ${VERSION} へ更新"
+            git push origin HEAD
+          else
+            echo "Casks/wintch.rb に変更はありませんでした。"
+          fi
+
+      - name: Clean up temporary keychain
+        if: always()
+        run: security delete-keychain "${RUNNER_TEMP}/app-signing.keychain-db" || true

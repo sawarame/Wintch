@@ -124,8 +124,22 @@ if [ -f "${APP_ICON_SVG}" ] && command -v qlmanage >/dev/null 2>&1 && command -v
     rm -rf "${ICON_TMP_DIR}"
 fi
 
-# アドホック署名を付与してローカル実行・アクセシビリティ権限登録を安定させる
-if command -v codesign >/dev/null 2>&1; then
+# 署名識別子が指定されている場合は Developer ID 署名（Hardened Runtime）、未指定時はアドホック署名を適用する
+if [ -n "${WINTCH_SIGN_IDENTITY:-}" ]; then
+    if ! command -v codesign >/dev/null 2>&1; then
+        echo "[Wintch] エラー: codesign コマンドが見つかりません" >&2
+        exit 1
+    fi
+    echo "[Wintch] Developer ID 署名（Hardened Runtime）を適用しています..."
+    # 公証対応のため実行バイナリとアプリバンドルを順にタイムスタンプ付きで署名する
+    codesign --force --options runtime --timestamp \
+        --sign "${WINTCH_SIGN_IDENTITY}" \
+        "${MACOS_DIR}/${APP_NAME}"
+    codesign --force --options runtime --timestamp \
+        --sign "${WINTCH_SIGN_IDENTITY}" \
+        "${APP_BUNDLE}"
+    codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+elif command -v codesign >/dev/null 2>&1; then
     echo "[Wintch] アドホック署名を適用しています..."
     codesign --force --deep --sign - "${APP_BUNDLE}"
 fi
