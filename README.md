@@ -32,6 +32,33 @@ macOS 標準の `Command + Tab` がアプリケーション単位の切り替え
 
 ---
 
+## インストール方法
+
+### Homebrew でインストール（推奨）
+
+```bash
+brew install --cask sawarame/tap/wintch
+```
+
+アップデート・アンインストールする場合は以下のコマンドを実行します。
+
+```bash
+# 最新版へアップデート
+brew upgrade --cask wintch
+
+# アンインストール（設定ファイルも削除する場合は --zap を付与）
+brew uninstall --cask wintch
+```
+
+### GitHub Releases から手動でインストール
+
+1. [Releases](https://github.com/sawarame/Wintch/releases) ページから最新の `Wintch-vX.Y.Z.zip` をダウンロードして展開します。
+2. 展開された `Wintch.app` を `/Applications`（アプリケーション）フォルダへ移動して起動します。
+
+*(配布版は Developer ID 署名および Apple 公証済みのため、通常の起動で Gatekeeper 警告は表示されません。初回起動時に案内に従って「アクセシビリティ」権限を許可してください。)*
+
+---
+
 ## プロジェクト構成
 
 ```text
@@ -40,7 +67,7 @@ macOS 標準の `Command + Tab` がアプリケーション単位の切り替え
 ├── VERSION                         # アプリバージョン定義（セマンティックバージョニング）
 ├── .github/
 │   └── workflows/
-│       └── release.yml             # VERSION 更新・タグ作成・Universal ビルド・ZIP リリース自動化
+│       └── release.yml             # テスト・署名・公証・ZIP リリース・Homebrew Tap 更新自動化
 ├── Resources/
 │   ├── Info.plist                  # バンドル情報（LSUIElement / CFBundleIconFile 等）
 │   └── Icons/
@@ -114,7 +141,7 @@ open .build/Wintch.app
 アプリバージョンはリポジトリルートの [`VERSION`](VERSION) ファイルでセマンティックバージョニング（例: `0.1.0`、`0.2.0-beta.1`）により一元管理しています。
 
 * `./scripts/build-app.sh` 実行時に `VERSION` の値と Git コミット数が `.build/Wintch.app/Contents/Info.plist`（`CFBundleShortVersionString` / `CFBundleVersion`）へ自動反映されます。
-* `main` ブランチで `VERSION` を更新してプッシュすると、[`.github/workflows/release.yml`](.github/workflows/release.yml) が自動でテストを実行した上で `v<VERSION>` タグを作成し、Universal Binary 版の `.app` を `ditto -c -k --keepParent` で圧縮した `Wintch-v<VERSION>.zip` を GitHub Release へ自動公開します（手動での `v*` タグプッシュや GitHub Release 公開にも対応）。
+* `main` ブランチで `VERSION` を更新してプッシュすると、[`.github/workflows/release.yml`](.github/workflows/release.yml) が自動でテストを実行した上で `v<VERSION>` タグを作成し、Universal Binary 版の `.app` に Developer ID 署名・Apple 公証・Staple を行った `Wintch-v<VERSION>.zip` を GitHub Release へ公開し、安定版では Homebrew Tap（`sawarame/homebrew-tap`）も自動更新します（手動での `v*` タグプッシュ・GitHub Release 公開・`workflow_dispatch` にも対応）。
 
 ### 5. 再ビルド時のアクセシビリティ権限に関する注意
 
