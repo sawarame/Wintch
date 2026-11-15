@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import os
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 /// ScreenCaptureKit を用いてウィンドウサムネイルを非同期取得し、上限付き LRU メモリキャッシュを管理するサービス実装
 @MainActor
@@ -71,15 +71,7 @@ public final class WindowCaptureService: WindowCaptureServicing {
         let targetIDSet = Set(cgWindowIDs)
         let shareableWindowsByID: [UInt32: SendableSCWindow]
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(
-                true,
-                onScreenWindowsOnly: false
-            )
-            var mapping: [UInt32: SendableSCWindow] = [:]
-            for window in content.windows where targetIDSet.contains(window.windowID) {
-                mapping[window.windowID] = SendableSCWindow(value: window)
-            }
-            shareableWindowsByID = mapping
+            shareableWindowsByID = try await Self.fetchShareableWindows(for: targetIDSet)
         } catch {
             // 権限取り消しや取得失敗時は例外を投げず安全にフォールバック継続する
             return
@@ -149,6 +141,34 @@ public final class WindowCaptureService: WindowCaptureServicing {
         invalidatedWindowIDsDuringCapture.removeAll()
         thumbnailCache.removeAll()
         cacheOrder.removeAll()
+    }
+
+    /// 指定されたウィンドウ ID 集合に該当する SCWindow を非同期で取得し、Sendable ラッパー辞書として返す
+    /// - Parameter targetIDSet: 取得対象の CoreGraphics ウィンドウ ID 集合
+    /// - Returns: ウィンドウ ID をキーとした SendableSCWindow の辞書
+    private nonisolated static func fetchShareableWindows(
+        for targetIDSet: Set<UInt32>
+    ) async throws -> [UInt32: SendableSCWindow] {
+        // Xcode 16.4 (macOS 15.5 SDK) では SCShareableContent が非 Sendable のため、
+        // async 境界を跨がずにコールバック内で Sendable な辞書へ変換する
+        try await withCheckedThrowingContinuation { continuation in
+            SCShareableContent.getExcludingDesktopWindows(
+                true,
+                onScreenWindowsOnly: false
+            ) { content, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                var mapping: [UInt32: SendableSCWindow] = [:]
+                if let content {
+                    for window in content.windows where targetIDSet.contains(window.windowID) {
+                        mapping[window.windowID] = SendableSCWindow(value: window)
+                    }
+                }
+                continuation.resume(returning: mapping)
+            }
+        }
     }
 
     /// 単一ウィンドウのサムネイル画像を ScreenCaptureKit でタイムアウト保護付き非同期キャプチャする
