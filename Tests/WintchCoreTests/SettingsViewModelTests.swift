@@ -163,4 +163,86 @@ struct SettingsViewModelTests {
         #expect(store.storedShortcut == optionK)
         #expect(hotKeyMonitor.updatedShortcuts.last == optionK)
     }
+
+    /// 表示形式設定の初期値がリスト型であり、リスト型中は画面収録権限を一切確認・操作しないこと、
+    /// およびキャプチャ表示型へ切り替えた場合のみオプトインで権限確認・リクエストできることを検証する
+    @Test("表示形式の初期値はリスト型で画面収録権限を確認せず、キャプチャ型選択時のみ確認・要求する")
+    @MainActor
+    func displayStyleDefaultsToListAndOptInScreenRecording() {
+        let store = MockPreferencesStore()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let launchService = MockLaunchAtLoginService()
+        let permissionService = MockAccessibilityPermissionService()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+
+        let viewModel = SettingsViewModel(
+            preferencesStore: store,
+            hotKeyMonitor: hotKeyMonitor,
+            launchAtLoginService: launchService,
+            permissionService: permissionService,
+            screenRecordingPermissionService: screenRecordingService
+        )
+
+        var notifiedStyles: [SwitcherDisplayStyle] = []
+        viewModel.onNormalDisplayStyleChanged = { notifiedStyles.append($0) }
+
+        // リスト型（初期値）では初期化時も refreshStatus 時も権限確認を一切呼ばない
+        #expect(viewModel.normalDisplayStyle == .list)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+
+        viewModel.refreshStatus()
+        viewModel.requestScreenRecordingPermission()
+        viewModel.openScreenRecordingSettings()
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 0)
+
+        // キャプチャ表示型へ切り替えると永続化・通知・権限確認が行われる
+        viewModel.updateNormalDisplayStyle(.capture)
+        #expect(viewModel.normalDisplayStyle == .capture)
+        #expect(store.storedNormalDisplayStyle == .capture)
+        #expect(store.saveNormalDisplayStyleCallCount == 1)
+        #expect(notifiedStyles == [.capture])
+        #expect(screenRecordingService.currentStatusCallCount == 1)
+        #expect(viewModel.screenRecordingStatus == .denied)
+
+        // キャプチャ表示型では権限リクエストおよびシステム設定遷移が可能
+        screenRecordingService.requestPermissionResult = true
+        screenRecordingService.stubbedStatus = .granted
+        viewModel.requestScreenRecordingPermission()
+        #expect(screenRecordingService.requestPermissionCallCount == 1)
+        #expect(viewModel.screenRecordingStatus == .granted)
+
+        viewModel.openScreenRecordingSettings()
+        #expect(screenRecordingService.openSystemSettingsCallCount == 1)
+
+        // リスト型へ戻すと設定が更新・通知され、以降の refreshStatus では再び画面収録権限を確認しない
+        let countBeforeRevert = screenRecordingService.currentStatusCallCount
+        viewModel.updateNormalDisplayStyle(.list)
+        viewModel.refreshStatus()
+        #expect(viewModel.normalDisplayStyle == .list)
+        #expect(store.storedNormalDisplayStyle == .list)
+        #expect(notifiedStyles == [.capture, .list])
+        #expect(screenRecordingService.currentStatusCallCount == countBeforeRevert)
+    }
+
+    /// PreferencesStore が表示形式の初期値フォールバック・保存・読み込みを正しく行うことを検証する
+    @Test("PreferencesStore で表示形式の保存と読み込み・不正値フォールバックが動作する")
+    func preferencesStorePersistsNormalDisplayStyle() {
+        let suiteName = "dev.wintch.tests.displayStyle.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)
+        defaults?.removePersistentDomain(forName: suiteName)
+        defer { defaults?.removePersistentDomain(forName: suiteName) }
+
+        let store = PreferencesStore(suiteName: suiteName)
+        #expect(store.loadNormalDisplayStyle() == .list)
+
+        store.saveNormalDisplayStyle(.capture)
+        #expect(store.loadNormalDisplayStyle() == .capture)
+
+        // 不正値が入っている場合も安全にリスト型へフォールバックする
+        defaults?.set("invalid-style", forKey: "dev.wintch.normalDisplayStyle")
+        #expect(store.loadNormalDisplayStyle() == .list)
+    }
 }

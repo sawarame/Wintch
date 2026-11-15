@@ -27,6 +27,13 @@ public enum WindowFilter {
     private static let maxToolbarAspectRatio: Double = 6.0
     private static let maxStripHeight: Double = 300.0
 
+    /// 複数スペースに跨って同一矩形になり得るフルスクリーン相当サイズの下限（ポイント）
+    private static let displaySpanningMinWidth: Double = 1280.0
+    private static let displaySpanningMinHeight: Double = 700.0
+
+    /// 同一ウィンドウの二重生成 CGWindow とみなす非フルスクリーン矩形の許容誤差（ポイント）
+    private static let duplicateBoundsTolerance: Double = 2.0
+
     /// 候補がスイッチャーに表示すべき有効なウィンドウかどうかを判定する
     /// - Parameter candidate: 判定対象のウィンドウ候補
     /// - Returns: 表示対象とする場合は true
@@ -63,8 +70,9 @@ public enum WindowFilter {
         let baseValidCandidates = candidates.filter(isValid)
         let baseValidIDs = Set(baseValidCandidates.map(\.id))
         let coveredPIDs = Set(baseValidCandidates.map(\.pid))
+        let axCoveredPIDs = Set(baseValidCandidates.filter(\.hasAXInfo).map(\.pid))
 
-        // 通常フィルタで 1 件も捕捉できなかったアプリに限り、表示中（isOnScreen == true）の実サイズ CGWindow を救済する
+        // 通常フィルタで 1 件も捕捉できなかったアプリに限り、表示中（isOnScreen == true）の実サイズ CGWindow を救済対象へ含める
         let validCandidates = candidates.filter { candidate in
             if baseValidIDs.contains(candidate.id) {
                 return true
@@ -76,36 +84,74 @@ public enum WindowFilter {
                 && isSubstantialWindowBounds(candidate.bounds)
         }
 
-        // 既に AXUIElement で有効なウィンドウが捕捉されているアプリは、
-        // 内部の非表示 CGWindow（Chrome の裏ウィンドウや Finder/設定の補助ウィンドウ）を補完しない
-        let axCoveredPIDs = Set(validCandidates.filter { $0.hasAXInfo }.map(\.pid))
-        let representativeFallbackIDs = selectRepresentativeCGFallbackIDs(
-            from: validCandidates,
-            excluding: axCoveredPIDs
+        // PID ごとに通常レイヤー（layer == 0）の候補が存在するかを把握する
+        let pidsWithPrimaryWindow = Set(
+            validCandidates
+                .filter { $0.hasAXInfo || $0.layer == 0 }
+                .map(\.pid)
         )
-        var emittedFallbackPIDs = Set<Int32>()
 
-        return validCandidates
-            .filter { candidate in
-                guard !candidate.hasAXInfo else { return true }
-                guard !axCoveredPIDs.contains(candidate.pid) else { return false }
-                guard representativeFallbackIDs[candidate.pid] == candidate.id else { return false }
-                // 同一 ID が複数含まれる場合でも PID あたり代表 1 件に制限する
-                return emittedFallbackPIDs.insert(candidate.pid).inserted
+        // Finder 等の非フルスクリーン二重生成 CGWindow を防ぐため、PID ごとの既出非フルスクリーン矩形を記録する
+        var emittedNonFullscreenBoundsByPID: [Int32: [WindowBounds]] = [:]
+        for candidate in validCandidates where candidate.hasAXInfo {
+            if !isDisplaySpanningBounds(candidate.bounds) {
+                emittedNonFullscreenBoundsByPID[candidate.pid, default: []].append(candidate.bounds)
             }
-            .map { candidate in
-                WindowEntry(
-                    id: candidate.id,
-                    cgWindowID: candidate.cgWindowID,
-                    pid: candidate.pid,
-                    bundleIdentifier: candidate.bundleIdentifier,
-                    applicationName: candidate.applicationName,
-                    windowTitle: candidate.title ?? "",
-                    isMinimized: candidate.isMinimized,
-                    lastActivatedAt: candidate.lastActivatedAt,
-                    zOrderIndex: candidate.zOrderIndex
-                )
+        }
+
+        var emittedCandidateIDs = Set<String>()
+        var result: [WindowEntry] = []
+        result.reserveCapacity(validCandidates.count)
+
+        for candidate in validCandidates {
+            if candidate.hasAXInfo {
+                guard emittedCandidateIDs.insert(candidate.id).inserted else { continue }
+                result.append(makeEntry(from: candidate))
+                continue
             }
+
+            // 表示中の AX 未照合ウィンドウは、AX 捕捉済みアプリでは内部オーバーレイとみなして除外する
+            if candidate.isOnScreen == true, axCoveredPIDs.contains(candidate.pid) {
+                continue
+            }
+
+            // 通常ウィンドウや AX ウィンドウが既に存在するアプリのフローティング補助窓（layer != 0）は補完しない
+            if candidate.layer != 0, pidsWithPrimaryWindow.contains(candidate.pid) {
+                continue
+            }
+
+            // 同一非フルスクリーン座標で二重生成された CGWindow は重複統合する（別スペースのフルスクリーン等は保持）
+            if !isDisplaySpanningBounds(candidate.bounds) {
+                let existingBounds = emittedNonFullscreenBoundsByPID[candidate.pid] ?? []
+                if existingBounds.contains(where: { areBoundsNearlyEqual($0, candidate.bounds) }) {
+                    continue
+                }
+                emittedNonFullscreenBoundsByPID[candidate.pid, default: []].append(candidate.bounds)
+            }
+
+            guard emittedCandidateIDs.insert(candidate.id).inserted else { continue }
+            result.append(makeEntry(from: candidate))
+        }
+
+        return result
+    }
+
+    /// RawWindowCandidate から UI 表示用の WindowEntry を生成する
+    /// - Parameter candidate: フィルタを通過したウィンドウ候補
+    /// - Returns: 生成された WindowEntry
+    private static func makeEntry(from candidate: RawWindowCandidate) -> WindowEntry {
+        WindowEntry(
+            id: candidate.id,
+            cgWindowID: candidate.cgWindowID,
+            pid: candidate.pid,
+            bundleIdentifier: candidate.bundleIdentifier,
+            applicationName: candidate.applicationName,
+            windowTitle: candidate.title ?? "",
+            isMinimized: candidate.isMinimized,
+            isOnScreen: candidate.isOnScreen,
+            lastActivatedAt: candidate.lastActivatedAt,
+            zOrderIndex: candidate.zOrderIndex
+        )
     }
 
     /// 候補が自アプリ・非通常アプリ・禁止レイヤー・不可視・極小サイズに該当しないか判定する
@@ -153,33 +199,22 @@ public enum WindowFilter {
         return true
     }
 
-    /// AX 未捕捉アプリ（別スペース・フルスクリーン・フローティング等）の CGWindow 補完候補から、
-    /// PID ごとに代表となる 1 件の識別子を選出する（通常レイヤー優先、同レイヤーなら最大面積・Z オーダー最上位を優先）
+    /// 複数操作スペースで同一矩形になり得るディスプレイ占有級（フルスクリーン等）のサイズかを判定する
+    /// - Parameter bounds: 判定対象のウィンドウ矩形
+    /// - Returns: ディスプレイ占有級のサイズであれば true
+    private static func isDisplaySpanningBounds(_ bounds: WindowBounds) -> Bool {
+        bounds.width >= displaySpanningMinWidth && bounds.height >= displaySpanningMinHeight
+    }
+
+    /// 2つのウィンドウ矩形がほぼ同一位置・同一サイズかを判定する
     /// - Parameters:
-    ///   - candidates: 事前フィルタを通過したウィンドウ候補の配列
-    ///   - axCoveredPIDs: 既に AXUIElement で有効ウィンドウが捕捉されている PID の集合
-    /// - Returns: PID ごとに選出された代表候補 ID のマップ
-    private static func selectRepresentativeCGFallbackIDs(
-        from candidates: [RawWindowCandidate],
-        excluding axCoveredPIDs: Set<Int32>
-    ) -> [Int32: String] {
-        var bestByPID: [Int32: (id: String, layer: Int, area: Double, zOrder: Int)] = [:]
-
-        for candidate in candidates where !candidate.hasAXInfo && !axCoveredPIDs.contains(candidate.pid) {
-            let area = candidate.bounds.width * candidate.bounds.height
-            let zOrder = candidate.zOrderIndex
-            let layer = candidate.layer
-
-            if let current = bestByPID[candidate.pid] {
-                let isNormalOverFloating = (layer == 0 && current.layer != 0)
-                let isSameLayerClass = ((layer == 0) == (current.layer == 0))
-                let isLargerArea = isSameLayerClass && area > current.area
-                let isSameAreaHigherZ = isSameLayerClass && area == current.area && zOrder < current.zOrder
-                guard isNormalOverFloating || isLargerArea || isSameAreaHigherZ else { continue }
-            }
-            bestByPID[candidate.pid] = (id: candidate.id, layer: layer, area: area, zOrder: zOrder)
-        }
-
-        return bestByPID.mapValues(\.id)
+    ///   - lhs: 比較元のウィンドウ矩形
+    ///   - rhs: 比較先のウィンドウ矩形
+    /// - Returns: 各座標・辺が許容誤差以内なら true
+    private static func areBoundsNearlyEqual(_ lhs: WindowBounds, _ rhs: WindowBounds) -> Bool {
+        abs(lhs.x - rhs.x) <= duplicateBoundsTolerance
+            && abs(lhs.y - rhs.y) <= duplicateBoundsTolerance
+            && abs(lhs.width - rhs.width) <= duplicateBoundsTolerance
+            && abs(lhs.height - rhs.height) <= duplicateBoundsTolerance
     }
 }

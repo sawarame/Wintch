@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import WintchCore
@@ -945,5 +946,199 @@ struct SwitcherViewModelTests {
         #expect(viewModel.selectedIndex == 3)
         viewModel.confirmSelection()
         #expect(installedAppService.launchedApps.map(\.displayName) == ["Sublime Text"])
+    }
+
+    /// キャプチャ表示型での即時表示（既存キャッシュ反映・未キャッシュ時は nil）、非同期キャプチャ差し替え、
+    /// 4 方向グリッド移動、およびウィンドウクローズ時のキャッシュ破棄を検証する
+    @Test("キャプチャ表示型で即時表示後に非同期サムネイルが反映され4方向移動とクローズ削除が行える")
+    @MainActor
+    func captureStyleImmediateDisplayAsyncUpdateAndFourWayNavigation() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 101, pid: 10, applicationName: "App1", title: "Win1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 102, pid: 20, applicationName: "App2", title: "Win2", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", cgWindowID: 103, pid: 30, applicationName: "App3", title: "Win3", lastActivatedAt: now.addingTimeInterval(-20)),
+            RawWindowCandidate(id: "w4", cgWindowID: 104, pid: 40, applicationName: "App4", title: "Win4", lastActivatedAt: now.addingTimeInterval(-30))
+        ]
+
+        // w1 のみ既存キャッシュを事前に保持し、w2〜w4 は非同期取得で後から到着させる
+        let cachedImage1 = NSImage(size: NSSize(width: 100, height: 80))
+        let freshImage2 = NSImage(size: NSSize(width: 120, height: 90))
+        captureService.cachedThumbnails[101] = cachedImage1
+
+        var captureStartedContinuation: CheckedContinuation<Void, Never>?
+        var captureResumeContinuation: CheckedContinuation<Void, Never>?
+        captureService.captureHandler = { _, onCaptured in
+            captureStartedContinuation?.resume()
+            await withCheckedContinuation { cont in
+                captureResumeContinuation = cont
+            }
+            onCaptured(102, freshImage2)
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture
+        )
+        // 横幅 820pt の画面（3 列グリッド相当）としてレイアウト条件を設定する
+        viewModel.updateAvailableScreenSize(CGSize(width: 820, height: 800))
+
+        // 起動直後は非同期キャプチャ完了前でも即座に表示され、キャッシュ済みの w1 のみ画像があり w2 は nil（プレースホルダー）
+        await withCheckedContinuation { cont in
+            captureStartedContinuation = cont
+            viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        }
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.mode == .normal)
+        #expect(viewModel.isScreenRecordingGranted == true)
+        #expect(viewModel.selectedIndex == 1)
+        #expect(viewModel.thumbnail(for: viewModel.entries[0]) === cachedImage1)
+        #expect(viewModel.thumbnail(for: viewModel.entries[1]) == nil)
+
+        // 非同期キャプチャ完了で w2 のサムネイルが反映される
+        captureResumeContinuation?.resume()
+        await Task.yield()
+        await Task.yield()
+        #expect(viewModel.thumbnail(for: viewModel.entries[1]) === freshImage2)
+
+        // 3列×4件グリッドで4方向移動を検証（現在 index 1 -> 右:2 -> 下:3(最終行末尾) -> 上:0 -> 左:3）
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .right))
+        #expect(viewModel.selectedIndex == 2)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 3)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .left))
+        #expect(viewModel.selectedIndex == 3)
+
+        // index 1 (w2, cgWindowID 102) を選択してクローズすると、キャッシュからも破棄され一覧が更新される
+        viewModel.moveSelection(.right) // 3 -> 0
+        viewModel.moveSelection(.right) // 0 -> 1 (w2)
+        #expect(viewModel.selectedIndex == 1)
+        await viewModel.closeSelectedWindow()
+        #expect(captureService.invalidatedWindowIDs.contains(102))
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3", "w4"])
+        #expect(viewModel.capturedThumbnails[102] == nil)
+        #expect(viewModel.selectedIndex == 1)
+    }
+
+    /// 画面収録権限が未許可の状態でキャプチャ表示型を起動してもクラッシュせず、
+    /// 権限未許可フラグとプレースホルダーで切り替え継続でき、設定遷移やランチャー非介入・セッション保護・リスト復帰が動作することを検証する
+    @Test("権限未許可フォールバック・設定遷移・ランチャー非介入・セッション跨ぎ破棄・リスト復帰キャッシュ消去")
+    @MainActor
+    func captureStyleFallbackSessionSafetyAndOptInIsolation() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 201, pid: 10, applicationName: "App1", title: "Win1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 202, pid: 20, applicationName: "App2", title: "Win2", lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture
+        )
+
+        // 1. 画面収録権限が未許可のとき、キャプチャ取得は呼ばずプレースホルダーのまま切り替え可能
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.isScreenRecordingGranted == false)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        #expect(viewModel.thumbnail(for: viewModel.entries[1]) == nil)
+
+        viewModel.handleHotKeyEvent(.modifierReleased)
+        #expect(viewModel.isPresented == false)
+        #expect(windowService.activatedWindows.map(\.id) == ["w2"])
+
+        // 2. パネル上の設定導線から画面収録設定を開くと安全にキャンセルして設定を開く
+        var openSettingsNotified = 0
+        viewModel.onOpenScreenRecordingSettingsRequested = { openSettingsNotified += 1 }
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        viewModel.openScreenRecordingSettings()
+        #expect(viewModel.isPresented == false)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 1)
+        #expect(openSettingsNotified == 1)
+
+        // 3. キャプチャ表示型設定中でも、検索ランチャー起動時は画面収録権限の確認もキャプチャ取得も行わない
+        let statusCountBeforeLauncher = screenRecordingService.currentStatusCallCount
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.isScreenRecordingGranted == true)
+        #expect(screenRecordingService.currentStatusCallCount == statusCountBeforeLauncher)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        viewModel.cancel()
+
+        // 4. セッション跨ぎ: 1回目の非同期キャプチャ完了前にキャンセル→再起動しても古い結果が混入しない
+        screenRecordingService.stubbedStatus = .granted
+        var session1Continuation: CheckedContinuation<Void, Never>?
+        var session1Started: CheckedContinuation<Void, Never>?
+        var callIndex = 0
+        let staleImage = NSImage(size: NSSize(width: 50, height: 50))
+        let freshImage = NSImage(size: NSSize(width: 80, height: 80))
+
+        captureService.captureHandler = { _, onCaptured in
+            callIndex += 1
+            if callIndex == 1 {
+                session1Started?.resume()
+                await withCheckedContinuation { cont in
+                    session1Continuation = cont
+                }
+                // 古いセッション側の遅延結果として別画像を通知する
+                onCaptured(201, staleImage)
+            } else {
+                onCaptured(202, freshImage)
+            }
+        }
+
+        await withCheckedContinuation { cont in
+            session1Started = cont
+            viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        }
+        viewModel.cancel()
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        await Task.yield()
+
+        // 古いセッションを完了させても世代不一致により 201 には誤反映されない
+        session1Continuation?.resume()
+        await Task.yield()
+        #expect(viewModel.capturedThumbnails[201] == nil)
+        #expect(viewModel.capturedThumbnails[202] === freshImage)
+
+        // 5. リスト型へ戻すと全キャッシュ破棄が呼ばれ、以降の通常起動でもキャプチャは実行されない
+        let captureCallsBeforeList = captureService.capturedRequestWindowIDs.count
+        let statusCallsBeforeList = screenRecordingService.currentStatusCallCount
+        viewModel.updateNormalDisplayStyle(.list)
+        #expect(captureService.clearCacheCallCount == 1)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+
+        viewModel.cancel()
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == true)
+        #expect(captureService.capturedRequestWindowIDs.count == captureCallsBeforeList)
+        #expect(screenRecordingService.currentStatusCallCount == statusCallsBeforeList)
     }
 }

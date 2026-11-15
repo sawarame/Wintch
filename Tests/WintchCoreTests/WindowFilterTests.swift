@@ -156,11 +156,12 @@ struct WindowFilterTests {
         #expect(result[0].id == "cg-chrome-fullscreen-content")
     }
 
-    /// 同一座標に二重生成された Finder 等の CGWindow と、AX 捕捉済みアプリの裏 CGWindow が重複統合されることを検証する
-    @Test("同一座標の CGWindow 二重生成と AX 捕捉済みアプリの裏 CGWindow を除外する")
-    func duplicateCGFallbacksAreConsolidated() {
+    /// 同一非フルスクリーン座標に二重生成された Finder 等の CGWindow は統合しつつ、
+    /// 別スペース上のフルスクリーン／別座標ウィンドウは同アプリでも個別に保持されることを検証する
+    @Test("同一非フルスクリーン座標の CGWindow 二重生成を統合し、別スペースの複数ウィンドウは集約せず保持する")
+    func duplicateNonFullscreenConsolidatedWhileDistinctAndFullscreenMultiWindowsPreserved() {
         let candidates = [
-            // Finder: AX 未捕捉の別スペース上に、同一座標の CGWindow が 2 つ存在するケース
+            // Finder: 同一非フルスクリーン座標で二重生成された CGWindow は 1 件に統合する
             RawWindowCandidate(
                 id: "cg-2107",
                 cgWindowID: 2107,
@@ -183,44 +184,66 @@ struct WindowFilterTests {
                 isOnScreen: false,
                 zOrderIndex: 1
             ),
-            // Chrome: AX で 1 ウィンドウが既に捕捉されており、裏の CGWindow が別座標で残っているケース
+            // VS Code: 1 枚が AX 捕捉済みでも、別スペースにある 2 枚目のフルスクリーンウィンドウは両方保持する
             RawWindowCandidate(
-                id: "ax-chrome-1",
-                cgWindowID: 1486,
-                pid: 1240,
-                applicationName: "Google Chrome",
-                title: "Google",
+                id: "ax-vscode-1",
+                cgWindowID: 55,
+                pid: 1081,
+                applicationName: "Code",
+                title: "Wintch",
                 bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 1080),
                 axRole: "AXWindow",
                 axSubrole: "AXStandardWindow",
                 hasAXInfo: true,
+                isOnScreen: true,
                 zOrderIndex: 2
             ),
             RawWindowCandidate(
-                id: "cg-chrome-hidden",
-                cgWindowID: 1526,
-                pid: 1240,
-                applicationName: "Google Chrome",
-                bounds: WindowBounds(x: 99, y: 26, width: 1344, height: 458),
+                id: "cg-4880",
+                cgWindowID: 4880,
+                pid: 1081,
+                applicationName: "Code",
+                bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 1080),
                 axSubrole: nil,
                 hasAXInfo: false,
                 isOnScreen: false,
                 zOrderIndex: 3
+            ),
+            // Google Chrome: AX 未捕捉の別スペースに 2 枚のフルスクリーンウィンドウが存在する場合も両方保持する
+            RawWindowCandidate(
+                id: "cg-4989",
+                cgWindowID: 4989,
+                pid: 5453,
+                applicationName: "Google Chrome",
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 4
+            ),
+            RawWindowCandidate(
+                id: "cg-2161",
+                cgWindowID: 2161,
+                pid: 5453,
+                applicationName: "Google Chrome",
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 5
             )
         ]
 
         let result = WindowFilter.filterAndMap(candidates)
-        #expect(result.count == 2)
-        #expect(result.map(\.id) == ["cg-2107", "ax-chrome-1"])
+        #expect(result.map(\.id) == ["cg-2107", "ax-vscode-1", "cg-4880", "cg-4989", "cg-2161"])
     }
 
-    /// AX 未捕捉の別スペースにフルスクリーン本体と別座標の裏ウィンドウが並存する場合に代表 1 件のみ残ることを検証する
-    @Test("AX未捕捉アプリで別座標の裏CGWindowがあっても最大面積の代表1件だけを残す")
-    func axUncoveredPIDConsolidatesToLargestCGFallback() {
+    /// AX 未捕捉の別スペースに異なる矩形の通常ウィンドウが複数ある場合、1 件へ集約せず両方残ることを検証する
+    @Test("AX未捕捉アプリでも異なる座標・サイズの通常ウィンドウが複数あれば個別に保持する")
+    func axUncoveredPIDPreservesMultipleDistinctNonFullscreenWindows() {
         let candidates = [
-            // 裏ウィンドウの方が Z オーダー手前にあっても、面積最大のフルスクリーン本体が代表として選ばれる
             RawWindowCandidate(
-                id: "cg-wezterm-hidden",
+                id: "cg-wezterm-sub",
                 cgWindowID: 3001,
                 pid: 2500,
                 applicationName: "WezTerm",
@@ -244,8 +267,7 @@ struct WindowFilterTests {
         ]
 
         let result = WindowFilter.filterAndMap(candidates)
-        #expect(result.count == 1)
-        #expect(result[0].id == "cg-wezterm-fullscreen")
+        #expect(result.map(\.id) == ["cg-wezterm-sub", "cg-wezterm-fullscreen"])
     }
 
     /// 実質サイズを持つフローティングウィンドウ（layer=3 / AXFloatingWindow）が通過し、小サイズ補助窓が除外されることを検証する

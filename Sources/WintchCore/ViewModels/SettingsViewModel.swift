@@ -40,6 +40,15 @@ public final class SettingsViewModel {
     /// 現在のアクセシビリティ権限状態
     public private(set) var permissionStatus: AccessibilityPermissionStatus
 
+    /// 通常スイッチャーの表示形式設定（リスト型／キャプチャ表示型）
+    public private(set) var normalDisplayStyle: SwitcherDisplayStyle
+
+    /// 画面収録権限状態（キャプチャ表示型が選択されている場合のみ確認対象となる）
+    public private(set) var screenRecordingStatus: ScreenRecordingPermissionStatus = .denied
+
+    /// 通常スイッチャーの表示形式が変更された際に上位コーディネーターへ通知するコールバック
+    public var onNormalDisplayStyleChanged: ((SwitcherDisplayStyle) -> Void)?
+
     /// 設定永続化ストア
     private let preferencesStore: any PreferencesStoring
     /// グローバルホットキー監視サービス
@@ -48,6 +57,8 @@ public final class SettingsViewModel {
     private let launchAtLoginService: any LaunchAtLoginServicing
     /// アクセシビリティ権限管理サービス
     private let permissionService: any AccessibilityPermissionServicing
+    /// 画面収録権限管理サービス（キャプチャ表示型選択時のみ使用）
+    private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
 
     /// 設定 ViewModel を初期化する
     /// - Parameters:
@@ -55,20 +66,28 @@ public final class SettingsViewModel {
     ///   - hotKeyMonitor: ホットキー監視サービス
     ///   - launchAtLoginService: ログイン時自動起動サービス
     ///   - permissionService: アクセシビリティ権限サービス
+    ///   - screenRecordingPermissionService: 画面収録権限サービス（省略時は未設定）
     public init(
         preferencesStore: any PreferencesStoring,
         hotKeyMonitor: any HotKeyMonitoring,
         launchAtLoginService: any LaunchAtLoginServicing,
-        permissionService: any AccessibilityPermissionServicing
+        permissionService: any AccessibilityPermissionServicing,
+        screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil
     ) {
         self.preferencesStore = preferencesStore
         self.hotKeyMonitor = hotKeyMonitor
         self.launchAtLoginService = launchAtLoginService
         self.permissionService = permissionService
+        self.screenRecordingPermissionService = screenRecordingPermissionService
         self.shortcut = preferencesStore.loadShortcut()
         self.launcherShortcut = preferencesStore.loadLauncherShortcut()
+        let loadedStyle = preferencesStore.loadNormalDisplayStyle()
+        self.normalDisplayStyle = loadedStyle
         self.isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         self.permissionStatus = permissionService.currentStatus()
+        if loadedStyle == .capture {
+            self.screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
+        }
     }
 
     /// 通常スイッチャーの修飾キーを更新し、競合がなければ永続化および監視サービスへ即時反映する（互換用）
@@ -175,6 +194,39 @@ public final class SettingsViewModel {
     public func refreshStatus(permissionStatus overridePermissionStatus: AccessibilityPermissionStatus? = nil) {
         isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         permissionStatus = overridePermissionStatus ?? permissionService.currentStatus()
+        // リスト型選択中は画面収録権限を一切確認しない（FR-003）
+        if normalDisplayStyle == .capture {
+            screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
+        }
+    }
+
+    /// 通常スイッチャーの表示形式を変更して永続化し、関連ステータスを更新する
+    /// - Parameter style: 新しい表示形式（リスト型／キャプチャ表示型）
+    public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
+        guard normalDisplayStyle != style else { return }
+        normalDisplayStyle = style
+        preferencesStore.saveNormalDisplayStyle(style)
+
+        if style == .capture {
+            screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
+        } else {
+            screenRecordingStatus = .denied
+        }
+
+        onNormalDisplayStyleChanged?(style)
+    }
+
+    /// キャプチャ表示型が選択されている場合のみ、OS の画面収録権限許可をリクエストする
+    public func requestScreenRecordingPermission() {
+        guard normalDisplayStyle == .capture else { return }
+        _ = screenRecordingPermissionService?.requestPermission()
+        screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
+    }
+
+    /// キャプチャ表示型が選択されている場合のみ、システム設定の画面収録ペインを開く
+    public func openScreenRecordingSettings() {
+        guard normalDisplayStyle == .capture else { return }
+        screenRecordingPermissionService?.openSystemSettings()
     }
 
     /// アクセシビリティ権限設定画面を開く

@@ -104,4 +104,40 @@ struct AppCoordinatorTests {
         #expect(hotKeyMonitor.isMonitoring == true)
         #expect(windowService.startObservingCallCount == 2)
     }
+
+    /// 設定画面で表示形式を切り替えた際に SwitcherViewModel へ即座に同期され、
+    /// リスト型復帰時にキャプチャキャッシュもクリアされることを検証する
+    @Test("表示形式の変更が SettingsViewModel から SwitcherViewModel へ即時反映されリスト復帰でキャッシュ消去される")
+    @MainActor
+    func displayStyleSyncsBetweenSettingsAndSwitcher() {
+        let store = MockPreferencesStore()
+        store.storedNormalDisplayStyle = .capture
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        let captureService = MockWindowCaptureService()
+
+        let coordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            preferencesStore: store,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService
+        )
+
+        coordinator.start()
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
+        #expect(coordinator.settingsViewModel.normalDisplayStyle == .capture)
+
+        // リスト型へ切り替えると即座に反映され、キャッシュ全消去が呼ばれる
+        coordinator.settingsViewModel.updateNormalDisplayStyle(.list)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .list)
+        #expect(captureService.clearCacheCallCount == 1)
+
+        // 再びキャプチャ表示型へ切り替えると即座に反映される
+        coordinator.settingsViewModel.updateNormalDisplayStyle(.capture)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
+    }
 }

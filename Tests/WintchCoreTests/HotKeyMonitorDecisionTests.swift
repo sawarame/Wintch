@@ -462,4 +462,47 @@ struct HotKeyMonitorDecisionTests {
             isPermissionTrusted: false
         ) == false)
     }
+
+    /// 通常スイッチャー表示中は左右矢印キー（123 / 124）を消費通知し、ランチャー表示中は通過させることを検証する
+    @Test("通常モードでは左右矢印キーを消費通知しランチャーモードでは通過させる")
+    func normalModeConsumesLeftRightArrowsWhileLauncherPassesThrough() {
+        let leftNormal = HotKeyMonitorService.resolveKeyDown(
+            mode: .normal,
+            keyCode: 123,
+            modifiers: [.option],
+            shortcut: .default,
+            launcherShortcut: .default
+        )
+        #expect(leftNormal == HotKeyKeyDownDecision(
+            event: .arrowPressed(direction: .left),
+            shouldConsume: true
+        ))
+
+        let rightNormal = HotKeyMonitorService.resolveKeyDown(
+            mode: .normal,
+            keyCode: 124,
+            modifiers: [.option],
+            shortcut: .default,
+            launcherShortcut: .default
+        )
+        #expect(rightNormal == HotKeyKeyDownDecision(
+            event: .arrowPressed(direction: .right),
+            shouldConsume: true
+        ))
+
+        // ランチャーモードでは文字入力カーソル移動を阻害しないよう左右矢印を通過させる
+        for keyCode in [UInt16(123), 124] {
+            let launcherArrow = HotKeyMonitorService.resolveKeyDown(
+                mode: .launcher,
+                keyCode: keyCode,
+                modifiers: [],
+                shortcut: .default,
+                launcherShortcut: .default
+            )
+            #expect(launcherArrow == HotKeyKeyDownDecision(
+                event: nil,
+                shouldConsume: false
+            ))
+        }
+    }
 }

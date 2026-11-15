@@ -35,6 +35,10 @@ public final class AppCoordinator {
     private let iconProvider: any IconProviding
     /// インストール済みアプリ取得・起動サービス
     private let installedAppService: any InstalledAppServicing
+    /// 画面収録権限確認・遷移サービス
+    private let screenRecordingPermissionService: any ScreenRecordingPermissionServicing
+    /// ウィンドウサムネイルキャプチャサービス
+    private let windowCaptureService: any WindowCaptureServicing
 
     /// フローティングスイッチャーパネル（遅延生成）
     private var switcherPanel: SwitcherPanel?
@@ -56,7 +60,9 @@ public final class AppCoordinator {
             preferencesStore: PreferencesStore(),
             launchAtLoginService: LaunchAtLoginService(),
             iconProvider: IconProviderService(),
-            installedAppService: InstalledAppService()
+            installedAppService: InstalledAppService(),
+            screenRecordingPermissionService: ScreenRecordingPermissionService(),
+            windowCaptureService: WindowCaptureService()
         )
     }
 
@@ -69,6 +75,8 @@ public final class AppCoordinator {
     ///   - launchAtLoginService: ログイン時自動起動サービス
     ///   - iconProvider: アイコン取得サービス
     ///   - installedAppService: インストール済みアプリ取得・起動サービス
+    ///   - screenRecordingPermissionService: 画面収録権限サービス
+    ///   - windowCaptureService: ウィンドウキャプチャサービス
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -76,7 +84,9 @@ public final class AppCoordinator {
         preferencesStore: any PreferencesStoring,
         launchAtLoginService: any LaunchAtLoginServicing,
         iconProvider: any IconProviding,
-        installedAppService: any InstalledAppServicing = InstalledAppService()
+        installedAppService: any InstalledAppServicing = InstalledAppService(),
+        screenRecordingPermissionService: any ScreenRecordingPermissionServicing = ScreenRecordingPermissionService(),
+        windowCaptureService: any WindowCaptureServicing = WindowCaptureService()
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -85,20 +95,27 @@ public final class AppCoordinator {
         self.launchAtLoginService = launchAtLoginService
         self.iconProvider = iconProvider
         self.installedAppService = installedAppService
+        self.screenRecordingPermissionService = screenRecordingPermissionService
+        self.windowCaptureService = windowCaptureService
         self.permissionStatus = permissionService.currentStatus()
 
+        let initialDisplayStyle = preferencesStore.loadNormalDisplayStyle()
         self.switcherViewModel = SwitcherViewModel(
             windowService: windowService,
             hotKeyMonitor: hotKeyMonitor,
             permissionService: permissionService,
             iconProvider: iconProvider,
-            installedAppService: installedAppService
+            installedAppService: installedAppService,
+            screenRecordingPermissionService: screenRecordingPermissionService,
+            windowCaptureService: windowCaptureService,
+            normalDisplayStyle: initialDisplayStyle
         )
         self.settingsViewModel = SettingsViewModel(
             preferencesStore: preferencesStore,
             hotKeyMonitor: hotKeyMonitor,
             launchAtLoginService: launchAtLoginService,
-            permissionService: permissionService
+            permissionService: permissionService,
+            screenRecordingPermissionService: screenRecordingPermissionService
         )
         self.permissionGuideViewModel = PermissionGuideViewModel(
             permissionService: permissionService
@@ -112,11 +129,13 @@ public final class AppCoordinator {
         guard !isStarted else { return }
         isStarted = true
 
-        // 保存されている通常およびランチャーのショートカット設定をロードして監視サービスへ反映する
+        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式をロードして反映する
         let savedShortcut = preferencesStore.loadShortcut()
         let savedLauncherShortcut = preferencesStore.loadLauncherShortcut()
+        let savedDisplayStyle = preferencesStore.loadNormalDisplayStyle()
         hotKeyMonitor.updateShortcut(savedShortcut)
         hotKeyMonitor.updateLauncherShortcut(savedLauncherShortcut)
+        switcherViewModel.updateNormalDisplayStyle(savedDisplayStyle)
 
         // 初期の権限状態を確認し、監視を開始する
         updatePermissionState(permissionService.currentStatus())
@@ -250,6 +269,10 @@ public final class AppCoordinator {
         permissionGuideViewModel.onPermissionGranted = { [weak self] in
             self?.updatePermissionState(.granted)
         }
+
+        settingsViewModel.onNormalDisplayStyleChanged = { [weak self] newStyle in
+            self?.switcherViewModel.updateNormalDisplayStyle(newStyle)
+        }
     }
 
     /// フローティングスイッチャーパネルを必要に応じて生成して返す
@@ -258,13 +281,16 @@ public final class AppCoordinator {
         if let panel = switcherPanel {
             return panel
         }
-        let listView = SwitcherListView(
+        let contentView = SwitcherContentView(
             viewModel: switcherViewModel,
-            onContentHeightChanged: { [weak self] newHeight in
-                self?.switcherPanel?.updateAnchoredHeight(to: newHeight)
+            onContentSizeChanged: { [weak self] newSize in
+                self?.switcherPanel?.updateAnchoredSize(to: newSize)
             }
         )
-        let panel = SwitcherPanel(contentView: listView)
+        let panel = SwitcherPanel(contentView: contentView)
+        panel.onPrepareScreenSize = { [weak self] size in
+            self?.switcherViewModel.updateAvailableScreenSize(size)
+        }
         panel.onResignActive = { [weak self] in
             self?.switcherViewModel.cancel(reason: .resignedActive)
         }
@@ -280,7 +306,7 @@ public final class AppCoordinator {
         }
         let hostingView = NSHostingView(rootView: SettingsView(viewModel: settingsViewModel))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
