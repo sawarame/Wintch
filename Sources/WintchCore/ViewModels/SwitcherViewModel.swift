@@ -428,7 +428,8 @@ public final class SwitcherViewModel {
         }
 
         let rawCandidates = windowService.fetchRawWindowCandidates()
-        let filtered = WindowFilter.filterAndMap(rawCandidates)
+        let screenBounds = windowService.currentDisplayBounds()
+        let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
         let sorted = WindowSorter.sortByMRU(filtered)
 
         guard let initial = SwitcherSelection.initialIndex(count: sorted.count) else {

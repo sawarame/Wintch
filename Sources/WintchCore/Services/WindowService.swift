@@ -70,6 +70,9 @@ public final class WindowService: WindowServicing {
     /// 監視中フラグ
     private var isObserving = false
 
+    /// 操作スペース切り替え後のバックグラウンド全体再走査が完了するまでフルスクリーン置換を抑制するフラグ
+    private var hasPendingSpaceChange = false
+
     /// AX IPC 呼び出しをメインスレッド外で直列実行するためのワーカーキュー
     private nonisolated let axWorkerQueue = DispatchQueue(
         label: "dev.wintch.WindowService.AXWorker",
@@ -99,6 +102,23 @@ public final class WindowService: WindowServicing {
 
     /// WindowService を初期化する
     public init() {}
+
+    /// 現在の全ディスプレイの矩形一覧（CoreGraphics 座標系）を返す
+    /// - Returns: ディスプレイ矩形配列
+    public func currentDisplayBounds() -> [WindowBounds] {
+        let screens = NSScreen.screens
+        guard let primaryHeight = screens.first?.frame.height else { return [] }
+        return screens.map { screen in
+            let frame = screen.frame
+            let cgY = Double(primaryHeight - (frame.origin.y + frame.height))
+            return WindowBounds(
+                x: Double(frame.origin.x),
+                y: cgY,
+                width: Double(frame.width),
+                height: Double(frame.height)
+            )
+        }
+    }
 
     /// ウィンドウ監視（AXObserver およびワークスペース通知）を開始する
     public func startObserving() {
@@ -182,6 +202,7 @@ public final class WindowService: WindowServicing {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    self?.hasPendingSpaceChange = true
                     self?.scheduleBackgroundScanAllRegularApps(debounce: Self.spaceChangeDebounceDuration)
                 }
             }
@@ -192,6 +213,7 @@ public final class WindowService: WindowServicing {
     public func stopObserving() {
         guard isObserving else { return }
         isObserving = false
+        hasPendingSpaceChange = false
 
         pendingSpaceScanTask?.cancel()
         pendingSpaceScanTask = nil
@@ -582,13 +604,15 @@ public final class WindowService: WindowServicing {
                 self.applyAXWindowSnapshots(
                     item.snapshots,
                     for: item.pid,
-                    markFrontmostAsActive: item.isActive
+                    markFrontmostAsActive: item.isActive,
+                    allowDisplaySpanningReplacement: false
                 )
                 self.cachedWindowMenuByPID[item.pid] = CachedWindowMenuState(
                     items: item.menuItems,
                     fetchedAt: fetchedAt
                 )
             }
+            self.hasPendingSpaceChange = false
         }
     }
 
@@ -599,12 +623,14 @@ public final class WindowService: WindowServicing {
     ///   - debounce: デバウンス待機時間（即時実行時は nil）
     ///   - activatedElement: 更新後に MRU 時刻を更新する対象要素（任意）
     ///   - activatedAt: 記録するアクティブ時刻（任意）
+    ///   - allowDisplaySpanningReplacement: 同一スペース内のタブ切り替えとしてディスプレイ占有級置換を許可するか
     private func scheduleBackgroundRefresh(
         for pid: Int32,
         markFrontmostAsActive: Bool,
         debounce: Duration?,
         activatedElement: SendableAXElement? = nil,
-        activatedAt: Date? = nil
+        activatedAt: Date? = nil,
+        allowDisplaySpanningReplacement: Bool = false
     ) {
         pendingRefreshTasksByPID[pid]?.cancel()
         pendingRefreshTasksByPID[pid] = Task { @MainActor [weak self] in
@@ -626,7 +652,8 @@ public final class WindowService: WindowServicing {
             self.applyAXWindowSnapshots(
                 result.0,
                 for: pid,
-                markFrontmostAsActive: markFrontmostAsActive
+                markFrontmostAsActive: markFrontmostAsActive,
+                allowDisplaySpanningReplacement: allowDisplaySpanningReplacement && !self.hasPendingSpaceChange
             )
             self.cachedWindowMenuByPID[pid] = CachedWindowMenuState(
                 items: result.1,
@@ -664,15 +691,17 @@ public final class WindowService: WindowServicing {
         applyAXWindowSnapshots(snapshots, for: pid, markFrontmostAsActive: markFrontmostAsActive)
     }
 
-    /// 取得済み AX スナップショット一覧を既存のキャッシュ・MRU 時刻を保持したままマージする
+    /// 取得済み AX スナップショット一覧を既存のキャッシュ・MRU 時刻を保持したままマージし、タブ切り替えで隠れた旧タブを除去する
     /// - Parameters:
     ///   - snapshots: バックグラウンドまたは同期で取得した AX ウィンドウスナップショット
     ///   - pid: 対象プロセス ID
     ///   - markFrontmostAsActive: 最前面アプリの先頭ウィンドウをアクティブとして記録するか
+    ///   - allowDisplaySpanningReplacement: 同一スペース内のタブ切り替えとしてディスプレイ占有級置換を許可するか
     private func applyAXWindowSnapshots(
         _ snapshots: [ScannedAXWindowSnapshot],
         for pid: Int32,
-        markFrontmostAsActive: Bool
+        markFrontmostAsActive: Bool,
+        allowDisplaySpanningReplacement: Bool = false
     ) {
         var existing = cachedWindowsByPID[pid] ?? []
         for idx in existing.indices {
@@ -715,6 +744,45 @@ public final class WindowService: WindowServicing {
                         lastActivatedAt: (markFrontmostAsActive && index == 0) ? now : nil
                     )
                 )
+            }
+        }
+
+        // 今回捕捉された有効ウィンドウと同矩形で今回から姿を消した旧タブをキャッシュから除去する
+        let screenBounds = currentDisplayBounds()
+        let activeWindowEntries = existing.filter {
+            $0.isPresentInLatestAXScan && $0.role == "AXWindow" && $0.subrole != nil
+        }
+
+        if !activeWindowEntries.isEmpty {
+            var inheritedDateByReplacementID: [String: Date] = [:]
+            existing.removeAll { candidate in
+                guard !candidate.isPresentInLatestAXScan, candidate.role == "AXWindow" else {
+                    return false
+                }
+                guard let replacement = activeWindowEntries.first(where: { active in
+                    Self.isReplacedTabBounds(
+                        oldBounds: candidate.bounds,
+                        oldIsMinimized: candidate.isMinimized,
+                        newBounds: active.bounds,
+                        newIsMinimized: active.isMinimized,
+                        allowDisplaySpanningReplacement: allowDisplaySpanningReplacement,
+                        screenBounds: screenBounds
+                    )
+                }) else {
+                    return false
+                }
+                if let oldDate = candidate.lastActivatedAt {
+                    let prev = inheritedDateByReplacementID[replacement.id]
+                    if prev == nil || oldDate > prev! {
+                        inheritedDateByReplacementID[replacement.id] = oldDate
+                    }
+                }
+                return true
+            }
+            for idx in existing.indices where existing[idx].lastActivatedAt == nil {
+                if let inheritedDate = inheritedDateByReplacementID[existing[idx].id] {
+                    existing[idx].lastActivatedAt = inheritedDate
+                }
             }
         }
 
@@ -1221,8 +1289,52 @@ public final class WindowService: WindowServicing {
             markFrontmostAsActive: false,
             debounce: debounce,
             activatedElement: isActivationEvent ? SendableAXElement(value: element) : nil,
-            activatedAt: isActivationEvent ? now : nil
+            activatedAt: isActivationEvent ? now : nil,
+            allowDisplaySpanningReplacement: true
         )
+    }
+
+    /// 今回スキャンから消えたキャッシュ要素が、タブ切り替え等により同一座標の新ウィンドウへ置き換わった旧タブかを判定する
+    /// - Parameters:
+    ///   - oldBounds: 今回スキャンから消えたキャッシュ要素の矩形
+    ///   - oldIsMinimized: 今回スキャンから消えたキャッシュ要素の最小化状態
+    ///   - newBounds: 今回スキャンに存在する有効ウィンドウの矩形
+    ///   - newIsMinimized: 今回スキャンに存在する有効ウィンドウの最小化状態
+    ///   - allowDisplaySpanningReplacement: フルスクリーン級ウィンドウでのタブ置換を許可するか（スペース移動直後は false）
+    ///   - screenBounds: 接続中ディスプレイの矩形一覧
+    /// - Returns: 旧タブとしてキャッシュから除去すべき場合は true
+    nonisolated static func isReplacedTabBounds(
+        oldBounds: CGRect?,
+        oldIsMinimized: Bool,
+        newBounds: CGRect?,
+        newIsMinimized: Bool,
+        allowDisplaySpanningReplacement: Bool,
+        screenBounds: [WindowBounds]
+    ) -> Bool {
+        guard oldIsMinimized == newIsMinimized,
+              let oRect = oldBounds,
+              let nRect = newBounds else {
+            return false
+        }
+        let oBounds = WindowBounds(
+            x: Double(oRect.origin.x),
+            y: Double(oRect.origin.y),
+            width: Double(oRect.size.width),
+            height: Double(oRect.size.height)
+        )
+        let nBounds = WindowBounds(
+            x: Double(nRect.origin.x),
+            y: Double(nRect.origin.y),
+            width: Double(nRect.size.width),
+            height: Double(nRect.size.height)
+        )
+        guard WindowFilter.areBoundsNearlyEqual(oBounds, nBounds) else {
+            return false
+        }
+        if WindowFilter.isDisplaySpanningBounds(oBounds, screenBounds: screenBounds) {
+            return allowDisplaySpanningReplacement
+        }
+        return true
     }
 
     // MARK: - AX スナップショット収集・属性読み取り（nonisolated）

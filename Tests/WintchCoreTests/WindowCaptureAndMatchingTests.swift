@@ -132,4 +132,62 @@ struct WindowCaptureAndMatchingTests {
         }
         #expect(timedOut == nil)
     }
+
+    /// タブ切り替えによるキャッシュ置換判定が、非フルスクリーンの同矩形入れ替えを検出しつつ
+    /// スペース移動時のフルスクリーン別ウィンドウを誤削除しないことを検証する
+    @Test("isReplacedTabBounds は通常窓のタブ置換を検出しスペース移動時のフルスクリーン誤削除を防ぐ")
+    func replacedTabBoundsDetectsTabSwitchWithoutEvictingOtherSpaceFullscreen() {
+        let screens = [WindowBounds(x: 0, y: 0, width: 1920, height: 1080)]
+        let finderRect = CGRect(x: 472, y: 294, width: 1150, height: 688)
+        let fullscreenRect = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let otherRect = CGRect(x: 100, y: 120, width: 1150, height: 688)
+
+        // 非フルスクリーンの同矩形・同最小化状態はタブ切り替えとみなす
+        #expect(
+            WindowService.isReplacedTabBounds(
+                oldBounds: finderRect,
+                oldIsMinimized: false,
+                newBounds: finderRect,
+                newIsMinimized: false,
+                allowDisplaySpanningReplacement: false,
+                screenBounds: screens
+            )
+        )
+
+        // 座標が異なる別ウィンドウは置換対象にしない
+        #expect(
+            !WindowService.isReplacedTabBounds(
+                oldBounds: finderRect,
+                oldIsMinimized: false,
+                newBounds: otherRect,
+                newIsMinimized: false,
+                allowDisplaySpanningReplacement: true,
+                screenBounds: screens
+            )
+        )
+
+        // スペース移動中（allowDisplaySpanningReplacement == false）のフルスクリーン同矩形は別ウィンドウとして保持
+        #expect(
+            !WindowService.isReplacedTabBounds(
+                oldBounds: fullscreenRect,
+                oldIsMinimized: false,
+                newBounds: fullscreenRect,
+                newIsMinimized: false,
+                allowDisplaySpanningReplacement: false,
+                screenBounds: screens
+            )
+        )
+
+        // 同一スペースでのタブ切り替え（allowDisplaySpanningReplacement == true）ならフルスクリーンでも置換対象
+        #expect(
+            WindowService.isReplacedTabBounds(
+                oldBounds: fullscreenRect,
+                oldIsMinimized: false,
+                newBounds: fullscreenRect,
+                newIsMinimized: false,
+                allowDisplaySpanningReplacement: true,
+                screenBounds: screens
+            )
+        )
+    }
 }

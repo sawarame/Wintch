@@ -404,4 +404,291 @@ struct WindowFilterTests {
         let result = WindowFilter.filterAndMap(candidates)
         #expect(result.map(\.id) == ["cg-gemini-main", "ax-covered-main"])
     }
+
+    /// システム設定（com.apple.systempreferences）の 500x500 内部補助 CGWindow が
+    /// AX 捕捉済み時・未捕捉時・ウィンドウクローズ時のいずれでも誤表示されないことを検証する
+    @Test("システム設定の500x500内部補助ウィンドウを除外し1件のみ表示する")
+    func systemSettingsExcludesHiddenBackingWindowInAllStates() {
+        let backingWindow = RawWindowCandidate(
+            id: "cg-4515",
+            cgWindowID: 4515,
+            pid: 90166,
+            bundleIdentifier: "com.apple.systempreferences",
+            applicationName: "システム設定",
+            title: nil,
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 1
+        )
+        let realCGWindow = RawWindowCandidate(
+            id: "cg-4406",
+            cgWindowID: 4406,
+            pid: 90166,
+            bundleIdentifier: "com.apple.systempreferences",
+            applicationName: "システム設定",
+            title: nil,
+            layer: 0,
+            bounds: WindowBounds(x: 90, y: 126, width: 740, height: 625),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 6
+        )
+        let realAXWindow = RawWindowCandidate(
+            id: "ax-90166-1",
+            cgWindowID: 4406,
+            pid: 90166,
+            bundleIdentifier: "com.apple.systempreferences",
+            applicationName: "システム設定",
+            title: "デバイスの制御とデータへのアクセス",
+            layer: 0,
+            bounds: WindowBounds(x: 90, y: 126, width: 740, height: 625),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axRole: "AXWindow",
+            axSubrole: "AXStandardWindow",
+            hasAXInfo: true,
+            isOnScreen: false,
+            zOrderIndex: 6
+        )
+        // 万一別サイズの非表示補助 CGWindow が混入しても AX 捕捉済み・未捕捉ともに 1 件へ絞られる
+        let extraUnknownCG = RawWindowCandidate(
+            id: "cg-4999",
+            cgWindowID: 4999,
+            pid: 90166,
+            bundleIdentifier: "com.apple.systempreferences",
+            applicationName: "システム設定",
+            title: nil,
+            layer: 0,
+            bounds: WindowBounds(x: 20, y: 100, width: 520, height: 420),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 0
+        )
+
+        // 1. AX 捕捉済み + 補助ウィンドウあり（別スペース移動後） -> AX 実ウィンドウ 1 件のみ
+        let axCoveredResult = WindowFilter.filterAndMap([backingWindow, extraUnknownCG, realAXWindow])
+        #expect(axCoveredResult.map(\.id) == ["ax-90166-1"])
+
+        // 2. AX 未捕捉（起動直後に別スペース） -> Zオーダー上位の補助窓ではなく本体 1 件のみ
+        let cgOnlyResult = WindowFilter.filterAndMap([backingWindow, extraUnknownCG, realCGWindow])
+        #expect(cgOnlyResult.map(\.id) == ["cg-4406"])
+
+        // 3. ウィンドウが閉じられて 500x500 補助窓のみ残存 -> 0 件
+        let closedResult = WindowFilter.filterAndMap([backingWindow])
+        #expect(closedResult.isEmpty)
+    }
+
+    /// Finder 等で 1 ウィンドウ内に複数タブを開き AX 捕捉済み・未照合候補が同座標で複数存在する場合でも
+    /// ウィンドウ単位の 1 件に統合され、表示中タブまたは最新アクティブタブが優先されることを検証する
+    @Test("同一非フルスクリーン座標の複数タブ（AX情報あり含む）をウィンドウ単位の1件に統合する")
+    func consolidatesMultipleTabsSharingSameWindowBounds() {
+        let now = Date()
+        let finderBounds = WindowBounds(x: 472, y: 294, width: 1150, height: 688)
+
+        // 現在スペース上で選択中のタブ（isOnScreen == true）が非選択の旧タブ（isOnScreen == false）より優先される
+        let activeSpaceTabs = [
+            RawWindowCandidate(
+                id: "ax-664-old",
+                cgWindowID: 5309,
+                pid: 664,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "sawarame_yasushi",
+                bounds: finderBounds,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                lastActivatedAt: now.addingTimeInterval(-5),
+                zOrderIndex: 1
+            ),
+            RawWindowCandidate(
+                id: "ax-664-active",
+                cgWindowID: 5385,
+                pid: 664,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "tmp",
+                bounds: finderBounds,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                lastActivatedAt: now,
+                zOrderIndex: 0
+            )
+        ]
+        #expect(WindowFilter.filterAndMap(activeSpaceTabs).map(\.id) == ["ax-664-active"])
+
+        // 別スペース移動後（両方 isOnScreen == false）でも 1 ウィンドウとして最新アクティブの 1 件に統合される
+        let offspaceTabs = [
+            RawWindowCandidate(
+                id: "ax-664-tab1",
+                cgWindowID: 5309,
+                pid: 664,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "sawarame_yasushi",
+                bounds: finderBounds,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                lastActivatedAt: now.addingTimeInterval(-30),
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "ax-664-tab2",
+                cgWindowID: 5385,
+                pid: 664,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "tmp",
+                bounds: finderBounds,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                lastActivatedAt: now,
+                zOrderIndex: 1
+            )
+        ]
+        #expect(WindowFilter.filterAndMap(offspaceTabs).map(\.id) == ["ax-664-tab2"])
+    }
+
+    /// 実ディスプレイ矩形（screenBounds）指定時に、1400x850 等の大きめ非フルスクリーン Finder 複数タブは
+    /// 1 件へ統合されつつ、別スペースの実際のフルスクリーン複数ウィンドウは引き続き個別保持されることを検証する
+    @Test("実画面サイズ基準で大きめ通常ウィンドウの複数タブを統合しつつフルスクリーン複数枚は保持する")
+    func usesScreenBoundsToDeduplicateLargeNonFullscreenTabsWhileKeepingFullscreenWindows() {
+        let screens = [WindowBounds(x: 0, y: 0, width: 1920, height: 1080)]
+        let largeFinderBounds = WindowBounds(x: 120, y: 80, width: 1400, height: 850)
+        let fullscreenBounds = WindowBounds(x: 0, y: 88, width: 1920, height: 992)
+
+        let candidates = [
+            // Finder: 1400x850（1920x1080 画面に対して非フルスクリーン）の 2 タブは 1 件へ統合
+            RawWindowCandidate(
+                id: "cg-finder-tab1",
+                cgWindowID: 7001,
+                pid: 664,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "Documents",
+                bounds: largeFinderBounds,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "cg-finder-tab2",
+                cgWindowID: 7002,
+                pid: 664,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "Downloads",
+                bounds: largeFinderBounds,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 1
+            ),
+            // Chrome: 別スペースのフルスクリーン 2 枚（1920x992）は両方保持
+            RawWindowCandidate(
+                id: "cg-chrome-fs1",
+                cgWindowID: 8001,
+                pid: 5453,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "PR #8",
+                bounds: fullscreenBounds,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 2
+            ),
+            RawWindowCandidate(
+                id: "cg-chrome-fs2",
+                cgWindowID: 8002,
+                pid: 5453,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "Docs",
+                bounds: fullscreenBounds,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 3
+            )
+        ]
+
+        let result = WindowFilter.filterAndMap(candidates, screenBounds: screens)
+        #expect(result.map(\.id) == ["cg-finder-tab1", "cg-chrome-fs1", "cg-chrome-fs2"])
+    }
+
+    /// 同じスペースに重なって表示されている独立した 2 ウィンドウ（両方 isOnScreen == true && hasAXInfo == true）や
+    /// 最小化状態が異なるウィンドウは誤統合せず両方保持することを検証する
+    @Test("同スペース同時表示の別ウィンドウおよび最小化状態が異なるウィンドウは統合しない")
+    func preservesDistinctOnScreenAndMinimizedWindowsAtSameBounds() {
+        let sameBounds = WindowBounds(x: 200, y: 150, width: 900, height: 600)
+        let candidates = [
+            RawWindowCandidate(
+                id: "ax-win-1",
+                cgWindowID: 101,
+                pid: 700,
+                applicationName: "Finder",
+                title: "Desktop",
+                bounds: sameBounds,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "ax-win-2",
+                cgWindowID: 102,
+                pid: 700,
+                applicationName: "Finder",
+                title: "Applications",
+                bounds: sameBounds,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                zOrderIndex: 1
+            ),
+            RawWindowCandidate(
+                id: "ax-win-3-min",
+                cgWindowID: 103,
+                pid: 700,
+                applicationName: "Finder",
+                title: "Movies",
+                bounds: sameBounds,
+                isMinimized: true,
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                zOrderIndex: 2
+            )
+        ]
+
+        let result = WindowFilter.filterAndMap(candidates)
+        #expect(result.map(\.id) == ["ax-win-1", "ax-win-2", "ax-win-3-min"])
+    }
 }

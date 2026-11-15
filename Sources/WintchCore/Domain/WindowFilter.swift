@@ -27,12 +27,27 @@ public enum WindowFilter {
     private static let maxToolbarAspectRatio: Double = 6.0
     private static let maxStripHeight: Double = 300.0
 
-    /// 複数スペースに跨って同一矩形になり得るフルスクリーン相当サイズの下限（ポイント）
+    /// 複数スペースに跨って同一矩形になり得るフルスクリーン相当サイズの下限（スクリーン情報未指定時のフォールバック）
     private static let displaySpanningMinWidth: Double = 1280.0
     private static let displaySpanningMinHeight: Double = 700.0
 
-    /// 同一ウィンドウの二重生成 CGWindow とみなす非フルスクリーン矩形の許容誤差（ポイント）
+    /// スクリーン矩形比較時にディスプレイ占有級（フルスクリーン／画面最大化）とみなす最小幅・高さ比率と下限（ポイント）
+    private static let screenSpanningWidthRatio: Double = 0.95
+    private static let screenSpanningHeightRatio: Double = 0.85
+    private static let screenSpanningMinWidthWithScreens: Double = 800.0
+    private static let screenSpanningMinHeightWithScreens: Double = 600.0
+
+    /// 同一ウィンドウの二重生成 CGWindow やタブとみなす矩形の許容誤差（ポイント）
     private static let duplicateBoundsTolerance: Double = 2.0
+
+    /// システム設定が内部に保持する未表示 500x500 補助ウィンドウの判定基準
+    private static let systemPreferencesBundleID = "com.apple.systempreferences"
+    private static let hiddenBackingWindowDimension: Double = 500.0
+
+    /// 単一メインウィンドウ構成（1 プロセスにつき 1 枚のみ）として扱うアプリの Bundle ID 群
+    private static let singleWindowBundleIdentifiers: Set<String> = [
+        systemPreferencesBundleID
+    ]
 
     /// 候補がスイッチャーに表示すべき有効なウィンドウかどうかを判定する
     /// - Parameter candidate: 判定対象のウィンドウ候補
@@ -64,9 +79,14 @@ public enum WindowFilter {
     }
 
     /// 生のウィンドウ候補配列からノイズを除外し、WindowEntry の配列へ変換する
-    /// - Parameter candidates: 収集されたウィンドウ候補の配列
+    /// - Parameters:
+    ///   - candidates: 収集されたウィンドウ候補の配列
+    ///   - screenBounds: 接続中ディスプレイの矩形一覧（CGWindow 座標系。省略時は固定閾値でフルスクリーン級を判定）
     /// - Returns: フィルタリング後のウィンドウ項目配列
-    public static func filterAndMap(_ candidates: [RawWindowCandidate]) -> [WindowEntry] {
+    public static func filterAndMap(
+        _ candidates: [RawWindowCandidate],
+        screenBounds: [WindowBounds] = []
+    ) -> [WindowEntry] {
         let baseValidCandidates = candidates.filter(isValid)
         let baseValidIDs = Set(baseValidCandidates.map(\.id))
         let coveredPIDs = Set(baseValidCandidates.map(\.pid))
@@ -91,22 +111,15 @@ public enum WindowFilter {
                 .map(\.pid)
         )
 
-        // Finder 等の非フルスクリーン二重生成 CGWindow を防ぐため、PID ごとの既出非フルスクリーン矩形を記録する
-        var emittedNonFullscreenBoundsByPID: [Int32: [WindowBounds]] = [:]
-        for candidate in validCandidates where candidate.hasAXInfo {
-            if !isDisplaySpanningBounds(candidate.bounds) {
-                emittedNonFullscreenBoundsByPID[candidate.pid, default: []].append(candidate.bounds)
-            }
-        }
-
+        // 1. 非AX候補の補助ウィンドウ除外（内部オーバーレイ・補助フローティング・単一ウィンドウアプリの重複 CGWindow）
+        var prefiltered: [RawWindowCandidate] = []
+        prefiltered.reserveCapacity(validCandidates.count)
         var emittedCandidateIDs = Set<String>()
-        var result: [WindowEntry] = []
-        result.reserveCapacity(validCandidates.count)
 
         for candidate in validCandidates {
             if candidate.hasAXInfo {
                 guard emittedCandidateIDs.insert(candidate.id).inserted else { continue }
-                result.append(makeEntry(from: candidate))
+                prefiltered.append(candidate)
                 continue
             }
 
@@ -120,20 +133,70 @@ public enum WindowFilter {
                 continue
             }
 
-            // 同一非フルスクリーン座標で二重生成された CGWindow は重複統合する（別スペースのフルスクリーン等は保持）
-            if !isDisplaySpanningBounds(candidate.bounds) {
-                let existingBounds = emittedNonFullscreenBoundsByPID[candidate.pid] ?? []
-                if existingBounds.contains(where: { areBoundsNearlyEqual($0, candidate.bounds) }) {
-                    continue
-                }
-                emittedNonFullscreenBoundsByPID[candidate.pid, default: []].append(candidate.bounds)
+            // システム設定などの単一ウィンドウアプリは、既に AX 捕捉済みであれば CGWindow 補完を出さない
+            if let bundleID = candidate.bundleIdentifier,
+               singleWindowBundleIdentifiers.contains(bundleID),
+               axCoveredPIDs.contains(candidate.pid) {
+                continue
             }
 
             guard emittedCandidateIDs.insert(candidate.id).inserted else { continue }
-            result.append(makeEntry(from: candidate))
+            prefiltered.append(candidate)
         }
 
-        return result
+        // 2. 単一ウィンドウアプリが AX 未捕捉（!hasAXInfo のみ）の場合、PID ごとに面積最大の代表 1 件へ絞る
+        let singleWindowBestCGIndexByPID = selectBestSingleWindowCGIndices(in: prefiltered)
+
+        // 3. 同一 PID・非ディスプレイ占有級の同一矩形候補（Finder の複数タブや二重生成 CGWindow）を統合する
+        var keptIndices: [Int] = []
+        keptIndices.reserveCapacity(prefiltered.count)
+
+        for (index, candidate) in prefiltered.enumerated() {
+            // 単一ウィンドウアプリの !hasAXInfo 候補は代表 1 件のみ許可する
+            if !candidate.hasAXInfo,
+               let bundleID = candidate.bundleIdentifier,
+               singleWindowBundleIdentifiers.contains(bundleID),
+               singleWindowBestCGIndexByPID[candidate.pid] != index {
+                continue
+            }
+
+            // ディスプレイ占有級（フルスクリーン等）は別スペースの複数ウィンドウとして個別保持する
+            if isDisplaySpanningBounds(candidate.bounds, screenBounds: screenBounds) {
+                keptIndices.append(index)
+                continue
+            }
+
+            // 同じスペースに同時表示中の独立ウィンドウや未照合の別 AX ウィンドウ同士は重複統合しない
+            if let existingPos = keptIndices.firstIndex(where: { keptIdx in
+                let existing = prefiltered[keptIdx]
+                guard existing.pid == candidate.pid,
+                      !isDisplaySpanningBounds(existing.bounds, screenBounds: screenBounds),
+                      areBoundsNearlyEqual(existing.bounds, candidate.bounds) else {
+                    return false
+                }
+                // 両方とも AX 捕捉済みかつ最小化状態が異なる場合は別ウィンドウとして統合しない
+                if existing.hasAXInfo && candidate.hasAXInfo && existing.isMinimized != candidate.isMinimized {
+                    return false
+                }
+                // 両方とも AX 捕捉済みで、かつどちらも非表示（isOnScreen == false）でない場合は独立ウィンドウとして保持する
+                if existing.hasAXInfo && candidate.hasAXInfo
+                    && existing.isOnScreen != false && candidate.isOnScreen != false {
+                    return false
+                }
+                return true
+            }) {
+                let existingIdx = keptIndices[existingPos]
+                let existing = prefiltered[existingIdx]
+                if isHigherPriorityRepresentative(candidate, than: existing) {
+                    keptIndices[existingPos] = index
+                }
+                continue
+            }
+
+            keptIndices.append(index)
+        }
+
+        return keptIndices.sorted().map { makeEntry(from: prefiltered[$0]) }
     }
 
     /// RawWindowCandidate から UI 表示用の WindowEntry を生成する
@@ -181,7 +244,101 @@ public enum WindowFilter {
             return isSubstantialWindowBounds(candidate.bounds)
         }
 
+        // システム設定が内部に持つ未表示 500x500 補助ウィンドウを除外する
+        if isHiddenSystemSettingsBackingWindow(candidate) {
+            return false
+        }
+
         return true
+    }
+
+    /// システム設定（com.apple.systempreferences）が内部的に保持する未表示 500x500 補助ウィンドウかを判定する
+    /// - Parameter candidate: 判定対象のウィンドウ候補
+    /// - Returns: 非表示の内部補助ウィンドウに該当する場合は true
+    private static func isHiddenSystemSettingsBackingWindow(_ candidate: RawWindowCandidate) -> Bool {
+        guard candidate.bundleIdentifier == systemPreferencesBundleID,
+              !candidate.hasAXInfo,
+              candidate.isOnScreen != true else {
+            return false
+        }
+        return abs(candidate.bounds.x) <= duplicateBoundsTolerance
+            && abs(candidate.bounds.width - hiddenBackingWindowDimension) <= duplicateBoundsTolerance
+            && abs(candidate.bounds.height - hiddenBackingWindowDimension) <= duplicateBoundsTolerance
+    }
+
+    /// 単一ウィンドウアプリの AX 未捕捉 CGWindow 候補から PID ごとに最良の代表 1 件を選出する
+    /// - Parameter candidates: 事前フィルタ済み候補配列
+    /// - Returns: PID ごとに選出された代表候補インデックスの辞書
+    private static func selectBestSingleWindowCGIndices(in candidates: [RawWindowCandidate]) -> [Int32: Int] {
+        var bestByPID: [Int32: Int] = [:]
+        for (index, candidate) in candidates.enumerated() {
+            guard !candidate.hasAXInfo,
+                  let bundleID = candidate.bundleIdentifier,
+                  singleWindowBundleIdentifiers.contains(bundleID) else {
+                continue
+            }
+            guard let currentBestIdx = bestByPID[candidate.pid] else {
+                bestByPID[candidate.pid] = index
+                continue
+            }
+            let current = candidates[currentBestIdx]
+            if isBetterSingleWindowCGFallback(candidate, than: current) {
+                bestByPID[candidate.pid] = index
+            }
+        }
+        return bestByPID
+    }
+
+    /// 単一ウィンドウアプリの CGWindow 補完候補同士を比較し、より本物のメインウィンドウらしい方を判定する
+    /// - Parameters:
+    ///   - lhs: 比較元の候補
+    ///   - rhs: 比較先の候補
+    /// - Returns: lhs を代表として優先すべき場合は true
+    private static func isBetterSingleWindowCGFallback(
+        _ lhs: RawWindowCandidate,
+        than rhs: RawWindowCandidate
+    ) -> Bool {
+        let lhsOnScreen = lhs.isOnScreen == true
+        let rhsOnScreen = rhs.isOnScreen == true
+        if lhsOnScreen != rhsOnScreen {
+            return lhsOnScreen
+        }
+        let lhsArea = lhs.bounds.width * lhs.bounds.height
+        let rhsArea = rhs.bounds.width * rhs.bounds.height
+        if lhsArea != rhsArea {
+            return lhsArea > rhsArea
+        }
+        return lhs.zOrderIndex < rhs.zOrderIndex
+    }
+
+    /// 重複統合時に残すべき代表候補としての優先順位を比較する
+    /// - Parameters:
+    ///   - lhs: 新規の比較元候補
+    ///   - rhs: 既存の代表候補
+    /// - Returns: lhs を代表として採用すべき場合は true
+    private static func isHigherPriorityRepresentative(
+        _ lhs: RawWindowCandidate,
+        than rhs: RawWindowCandidate
+    ) -> Bool {
+        let lhsOnScreen = lhs.isOnScreen == true
+        let rhsOnScreen = rhs.isOnScreen == true
+        if lhsOnScreen != rhsOnScreen {
+            return lhsOnScreen
+        }
+        if lhs.hasAXInfo != rhs.hasAXInfo {
+            return lhs.hasAXInfo
+        }
+        switch (lhs.lastActivatedAt, rhs.lastActivatedAt) {
+        case let (.some(lDate), .some(rDate)) where lDate != rDate:
+            return lDate > rDate
+        case (.some, .none):
+            return true
+        case (.none, .some):
+            return false
+        default:
+            break
+        }
+        return lhs.zOrderIndex < rhs.zOrderIndex
     }
 
     /// Finder の 64x64 やフルスクリーン上端バー等の補助ウィンドウではなく、実質的なウィンドウサイズかを判定する
@@ -199,11 +356,50 @@ public enum WindowFilter {
         return true
     }
 
-    /// 複数操作スペースで同一矩形になり得るディスプレイ占有級（フルスクリーン等）のサイズかを判定する
-    /// - Parameter bounds: 判定対象のウィンドウ矩形
+    /// 複数操作スペースで同一矩形になり得るディスプレイ占有級（フルスクリーン／画面最大化相当）のサイズかを判定する
+    /// - Parameters:
+    ///   - bounds: 判定対象のウィンドウ矩形
+    ///   - screenBounds: 接続中ディスプレイの矩形一覧（省略時は固定閾値を使用）
     /// - Returns: ディスプレイ占有級のサイズであれば true
-    private static func isDisplaySpanningBounds(_ bounds: WindowBounds) -> Bool {
-        bounds.width >= displaySpanningMinWidth && bounds.height >= displaySpanningMinHeight
+    static func isDisplaySpanningBounds(
+        _ bounds: WindowBounds,
+        screenBounds: [WindowBounds] = []
+    ) -> Bool {
+        guard !screenBounds.isEmpty else {
+            return bounds.width >= displaySpanningMinWidth && bounds.height >= displaySpanningMinHeight
+        }
+        guard bounds.width >= screenSpanningMinWidthWithScreens,
+              bounds.height >= screenSpanningMinHeightWithScreens else {
+            return false
+        }
+        let targetScreen = screenBounds.max { lhs, rhs in
+            let lhsArea = intersectionArea(bounds, lhs)
+            let rhsArea = intersectionArea(bounds, rhs)
+            if lhsArea != rhsArea {
+                return lhsArea < rhsArea
+            }
+            return (lhs.width * lhs.height) < (rhs.width * rhs.height)
+        }
+        guard let screen = targetScreen, screen.width > 0, screen.height > 0 else {
+            return false
+        }
+        return bounds.width >= screen.width * screenSpanningWidthRatio
+            && bounds.height >= screen.height * screenSpanningHeightRatio
+    }
+
+    /// 2つの矩形が重なる部分の面積を計算する
+    /// - Parameters:
+    ///   - lhs: 比較元の矩形
+    ///   - rhs: 比較先の矩形
+    /// - Returns: 交差面積（重ならない場合は 0.0）
+    private static func intersectionArea(_ lhs: WindowBounds, _ rhs: WindowBounds) -> Double {
+        let minX = max(lhs.x, rhs.x)
+        let minY = max(lhs.y, rhs.y)
+        let maxX = min(lhs.x + lhs.width, rhs.x + rhs.width)
+        let maxY = min(lhs.y + lhs.height, rhs.y + rhs.height)
+        let width = max(0.0, maxX - minX)
+        let height = max(0.0, maxY - minY)
+        return width * height
     }
 
     /// 2つのウィンドウ矩形がほぼ同一位置・同一サイズかを判定する
@@ -211,7 +407,7 @@ public enum WindowFilter {
     ///   - lhs: 比較元のウィンドウ矩形
     ///   - rhs: 比較先のウィンドウ矩形
     /// - Returns: 各座標・辺が許容誤差以内なら true
-    private static func areBoundsNearlyEqual(_ lhs: WindowBounds, _ rhs: WindowBounds) -> Bool {
+    static func areBoundsNearlyEqual(_ lhs: WindowBounds, _ rhs: WindowBounds) -> Bool {
         abs(lhs.x - rhs.x) <= duplicateBoundsTolerance
             && abs(lhs.y - rhs.y) <= duplicateBoundsTolerance
             && abs(lhs.width - rhs.width) <= duplicateBoundsTolerance

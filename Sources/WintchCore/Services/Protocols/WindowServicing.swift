@@ -13,6 +13,10 @@ public protocol WindowServicing: AnyObject {
     /// - Returns: 収集されたウィンドウ候補の配列
     func fetchRawWindowCandidates() -> [RawWindowCandidate]
 
+    /// 現在の全ディスプレイの矩形一覧（CoreGraphics 座標系）を返す
+    /// - Returns: ディスプレイ矩形配列
+    func currentDisplayBounds() -> [WindowBounds]
+
     /// 指定されたウィンドウを最前面にアクティブ化する（必要なら操作スペース移動・最小化解除を含む）
     /// - Parameter entry: アクティブ化対象のウィンドウ項目
     func activateWindow(_ entry: WindowEntry)
@@ -26,4 +30,12 @@ public protocol WindowServicing: AnyObject {
     /// - Parameter pid: 終了対象のプロセス ID
     /// - Returns: アプリケーションの終了を確認できた場合は true、保存確認ダイアログ等でキャンセル・残存した場合は false
     func terminateApplication(pid: Int32) async -> Bool
+}
+
+public extension WindowServicing {
+    /// デフォルト実装として空配列を返す（テストモック互換用）
+    /// - Returns: ディスプレイ矩形配列
+    func currentDisplayBounds() -> [WindowBounds] {
+        []
+    }
 }
