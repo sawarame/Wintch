@@ -691,4 +691,264 @@ struct WindowFilterTests {
         let result = WindowFilter.filterAndMap(candidates)
         #expect(result.map(\.id) == ["ax-win-1", "ax-win-2", "ax-win-3-min"])
     }
+
+    /// メモアプリ（com.apple.Notes）で 1 枚しかウィンドウを開いていない状態（現在スペース／別スペース双方）で、
+    /// 未表示の 475x600 補助ウィンドウ、500x500 バックキングウィンドウ、および他のタイトルなし画面外 cg-* が除外されることを検証する
+    @Test("メモアプリが1ウィンドウのみのとき非表示補助ウィンドウを除外し1件のみ表示する")
+    func notesAppExcludesHiddenAuxiliaryAndBackingWindowsWhenSingleWindowOpen() {
+        let realNotesSameSpace = RawWindowCandidate(
+            id: "ax-71905-main",
+            cgWindowID: 7248,
+            pid: 71905,
+            bundleIdentifier: "com.apple.Notes",
+            applicationName: "メモ",
+            title: "eco検定 – 14件のメモ",
+            layer: 0,
+            bounds: WindowBounds(x: 487, y: 30, width: 1157, height: 1046),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axRole: "AXWindow",
+            axSubrole: "AXStandardWindow",
+            hasAXInfo: true,
+            isOnScreen: true,
+            zOrderIndex: 3
+        )
+        let hiddenAux475 = RawWindowCandidate(
+            id: "cg-7247",
+            cgWindowID: 7247,
+            pid: 71905,
+            bundleIdentifier: "com.apple.Notes",
+            applicationName: "メモ",
+            title: nil,
+            layer: 0,
+            bounds: WindowBounds(x: 828, y: 253, width: 475, height: 600),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 4
+        )
+        let hiddenBacking500 = RawWindowCandidate(
+            id: "cg-7249",
+            cgWindowID: 7249,
+            pid: 71905,
+            bundleIdentifier: "com.apple.Notes",
+            applicationName: "メモ",
+            title: nil,
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 5
+        )
+        let unknownUntitledOffscreenCG = RawWindowCandidate(
+            id: "cg-7299",
+            cgWindowID: 7299,
+            pid: 71905,
+            bundleIdentifier: "com.apple.Notes",
+            applicationName: "メモ",
+            title: nil,
+            layer: 0,
+            bounds: WindowBounds(x: 300, y: 200, width: 620, height: 480),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 6
+        )
+
+        // 1. 現在スペースに 1 枚ある場合
+        let sameSpaceResult = WindowFilter.filterAndMap([
+            realNotesSameSpace,
+            hiddenAux475,
+            hiddenBacking500,
+            unknownUntitledOffscreenCG
+        ])
+        #expect(sameSpaceResult.map(\.id) == ["ax-71905-main"])
+
+        // 2. 別スペースに 1 枚ある場合（kAXFocusedWindow 等で AX 捕捉済みだが isOnScreen == false）
+        let realNotesOtherSpace = RawWindowCandidate(
+            id: "ax-71905-main",
+            cgWindowID: 7248,
+            pid: 71905,
+            bundleIdentifier: "com.apple.Notes",
+            applicationName: "メモ",
+            title: "eco検定 – 14件のメモ",
+            layer: 0,
+            bounds: WindowBounds(x: 487, y: 30, width: 1157, height: 1046),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axRole: "AXWindow",
+            axSubrole: "AXStandardWindow",
+            hasAXInfo: true,
+            isOnScreen: false,
+            zOrderIndex: 3
+        )
+        let otherSpaceResult = WindowFilter.filterAndMap([
+            realNotesOtherSpace,
+            hiddenAux475,
+            hiddenBacking500,
+            unknownUntitledOffscreenCG
+        ])
+        #expect(otherSpaceResult.map(\.id) == ["ax-71905-main"])
+    }
+
+    /// ウィンドウをすべて閉じた状態のメモアプリや、500x500 未表示バックキングウィンドウのみを持つ
+    /// Gemini・汎用アプリからゴースト項目が一切生成されないことを検証する
+    @Test("全閉後のメモや500x500裏方窓のみの待機中アプリは0件になる")
+    func closedAndIdleAppsExcludeHiddenBackingWindows() {
+        let notesClosedCandidates = [
+            RawWindowCandidate(
+                id: "cg-7247",
+                cgWindowID: 7247,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: nil,
+                bounds: WindowBounds(x: 828, y: 253, width: 475, height: 600),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false
+            ),
+            RawWindowCandidate(
+                id: "cg-7249",
+                cgWindowID: 7249,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: nil,
+                bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false
+            )
+        ]
+        #expect(WindowFilter.filterAndMap(notesClosedCandidates).isEmpty)
+
+        let geminiIdleCandidate = RawWindowCandidate(
+            id: "cg-7261",
+            cgWindowID: 7261,
+            pid: 72152,
+            bundleIdentifier: "com.google.GeminiMacOS",
+            applicationName: "Gemini",
+            title: nil,
+            bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false
+        )
+        #expect(WindowFilter.filterAndMap([geminiIdleCandidate]).isEmpty)
+
+        let genericIdleCandidate = RawWindowCandidate(
+            id: "cg-generic-500",
+            cgWindowID: 9100,
+            pid: 80001,
+            bundleIdentifier: "com.example.swiftuiapp",
+            applicationName: "SwiftUIApp",
+            title: nil,
+            bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false
+        )
+        #expect(WindowFilter.filterAndMap([genericIdleCandidate]).isEmpty)
+    }
+
+    /// メモアプリで実際に複数ウィンドウを開いた場合、空タイトルの実 AX ウィンドウ、
+    /// および x=0, 500x500 に実際に開かれたユーザーウィンドウが誤除外されないことを検証する
+    @Test("メモの複数実ウィンドウおよび実在する無題・500x500ウィンドウは保持される")
+    func preservesNotesMultiWindowsAndLegitimateUntitledOrZeroOriginWindows() {
+        let candidates = [
+            RawWindowCandidate(
+                id: "ax-notes-1",
+                cgWindowID: 7248,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: "eco検定 – 14件のメモ",
+                bounds: WindowBounds(x: 487, y: 30, width: 1157, height: 1046),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "ax-notes-2",
+                cgWindowID: 7301,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: "買い物リスト",
+                bounds: WindowBounds(x: 120, y: 120, width: 520, height: 640),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                zOrderIndex: 1
+            ),
+            // メニュー補完によりタイトルが確定した別スペースの実ウィンドウ
+            RawWindowCandidate(
+                id: "cg-notes-3",
+                cgWindowID: 7302,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: "議事録",
+                bounds: WindowBounds(x: 600, y: 140, width: 560, height: 680),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 2
+            ),
+            // 意図的に開かれた空タイトルの標準 AX ウィンドウ（x=0, 500x500 でも hasAXInfo == true なら保持）
+            RawWindowCandidate(
+                id: "ax-untitled-500",
+                cgWindowID: 8801,
+                pid: 8800,
+                bundleIdentifier: "com.apple.TextEdit",
+                applicationName: "テキストエディット",
+                title: "",
+                bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                zOrderIndex: 3
+            ),
+            // 画面上に実際に表示中の x=0, 500x500 ウィンドウ（isOnScreen == true なら保持）
+            RawWindowCandidate(
+                id: "cg-onscreen-500",
+                cgWindowID: 8802,
+                pid: 8801,
+                bundleIdentifier: "com.example.viewer",
+                applicationName: "Viewer",
+                title: nil,
+                bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: true,
+                zOrderIndex: 4
+            )
+        ]
+
+        let result = WindowFilter.filterAndMap(candidates)
+        #expect(result.map(\.id) == [
+            "ax-notes-1",
+            "ax-notes-2",
+            "cg-notes-3",
+            "ax-untitled-500",
+            "cg-onscreen-500"
+        ])
+    }
 }

@@ -40,15 +40,6 @@ public enum WindowFilter {
     /// 同一ウィンドウの二重生成 CGWindow やタブとみなす矩形の許容誤差（ポイント）
     private static let duplicateBoundsTolerance: Double = 2.0
 
-    /// システム設定が内部に保持する未表示 500x500 補助ウィンドウの判定基準
-    private static let systemPreferencesBundleID = "com.apple.systempreferences"
-    private static let hiddenBackingWindowDimension: Double = 500.0
-
-    /// 単一メインウィンドウ構成（1 プロセスにつき 1 枚のみ）として扱うアプリの Bundle ID 群
-    private static let singleWindowBundleIdentifiers: Set<String> = [
-        systemPreferencesBundleID
-    ]
-
     /// 候補がスイッチャーに表示すべき有効なウィンドウかどうかを判定する
     /// - Parameter candidate: 判定対象のウィンドウ候補
     /// - Returns: 表示対象とする場合は true
@@ -133,18 +124,29 @@ public enum WindowFilter {
                 continue
             }
 
-            // システム設定などの単一ウィンドウアプリは、既に AX 捕捉済みであれば CGWindow 補完を出さない
-            if let bundleID = candidate.bundleIdentifier,
-               singleWindowBundleIdentifiers.contains(bundleID),
-               axCoveredPIDs.contains(candidate.pid) {
-                continue
+            // アプリ別プロファイルに基づき、画面外・AX 未捕捉 CGWindow 補完の採用ポリシーを統一適用する
+            let profile = AppWindowProfileRegistry.profile(for: candidate.bundleIdentifier)
+            switch profile.offscreenCGPolicy {
+            case .allow:
+                break
+            case .singleRepresentativeOnly:
+                // 単一メインウィンドウ構成アプリでは、既に AX 捕捉済みであれば CGWindow 補完を出さない
+                if axCoveredPIDs.contains(candidate.pid) {
+                    continue
+                }
+            case .requireAXOrMenuTitle:
+                // メニュー補完等でもタイトルが確定しなかった画面外 CGWindow 補完は内部補助窓として除外する
+                let trimmedTitle = (candidate.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if candidate.isOnScreen != true, trimmedTitle.isEmpty {
+                    continue
+                }
             }
 
             guard emittedCandidateIDs.insert(candidate.id).inserted else { continue }
             prefiltered.append(candidate)
         }
 
-        // 2. 単一ウィンドウアプリが AX 未捕捉（!hasAXInfo のみ）の場合、PID ごとに面積最大の代表 1 件へ絞る
+        // 2. 単一ウィンドウ構成アプリが AX 未捕捉（!hasAXInfo のみ）の場合、PID ごとに最良の代表 1 件へ絞る
         let singleWindowBestCGIndexByPID = selectBestSingleWindowCGIndices(in: prefiltered)
 
         // 3. 同一 PID・非ディスプレイ占有級の同一矩形候補（Finder の複数タブや二重生成 CGWindow）を統合する
@@ -152,10 +154,9 @@ public enum WindowFilter {
         keptIndices.reserveCapacity(prefiltered.count)
 
         for (index, candidate) in prefiltered.enumerated() {
-            // 単一ウィンドウアプリの !hasAXInfo 候補は代表 1 件のみ許可する
+            // 単一ウィンドウ構成アプリの !hasAXInfo 候補は代表 1 件のみ許可する
             if !candidate.hasAXInfo,
-               let bundleID = candidate.bundleIdentifier,
-               singleWindowBundleIdentifiers.contains(bundleID),
+               AppWindowProfileRegistry.profile(for: candidate.bundleIdentifier).offscreenCGPolicy == .singleRepresentativeOnly,
                singleWindowBestCGIndexByPID[candidate.pid] != index {
                 continue
             }
@@ -239,42 +240,27 @@ public enum WindowFilter {
             return false
         }
 
+        // アプリ横断・アプリ固有の未表示バックキングウィンドウ（500x500 等）を除外する
+        if AppWindowProfileRegistry.isHiddenBackingWindow(candidate) {
+            return false
+        }
+
         // フローティングレイヤー（layer == 3）は 64x64 等のフルスクリーン補助窓を除外するため通常サイズを要求する
         if candidate.layer != 0 {
             return isSubstantialWindowBounds(candidate.bounds)
         }
 
-        // システム設定が内部に持つ未表示 500x500 補助ウィンドウを除外する
-        if isHiddenSystemSettingsBackingWindow(candidate) {
-            return false
-        }
-
         return true
     }
 
-    /// システム設定（com.apple.systempreferences）が内部的に保持する未表示 500x500 補助ウィンドウかを判定する
-    /// - Parameter candidate: 判定対象のウィンドウ候補
-    /// - Returns: 非表示の内部補助ウィンドウに該当する場合は true
-    private static func isHiddenSystemSettingsBackingWindow(_ candidate: RawWindowCandidate) -> Bool {
-        guard candidate.bundleIdentifier == systemPreferencesBundleID,
-              !candidate.hasAXInfo,
-              candidate.isOnScreen != true else {
-            return false
-        }
-        return abs(candidate.bounds.x) <= duplicateBoundsTolerance
-            && abs(candidate.bounds.width - hiddenBackingWindowDimension) <= duplicateBoundsTolerance
-            && abs(candidate.bounds.height - hiddenBackingWindowDimension) <= duplicateBoundsTolerance
-    }
-
-    /// 単一ウィンドウアプリの AX 未捕捉 CGWindow 候補から PID ごとに最良の代表 1 件を選出する
+    /// 単一ウィンドウ構成アプリの AX 未捕捉 CGWindow 候補から PID ごとに最良の代表 1 件を選出する
     /// - Parameter candidates: 事前フィルタ済み候補配列
     /// - Returns: PID ごとに選出された代表候補インデックスの辞書
     private static func selectBestSingleWindowCGIndices(in candidates: [RawWindowCandidate]) -> [Int32: Int] {
         var bestByPID: [Int32: Int] = [:]
         for (index, candidate) in candidates.enumerated() {
             guard !candidate.hasAXInfo,
-                  let bundleID = candidate.bundleIdentifier,
-                  singleWindowBundleIdentifiers.contains(bundleID) else {
+                  AppWindowProfileRegistry.profile(for: candidate.bundleIdentifier).offscreenCGPolicy == .singleRepresentativeOnly else {
                 continue
             }
             guard let currentBestIdx = bestByPID[candidate.pid] else {
