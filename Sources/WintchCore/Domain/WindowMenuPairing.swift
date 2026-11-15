@@ -165,6 +165,11 @@ public enum WindowMenuCandidatePairing {
             return lhs.index < rhs.index
         }
 
+        // Window メニューに載る標準 AX ウィンドウで既に捕捉済みの件数を差し引き、
+        // タイトル不一致（別スペース滞在中の遷移や末尾表記差など）があっても実ウィンドウ総数を超えて cg-* が増殖しないよう制限する
+        let coveredAXWindowCount = axCandidates.filter { isMenuTrackedAXWindow($0) }.count
+        let remainingMenuCapacity = max(0, menuItems.count - coveredAXWindowCount)
+
         // WindowFilter の通常判定を通過できる実質的な CGWindow 補完候補のみをペアリング対象にする
         // （極小 1x1 やツールバー帯に貴重なメニュータイトルが奪われるのを防ぐ）
         let pairableCGIndices = cgCandidates.indices.filter { WindowFilter.isValid(cgCandidates[$0]) }
@@ -172,7 +177,7 @@ public enum WindowMenuCandidatePairing {
             cgCandidatePriority(cgCandidates[lhsIdx]) < cgCandidatePriority(cgCandidates[rhsIdx])
         }
 
-        let pairCount = min(unmatchedMenuItems.count, sortedPairableIndices.count)
+        let pairCount = min(unmatchedMenuItems.count, sortedPairableIndices.count, remainingMenuCapacity)
         var pairedCGCandidates: [RawWindowCandidate] = []
         pairedCGCandidates.reserveCapacity(pairCount)
 
@@ -282,19 +287,35 @@ public enum WindowMenuCandidatePairing {
         )
     }
 
-    /// 「…」による中央または末尾省略を含むパターンと対象文字列が一致するか判定する
+    /// 「ウィンドウ」メニューの総数に計上される実ウィンドウ（標準ウィンドウ／ダイアログ）の AX 候補かを判定する
+    /// - Parameter candidate: 判定対象のウィンドウ候補
+    /// - Returns: メニュー項目総数から差し引くべき有効な AX 候補であれば true
+    private static func isMenuTrackedAXWindow(_ candidate: RawWindowCandidate) -> Bool {
+        guard candidate.hasAXInfo, WindowFilter.isValid(candidate) else {
+            return false
+        }
+        // フローティングウィンドウは「ウィンドウ」メニューに載らないため総数差し引き対象から除外する
+        return candidate.axSubrole != "AXFloatingWindow" && candidate.axSubrole != "AXSystemFloatingWindow"
+    }
+
+    /// 「…」または「...」による中央・末尾省略を含むパターンと対象文字列が一致するか判定する
     /// - Parameters:
     ///   - candidate: 省略なしの可能性がある文字列
-    ///   - patternWithEllipsis: 「…」を含む省略済み文字列
+    ///   - patternWithEllipsis: 省略記号を含む省略済み文字列
     /// - Returns: 両端が一致し文字数整合が取れている場合 true
     private static func matchesEllipsisPattern(candidate: String, patternWithEllipsis: String) -> Bool {
-        let parts = patternWithEllipsis.components(separatedBy: "…")
-        guard parts.count == 2 else { return false }
-        let prefix = parts[0]
-        let suffix = parts[1]
-        // 省略前の文字列が短すぎたり両端が空の場合は誤マッチ防止のため不採用とする
-        guard (prefix.count + suffix.count) >= 4 else { return false }
-        guard candidate.count >= prefix.count + suffix.count else { return false }
-        return candidate.hasPrefix(prefix) && candidate.hasSuffix(suffix)
+        for separator in ["…", "..."] {
+            let parts = patternWithEllipsis.components(separatedBy: separator)
+            guard parts.count == 2 else { continue }
+            let prefix = parts[0]
+            let suffix = parts[1]
+            // 省略前の文字列が短すぎたり両端が空の場合は誤マッチ防止のため不採用とする
+            guard (prefix.count + suffix.count) >= 4 else { continue }
+            guard candidate.count >= prefix.count + suffix.count else { continue }
+            if candidate.hasPrefix(prefix) && candidate.hasSuffix(suffix) {
+                return true
+            }
+        }
+        return false
     }
 }
