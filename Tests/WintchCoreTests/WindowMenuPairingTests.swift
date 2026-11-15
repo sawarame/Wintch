@@ -183,12 +183,108 @@ struct WindowMenuPairingTests {
         #expect(titleMatched == 1)
     }
 
+    /// 1枚しか開いていない Chrome 等で、タイトル差異により AX 候補とメニュー項目が文字列一致しない場合でも、
+    /// メニュー総数を超えて裏方のゴースト CGWindow（cg-2220 等）を追加表示しないことを検証する
+    @Test("AXタイトルとメニュータイトルが不一致でも実ウィンドウ総数を超えてゴーストCGWindowを増殖させない")
+    func doesNotDuplicateWindowWhenAXAndMenuTitlesDiverge() {
+        let candidates = [
+            makeCandidate(
+                id: "ax-5453-1",
+                pid: 5453,
+                title: "Wintch | macOS 向けシンプルウィンドウ単位スイッチャー | sawara.me",
+                hasAXInfo: true,
+                width: 1920,
+                height: 992,
+                zOrder: 1
+            ),
+            // Chrome のアドレスバー予測変換等によるオフスクリーン裏方ウィンドウ
+            makeCandidate(
+                id: "cg-2220",
+                pid: 5453,
+                title: nil,
+                hasAXInfo: false,
+                width: 1344,
+                height: 378,
+                zOrder: 30
+            )
+        ]
+
+        // 別スペース滞在中の更新や末尾表記違いでタイトルが完全一致・単一省略一致しないケース
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "Wintch | macOS 向けシンプルウィンド…ー | sawara.me | sawara.me",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 5
+            )
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 1)
+        #expect(result[0].id == "ax-5453-1")
+    }
+
+    /// メニューに載らないフローティングウィンドウ（AXFloatingWindow）が AX 捕捉済みであっても、
+    /// メニュー総数の差し引き対象に含めず別スペースの通常ウィンドウを正しく補完できることと ASCII 三点リーダー対応を検証する
+    @Test("フローティングAX窓はメニュー総数から差し引かずASCII三点リーダー省略も照合できる")
+    func excludesFloatingAXFromMenuCapacityAndMatchesAsciiEllipsis() {
+        #expect(
+            WindowMenuCandidatePairing.titlesMatch(
+                "Very Long Document Title - Part 1 of Series",
+                "Very Long Docu...Part 1 of Series"
+            )
+        )
+
+        let candidates = [
+            makeCandidate(
+                id: "ax-700-1",
+                pid: 700,
+                title: "Main Document",
+                hasAXInfo: true,
+                subrole: "AXStandardWindow",
+                width: 1200,
+                height: 800,
+                zOrder: 0
+            ),
+            makeCandidate(
+                id: "ax-700-float",
+                pid: 700,
+                title: "Inspector",
+                hasAXInfo: true,
+                subrole: "AXFloatingWindow",
+                width: 320,
+                height: 480,
+                zOrder: 1
+            ),
+            makeCandidate(
+                id: "cg-700-offspace",
+                pid: 700,
+                title: nil,
+                hasAXInfo: false,
+                width: 1200,
+                height: 800,
+                zOrder: 10
+            )
+        ]
+
+        let menuItems = [
+            WindowMenuItemSnapshot(title: "Main Document", identifier: "makeKeyAndOrderFront:", mark: "✓", index: 0),
+            WindowMenuItemSnapshot(title: "Second Window", identifier: "makeKeyAndOrderFront:", mark: nil, index: 1)
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 3)
+        #expect(result.last?.id == "cg-700-offspace")
+        #expect(result.last?.title == "Second Window")
+    }
+
     /// テスト用 RawWindowCandidate 生成ヘルパー
     /// - Parameters:
     ///   - id: ウィンドウ識別子
     ///   - pid: プロセス ID
     ///   - title: タイトル
     ///   - hasAXInfo: AX 情報保持フラグ
+    ///   - subrole: AX サブロール
     ///   - width: 幅
     ///   - height: 高さ
     ///   - zOrder: Z オーダー順位
@@ -198,6 +294,7 @@ struct WindowMenuPairingTests {
         pid: Int32,
         title: String?,
         hasAXInfo: Bool,
+        subrole: String? = "AXStandardWindow",
         width: Double,
         height: Double,
         zOrder: Int
@@ -216,7 +313,7 @@ struct WindowMenuPairingTests {
             isSelf: false,
             isMinimized: false,
             axRole: hasAXInfo ? "AXWindow" : nil,
-            axSubrole: hasAXInfo ? "AXStandardWindow" : nil,
+            axSubrole: hasAXInfo ? subrole : nil,
             hasAXInfo: hasAXInfo,
             isOnScreen: hasAXInfo,
             lastActivatedAt: nil,

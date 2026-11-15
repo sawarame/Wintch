@@ -157,18 +157,22 @@ struct SwitcherViewModelTests {
             iconProvider: iconProvider
         )
 
-        // ランチャー起動: 2番目（インデックス1）が初期選択される
+        // ランチャー起動: 2件以上でも1番目（インデックス0）が初期選択される
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
         #expect(viewModel.isPresented == true)
         #expect(viewModel.mode == .launcher)
         #expect(hotKeyMonitor.activeMode == .launcher)
-        #expect(viewModel.selectedIndex == 1)
+        #expect(viewModel.selectedIndex == 0)
 
         // トグル式のため修飾キーを離しても閉じない
         viewModel.handleHotKeyEvent(.modifierReleased)
         #expect(viewModel.isPresented == true)
 
         // ランチャー表示中に通常ショートカットが押されてもランチャーを維持したまま「次へ」「前へ」移動する
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.selectedIndex == 1)
+
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
         #expect(viewModel.mode == .launcher)
         #expect(viewModel.selectedIndex == 2)
@@ -186,7 +190,13 @@ struct SwitcherViewModelTests {
         #expect(viewModel.mode == .launcher)
         #expect(viewModel.isPresented == true)
 
-        // 検索入力で絞り込みされ、先頭（インデックス0）に自動移動する
+        // 検索入力で絞り込みされ、先頭（インデックス0）に自動移動し、全削除しても先頭（0）を維持する
+        viewModel.updateSearchQuery("vsc")
+        #expect(viewModel.displayedResults.map(\.id) == ["w2"])
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.updateSearchQuery("")
+        #expect(viewModel.displayedResults.map(\.id) == ["w1", "w2", "w3"])
+        #expect(viewModel.selectedIndex == 0)
         viewModel.updateSearchQuery("vsc")
         #expect(viewModel.displayedResults.map(\.id) == ["w2"])
         #expect(viewModel.selectedIndex == 0)
@@ -551,6 +561,7 @@ struct SwitcherViewModelTests {
         }
 
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.selectedIndex == 0)
         let closeTask1 = Task { @MainActor in
             await viewModel.closeSelectedWindow()
         }
@@ -560,7 +571,7 @@ struct SwitcherViewModelTests {
             await viewModel.closeSelectedWindow()
         }
         await closeTask2.value
-        #expect(windowService.closedWindows.map(\.id) == ["w2"])
+        #expect(windowService.closedWindows.map(\.id) == ["w1"])
 
         // 待機中にユーザーがキャンセルして即座に再起動した場合でも、古い完了で新セッションが破壊されない
         viewModel.cancel()

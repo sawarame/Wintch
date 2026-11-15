@@ -432,7 +432,11 @@ public final class SwitcherViewModel {
         let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
         let sorted = WindowSorter.sortByMRU(filtered)
 
-        guard let initial = SwitcherSelection.initialIndex(count: sorted.count) else {
+        // 通常スイッチャーは直前のウィンドウ（2番目）、検索ランチャーは先頭ウィンドウ（1番目）を初期選択する
+        guard let initial = SwitcherSelection.initialIndex(
+            count: sorted.count,
+            preferSecondItem: targetMode != .launcher
+        ) else {
             // 有効なウィンドウが 0 件の場合はパネルを表示しない
             return
         }

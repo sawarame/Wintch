@@ -4,13 +4,21 @@ import Testing
 /// SwitcherSelection の初期選択位置と前後循環移動ロジックを検証するテストスイート
 @Suite("SwitcherSelection テスト")
 struct SwitcherSelectionTests {
-    /// ウィンドウ数ごとの初期選択インデックスを検証する
-    @Test("初期選択インデックスが件数に応じて正しく計算される")
+    /// ウィンドウ数および起動モード方針ごとの初期選択インデックスを検証する
+    @Test("初期選択インデックスが件数と起動モード方針に応じて正しく計算される")
     func initialIndexCalculation() {
+        // 通常スイッチャー（既定: preferSecondItem = true）は2件以上で2番目を選択
         #expect(SwitcherSelection.initialIndex(count: 0) == nil)
         #expect(SwitcherSelection.initialIndex(count: 1) == 0)
         #expect(SwitcherSelection.initialIndex(count: 2) == 1)
         #expect(SwitcherSelection.initialIndex(count: 5) == 1)
+        #expect(SwitcherSelection.initialIndex(count: 2, preferSecondItem: true) == 1)
+
+        // 検索ランチャー（preferSecondItem = false）は1件以上なら常に1番目（0）を選択
+        #expect(SwitcherSelection.initialIndex(count: 0, preferSecondItem: false) == nil)
+        #expect(SwitcherSelection.initialIndex(count: 1, preferSecondItem: false) == 0)
+        #expect(SwitcherSelection.initialIndex(count: 2, preferSecondItem: false) == 0)
+        #expect(SwitcherSelection.initialIndex(count: 5, preferSecondItem: false) == 0)
     }
 
     /// 次移動の循環計算（Wrap-Around）を検証する

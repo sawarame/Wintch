@@ -4,6 +4,9 @@ import SwiftUI
 /// ランチャーモード専用の検索入力フィールド（AppKit NSTextField ラッパー）
 /// 日本語 IME 変換中のキー操作を優先しつつ、確定・キャンセル・上下移動コマンドを処理する
 public struct LauncherSearchField: NSViewRepresentable {
+    /// 検索入力欄に表示するプレースホルダー文言
+    public static let placeholderText = "ウィンドウまたはアプリを検索..."
+
     /// 検索文字列の双方向バインディング
     @Binding private var text: String
     /// フィールドが現在表示・フォーカス対象としてアクティブか
@@ -14,6 +17,23 @@ public struct LauncherSearchField: NSViewRepresentable {
     private let onConfirm: () -> Void
     /// Esc キーでパネルをキャンセル終了するコールバック
     private let onCancel: () -> Void
+
+    /// 視認性を確保したプレースホルダー用属性付き文字列を生成する
+    /// - Parameter text: プレースホルダーとして表示する文言
+    /// - Returns: secondaryLabelColor と 15pt レギュラーフォントを設定した属性付き文字列
+    @MainActor
+    public static func makePlaceholderAttributedString(
+        _ text: String = placeholderText
+    ) -> NSAttributedString {
+        // 半透明マテリアル上でも判読しやすく、かつ入力文字（labelColor）と識別できるよう secondaryLabelColor を用いる
+        NSAttributedString(
+            string: text,
+            attributes: [
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .font: NSFont.systemFont(ofSize: 15, weight: .regular)
+            ]
+        )
+    }
 
     /// 検索入力フィールドを初期化する
     /// - Parameters:
@@ -40,9 +60,17 @@ public struct LauncherSearchField: NSViewRepresentable {
     /// - Parameter context: Representable コンテキスト
     /// - Returns: 設定済みの NSTextField
     public func makeNSView(context: Context) -> NSTextField {
+        makeConfiguredTextField(delegate: context.coordinator)
+    }
+
+    /// 検索入力欄用の設定済み NSTextField を生成する
+    /// - Parameter delegate: テキスト入力コマンドを処理するデリゲート（単体テスト時は nil 指定可）
+    /// - Returns: プレースホルダー・外観・単一行入力設定を適用した NSTextField
+    @MainActor
+    internal func makeConfiguredTextField(delegate: NSTextFieldDelegate?) -> NSTextField {
         let textField = NSTextField()
-        textField.delegate = context.coordinator
-        textField.placeholderString = "ウィンドウまたはアプリを検索..."
+        textField.delegate = delegate
+        textField.placeholderAttributedString = Self.makePlaceholderAttributedString()
         textField.isBordered = false
         textField.isBezeled = false
         textField.drawsBackground = false
