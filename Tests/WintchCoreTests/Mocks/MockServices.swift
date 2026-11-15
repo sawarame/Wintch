@@ -244,13 +244,64 @@ final class MockLaunchAtLoginService: LaunchAtLoginServicing {
 /// テスト用のアイコンプロバイダモック
 @MainActor
 final class MockIconProvider: IconProviding {
-    /// 返却するアイコンマップ
+    /// PID ごとに返却するアイコンマップ
     var stubbedIcons: [Int32: NSImage] = [:]
+    /// アプリ URL ごとに返却するアイコンマップ
+    var stubbedAppIcons: [URL: NSImage] = [:]
 
     /// PID に対応するスタブアイコンを返す
     /// - Parameter pid: プロセス ID
     /// - Returns: 設定されていれば画像、なければ nil
     func icon(for pid: Int32) -> NSImage? {
         stubbedIcons[pid]
+    }
+
+    /// アプリバンドル URL に対応するスタブアイコンを返す
+    /// - Parameter url: アプリケーションバンドルの URL
+    /// - Returns: 設定されていれば画像、なければ nil
+    func icon(forAppURL url: URL) -> NSImage? {
+        stubbedAppIcons[url.standardizedFileURL]
+    }
+}
+
+/// テスト用のインストール済みアプリ取得・起動サービスモック
+@MainActor
+final class MockInstalledAppService: InstalledAppServicing {
+    /// キャッシュ済みとして返却する起動可能アプリ配列
+    var stubbedApps: [LaunchableApp] = []
+    /// refreshInstalledApps 実行時に返すアプリ配列（nil の場合は stubbedApps を返す）
+    var refreshedApps: [LaunchableApp]?
+    /// 非同期リフレッシュの待機や差し込みを行う任意のフック
+    var refreshHandler: (() async -> [LaunchableApp])?
+    /// refreshInstalledApps が呼ばれた回数
+    var refreshCallCount = 0
+    /// launchApplication で起動が要求されたアプリ履歴
+    var launchedApps: [LaunchableApp] = []
+
+    /// スタブ設定されたキャッシュ済みアプリ一覧を返す
+    /// - Returns: 起動可能アプリの配列
+    func cachedInstalledApps() -> [LaunchableApp] {
+        stubbedApps
+    }
+
+    /// 非同期リフレッシュを実行し、更新後のアプリ一覧をキャッシュおよび返却する
+    /// - Returns: 更新後の起動可能アプリ配列
+    @discardableResult
+    func refreshInstalledApps() async -> [LaunchableApp] {
+        refreshCallCount += 1
+        let next: [LaunchableApp]
+        if let refreshHandler {
+            next = await refreshHandler()
+        } else {
+            next = refreshedApps ?? stubbedApps
+        }
+        stubbedApps = next
+        return next
+    }
+
+    /// アプリケーション起動要求を記録する
+    /// - Parameter app: 起動対象のアプリケーション情報
+    func launchApplication(_ app: LaunchableApp) {
+        launchedApps.append(app)
     }
 }

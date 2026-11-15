@@ -1,10 +1,13 @@
 import AppKit
 
-/// プロセス ID ごとのアプリアイコンを取得・キャッシュするサービス
+/// プロセス ID およびアプリバンドル URL ごとのアプリアイコンを取得・キャッシュするサービス
 @MainActor
 public final class IconProviderService: IconProviding {
     /// プロセス ID ごとのアイコンキャッシュ
     private var cache: [Int32: NSImage] = [:]
+
+    /// アプリバンドル URL ごとのアイコンキャッシュ
+    private var appURLCache: [URL: NSImage] = [:]
 
     /// アプリ終了通知の監視トークン
     private var terminationObserver: NSObjectProtocol?
@@ -40,6 +43,22 @@ public final class IconProviderService: IconProviding {
             return nil
         }
         cache[pid] = icon
+        return icon
+    }
+
+    /// アプリケーションバンドル URL に対応するアプリアイコンを取得する
+    /// - Parameter url: 対象アプリケーションバンドルの URL
+    /// - Returns: アプリアイコン画像（取得できない場合は nil）
+    public func icon(forAppURL url: URL) -> NSImage? {
+        let key = url.standardizedFileURL
+        if let cached = appURLCache[key] {
+            return cached
+        }
+        guard FileManager.default.fileExists(atPath: key.path) else {
+            return nil
+        }
+        let icon = NSWorkspace.shared.icon(forFile: key.path)
+        appURLCache[key] = icon
         return icon
     }
 }

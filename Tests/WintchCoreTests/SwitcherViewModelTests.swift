@@ -633,4 +633,170 @@ struct SwitcherViewModelTests {
         #expect(viewModel.isPresented == false)
         #expect(viewModel.mode == .inactive)
     }
+
+    /// ランチャー検索で既存ウィンドウが 0 件の場合にアプリ起動候補を表示し、選択移動・確定で新規起動できることを検証する
+    @Test("ランチャー検索で既存ウィンドウが0件のときアプリ起動候補を表示し選択・起動できる")
+    @MainActor
+    func launcherZeroWindowMatchesShowsAndLaunchesAppCandidates() {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Safari", title: "Apple")
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Calculator",
+                bundleIdentifier: "com.apple.calculator",
+                bundleURL: URL(fileURLWithPath: "/System/Applications/Calculator.app")
+            ),
+            LaunchableApp(
+                displayName: "Calendar",
+                bundleIdentifier: "com.apple.iCal",
+                bundleURL: URL(fileURLWithPath: "/System/Applications/Calendar.app")
+            ),
+            LaunchableApp(
+                displayName: "Safari",
+                bundleIdentifier: "com.apple.Safari",
+                bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
+        )
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.isShowingLaunchCandidates == false)
+        #expect(viewModel.displayedAppResults.isEmpty)
+
+        // 既存ウィンドウに一致する場合はアプリ候補を出さない
+        viewModel.updateSearchQuery("saf")
+        #expect(viewModel.displayedResults.map(\.id) == ["w1"])
+        #expect(viewModel.isShowingLaunchCandidates == false)
+        #expect(viewModel.displayedAppResults.isEmpty)
+
+        // 既存ウィンドウに一致しない "cal" を入力すると Calculator / Calendar がアプリ候補に出る
+        viewModel.updateSearchQuery("cal")
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.isShowingLaunchCandidates == true)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Calculator", "Calendar"])
+        #expect(viewModel.selectedIndex == 0)
+
+        // 上下キーおよび通常スイッチャーショートカットでアプリ候補内を循環移動できる
+        viewModel.moveSelection(.down)
+        #expect(viewModel.selectedIndex == 1)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.selectedIndex == 1)
+
+        // 検索語を空に戻すと既存ウィンドウ一覧に戻る
+        viewModel.updateSearchQuery("")
+        #expect(viewModel.isShowingLaunchCandidates == false)
+        #expect(viewModel.displayedAppResults.isEmpty)
+        #expect(viewModel.displayedResults.map(\.id) == ["w1"])
+
+        // 再び "cal" で絞り込み、2番目の Calendar をクリック相当で確定するとアプリが起動しパネルが閉じる
+        viewModel.updateSearchQuery("cal")
+        viewModel.selectAndActivate(at: 1)
+        #expect(viewModel.isPresented == false)
+        #expect(viewModel.mode == .inactive)
+        #expect(hotKeyMonitor.activeMode == .inactive)
+        #expect(windowService.activatedWindows.isEmpty)
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["Calendar"])
+    }
+
+    /// アプリ候補表示中のウィンドウクローズ無視、クローズによる 0 件化時のアプリ候補遷移、および非同期更新反映を検証する
+    @Test("ウィンドウクローズで0件になった場合のアプリ候補表示と非同期更新が安全に動作する")
+    @MainActor
+    func closeToZeroShowsAppCandidatesAndBackgroundRefreshUpdatesSafely() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Slack", title: "General", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 20, applicationName: "Safari", title: "Docs", lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Slack",
+                bundleIdentifier: "com.tinyspeck.slackmacgap",
+                bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+            )
+        ]
+
+        var refreshContinuation: CheckedContinuation<[LaunchableApp], Never>?
+        var refreshHandlerEnteredContinuation: CheckedContinuation<Void, Never>?
+        installedAppService.refreshHandler = {
+            refreshHandlerEnteredContinuation?.resume()
+            refreshHandlerEnteredContinuation = nil
+            return await withCheckedContinuation { cont in
+                refreshContinuation = cont
+            }
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
+        )
+
+        // バックグラウンド更新が待機状態に入るのを確実に待ってからテストを進める
+        await withCheckedContinuation { cont in
+            refreshHandlerEnteredContinuation = cont
+            viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        }
+        viewModel.updateSearchQuery("sla")
+        #expect(viewModel.displayedResults.map(\.id) == ["w1"])
+
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [10])
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.isShowingLaunchCandidates == true)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack"])
+
+        // アプリ候補表示中の closeSelectedWindow は対象ウィンドウが無いため安全に無視される
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.closedWindows.isEmpty)
+        #expect(windowService.terminatedPIDs == [10])
+
+        // ランチャー表示中に裏のアプリ一覧リフレッシュが完了し新アプリが増えた場合、候補が再評価される
+        await withCheckedContinuation { updateWaitCont in
+            viewModel.onSearchResultsUpdated = {
+                updateWaitCont.resume()
+            }
+            refreshContinuation?.resume(returning: [
+                LaunchableApp(
+                    displayName: "Slack",
+                    bundleIdentifier: "com.tinyspeck.slackmacgap",
+                    bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+                ),
+                LaunchableApp(
+                    displayName: "Slack Helper App",
+                    bundleIdentifier: "com.example.slackhelper",
+                    bundleURL: URL(fileURLWithPath: "/Applications/Slack Helper App.app")
+                )
+            ])
+        }
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack", "Slack Helper App"])
+
+        // Enter（confirmSelection）で先頭の Slack を起動する
+        viewModel.confirmSelection()
+        #expect(viewModel.isPresented == false)
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["Slack"])
+    }
 }

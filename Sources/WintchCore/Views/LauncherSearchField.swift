@@ -42,7 +42,7 @@ public struct LauncherSearchField: NSViewRepresentable {
     public func makeNSView(context: Context) -> NSTextField {
         let textField = NSTextField()
         textField.delegate = context.coordinator
-        textField.placeholderString = "ウィンドウを検索..."
+        textField.placeholderString = "ウィンドウまたはアプリを検索..."
         textField.isBordered = false
         textField.isBezeled = false
         textField.drawsBackground = false
