@@ -1211,4 +1211,188 @@ struct SwitcherViewModelTests {
         #expect(viewModel.capturedThumbnails.isEmpty)
         #expect(captureService.capturedRequestWindowIDs.count == 1)
     }
+
+    /// メモアプリで 1 枚のみ実ウィンドウを開き裏方ゴースト候補が混在する場合でも、
+    /// スイッチャー（リスト型／キャプチャ表示型）および検索ランチャー双方で 1 件のみ表示され、
+    /// 閉じる操作で単一ウィンドウ終了（terminateApplication）が実行されることを検証する
+    @Test("メモアプリのゴースト候補が混在してもスイッチャーとランチャー双方で1件のみ表示し単一終了判定できる")
+    @MainActor
+    func notesGhostCandidatesDeduplicatedInBothSwitcherAndLauncherWithSingleWindowClose() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "ax-vscode-1",
+                cgWindowID: 55,
+                pid: 1081,
+                bundleIdentifier: "com.microsoft.VSCode",
+                applicationName: "Code",
+                title: "Wintch",
+                bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 1080),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                lastActivatedAt: now,
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "ax-notes-main",
+                cgWindowID: 7248,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: "eco検定 – 14件のメモ",
+                bounds: WindowBounds(x: 487, y: 30, width: 1157, height: 1046),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                lastActivatedAt: now.addingTimeInterval(-10),
+                zOrderIndex: 1
+            ),
+            RawWindowCandidate(
+                id: "cg-notes-aux-475",
+                cgWindowID: 7247,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: nil,
+                bounds: WindowBounds(x: 828, y: 253, width: 475, height: 600),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 2
+            ),
+            RawWindowCandidate(
+                id: "cg-notes-backing-500",
+                cgWindowID: 7249,
+                pid: 71905,
+                bundleIdentifier: "com.apple.Notes",
+                applicationName: "メモ",
+                title: nil,
+                bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 3
+            )
+        ]
+
+        // 1. 通常スイッチャー（リスト型）でメモが 1 件のみ表示される
+        let listSwitcherVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            normalDisplayStyle: .list
+        )
+        listSwitcherVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(listSwitcherVM.entries.map(\.id) == ["ax-vscode-1", "ax-notes-main"])
+        listSwitcherVM.cancel()
+
+        // 2. 通常スイッチャー（キャプチャ表示型）でもメモが 1 件のみ表示される
+        let captureSwitcherVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture
+        )
+        captureSwitcherVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        await Task.yield()
+        #expect(captureSwitcherVM.entries.map(\.id) == ["ax-vscode-1", "ax-notes-main"])
+        captureSwitcherVM.cancel()
+
+        // 3. 検索ランチャーでもメモは 1 件のみ表示され、クローズ操作で単一ウィンドウとしてアプリ終了が呼ばれる
+        let launcherVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider
+        )
+        launcherVM.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(launcherVM.entries.map(\.id) == ["ax-vscode-1", "ax-notes-main"])
+
+        launcherVM.updateSearchQuery("メモ")
+        #expect(launcherVM.entries.map(\.id) == ["ax-notes-main"])
+        #expect(launcherVM.selectedIndex == 0)
+
+        await launcherVM.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [71905])
+        #expect(windowService.closedWindows.isEmpty)
+    }
+
+    /// 500x500 の未表示バックキングウィンドウのみ保持する待機中アプリ（Gemini 等）は
+    /// ウィンドウ候補に含まれず、検索ランチャーではアプリ起動候補として扱われることを検証する
+    @Test("500x500裏方窓のみの待機中アプリはウィンドウ除外されランチャーでアプリ起動候補となる")
+    @MainActor
+    func idleAppWithOnlyHiddenBackingWindowShowsAsLaunchCandidateInLauncher() {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "ax-vscode-1",
+                cgWindowID: 55,
+                pid: 1081,
+                bundleIdentifier: "com.microsoft.VSCode",
+                applicationName: "Code",
+                title: "Wintch",
+                bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 1080),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: true,
+                lastActivatedAt: Date(),
+                zOrderIndex: 0
+            ),
+            RawWindowCandidate(
+                id: "cg-gemini-backing",
+                cgWindowID: 7261,
+                pid: 72152,
+                bundleIdentifier: "com.google.GeminiMacOS",
+                applicationName: "Gemini",
+                title: nil,
+                bounds: WindowBounds(x: 0, y: 580, width: 500, height: 500),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 1
+            )
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Gemini",
+                bundleIdentifier: "com.google.GeminiMacOS",
+                bundleURL: URL(fileURLWithPath: "/Applications/Gemini.app")
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
+        )
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.entries.map(\.id) == ["ax-vscode-1"])
+
+        viewModel.updateSearchQuery("gemini")
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Gemini"])
+    }
 }
