@@ -29,4 +29,14 @@ public enum SwitcherSelection {
         guard count > 0 else { return 0 }
         return (current - 1 + count) % count
     }
+
+    /// 項目を1件除外した後の選択インデックスを安全に補正する
+    /// - Parameters:
+    ///   - current: 除外前の選択インデックス
+    ///   - remainingCount: 除外後のリスト件数
+    /// - Returns: 残余が0件以下の場合は 0、それ以外は同じ位置または新しい末尾インデックス
+    public static func indexAfterRemoval(current: Int, remainingCount: Int) -> Int {
+        guard remainingCount > 0 else { return 0 }
+        return min(max(current, 0), remainingCount - 1)
+    }
 }

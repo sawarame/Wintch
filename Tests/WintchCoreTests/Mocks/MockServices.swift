@@ -13,6 +13,22 @@ final class MockWindowService: WindowServicing {
     var stubbedCandidates: [RawWindowCandidate] = []
     /// アクティブ化が要求されたウィンドウ履歴
     var activatedWindows: [WindowEntry] = []
+    /// クローズが要求されたウィンドウ履歴
+    var closedWindows: [WindowEntry] = []
+    /// ウィンドウ ID ごとの closeWindow スタブ結果（未指定時は closeWindowDefaultResult を使用）
+    var stubbedCloseWindowResults: [String: Bool] = [:]
+    /// closeWindow のデフォルト戻り値
+    var closeWindowDefaultResult = true
+    /// 非同期のクローズ挙動（待機や割り込みテスト）を差し込む任意のフック
+    var closeWindowHandler: ((WindowEntry) async -> Bool)?
+    /// アプリケーション終了が要求された PID 履歴
+    var terminatedPIDs: [Int32] = []
+    /// PID ごとの terminateApplication スタブ結果（未指定時は terminateDefaultResult を使用）
+    var stubbedTerminateResults: [Int32: Bool] = [:]
+    /// terminateApplication のデフォルト戻り値
+    var terminateDefaultResult = true
+    /// 非同期のアプリ終了挙動を差し込む任意のフック
+    var terminateHandler: ((Int32) async -> Bool)?
 
     /// 監視開始を記録する
     func startObserving() {
@@ -34,6 +50,28 @@ final class MockWindowService: WindowServicing {
     /// - Parameter entry: アクティブ化対象ウィンドウ
     func activateWindow(_ entry: WindowEntry) {
         activatedWindows.append(entry)
+    }
+
+    /// 対象ウィンドウのクローズ要求を記録し、スタブ設定に応じた成否を返す
+    /// - Parameter entry: クローズ対象ウィンドウ
+    /// - Returns: スタブまたはハンドラが決定したクローズ成否
+    func closeWindow(_ entry: WindowEntry) async -> Bool {
+        closedWindows.append(entry)
+        if let closeWindowHandler {
+            return await closeWindowHandler(entry)
+        }
+        return stubbedCloseWindowResults[entry.id] ?? closeWindowDefaultResult
+    }
+
+    /// 対象アプリケーションの終了要求を記録し、スタブ設定に応じた成否を返す
+    /// - Parameter pid: 終了対象プロセス ID
+    /// - Returns: スタブまたはハンドラが決定した終了成否
+    func terminateApplication(pid: Int32) async -> Bool {
+        terminatedPIDs.append(pid)
+        if let terminateHandler {
+            return await terminateHandler(pid)
+        }
+        return stubbedTerminateResults[pid] ?? terminateDefaultResult
     }
 }
 

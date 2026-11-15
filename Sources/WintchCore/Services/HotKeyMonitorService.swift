@@ -200,6 +200,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         return decision.shouldConsume ? nil : Unmanaged.passUnretained(event)
     }
 
+    /// 選択中ウィンドウを閉じる操作に割り当てる Q キーの仮想キーコード (ANSI kVK_ANSI_Q)
+    public nonisolated static let closeWindowKeyCode: UInt16 = 12
+
     /// 現在の監視モードとキー入力から通知イベントおよび消費有無を判定する純粋関数
     /// - Parameters:
     ///   - mode: 現在の監視モード
@@ -220,6 +223,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             && modifiers.subtracting(.shift) == shortcut.modifiers
         let isLauncherMatch = keyCode == launcherShortcut.keyCode
             && modifiers == launcherShortcut.modifiers
+        // ウィンドウ終了操作（修飾キー + Q）は逆順移動直後の Shift 残存も許容して判定する
+        let isCloseWindowMatch = keyCode == closeWindowKeyCode
+            && modifiers.subtracting(.shift) == shortcut.modifiers
         let isShiftPressed = modifiers.contains(.shift)
 
         switch mode {
@@ -261,6 +267,13 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             if isLauncherMatch {
                 return HotKeyKeyDownDecision(event: nil, shouldConsume: true)
             }
+            // 通常スイッチャー必須修飾キー + Q で選択ウィンドウ終了イベントを通知して消費する
+            if isCloseWindowMatch {
+                return HotKeyKeyDownDecision(
+                    event: .closeSelectedWindowPressed,
+                    shouldConsume: true
+                )
+            }
             return HotKeyKeyDownDecision(event: nil, shouldConsume: false)
 
         case .launcher:
@@ -278,7 +291,14 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
                     shouldConsume: true
                 )
             }
-            // Esc / 上下矢印 / 文字入力 / IME 変換操作はキーウィンドウへ通過させる
+            // 通常スイッチャー必須修飾キー + Q は選択ウィンドウ終了として通知し、特殊文字入力等を防ぐため消費する
+            if isCloseWindowMatch {
+                return HotKeyKeyDownDecision(
+                    event: .closeSelectedWindowPressed,
+                    shouldConsume: true
+                )
+            }
+            // Esc / 上下矢印 / 単体 Q や Shift + Q を含む文字入力 / IME 変換操作はキーウィンドウへ通過させる
             return HotKeyKeyDownDecision(event: nil, shouldConsume: false)
         }
     }

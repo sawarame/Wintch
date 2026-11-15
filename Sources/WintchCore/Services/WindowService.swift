@@ -286,6 +286,86 @@ public final class WindowService: WindowServicing {
         }
     }
 
+    /// 指定されたウィンドウ1枚のみを閉じる操作を実行し、実際に消滅したかを確認して返す
+    /// - Parameter entry: クローズ対象のウィンドウ項目
+    /// - Returns: ウィンドウが閉じられたことを確認した場合は true、非対応や確認ダイアログ等で残存した場合は false
+    public func closeWindow(_ entry: WindowEntry) async -> Bool {
+        guard let target = await resolveCachedWindowWithSpaceFallback(entry) else {
+            return false
+        }
+
+        // クローズボタン属性が存在し、かつ無効化されていない場合のみ押下アクションを実行する
+        var closeButtonRef: CFTypeRef?
+        let buttonStatus = AXUIElementCopyAttributeValue(
+            target.axElement,
+            kAXCloseButtonAttribute as CFString,
+            &closeButtonRef
+        )
+        guard buttonStatus == .success,
+              let closeButtonVal = closeButtonRef,
+              CFGetTypeID(closeButtonVal) == AXUIElementGetTypeID() else {
+            return false
+        }
+
+        let closeButton = closeButtonVal as! AXUIElement
+        if let isEnabled = copyBoolAttribute(closeButton, attribute: kAXEnabledAttribute as CFString), !isEnabled {
+            return false
+        }
+
+        let pressStatus = AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
+        guard pressStatus == .success else {
+            return false
+        }
+
+        // 非同期のウィンドウ破棄に対応するため、短時間（最大約150ms）消滅をポーリング確認する
+        let maxAttempts = 10
+        for _ in 0..<maxAttempts {
+            try? await Task.sleep(for: .milliseconds(15))
+            if !isAXWindowAlive(target.axElement, pid: entry.pid) {
+                removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: target.axElement)
+                return true
+            }
+        }
+
+        // 未保存変更の確認ダイアログ（シート）表示などで依然として開いている場合は残存とみなす
+        return false
+    }
+
+    /// 指定された PID のアプリケーションに対して通常の終了要求を送信し、プロセス終了を確認して返す
+    /// - Parameter pid: 終了対象のプロセス ID
+    /// - Returns: アプリケーションが終了したことを確認できた場合は true、確認ダイアログ等で残存した場合は false
+    public func terminateApplication(pid: Int32) async -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            cachedWindowsByPID.removeValue(forKey: pid)
+            unregisterObserver(for: pid)
+            return true
+        }
+        if app.isTerminated {
+            cachedWindowsByPID.removeValue(forKey: pid)
+            unregisterObserver(for: pid)
+            return true
+        }
+
+        // 通常のアプリ終了要求（Command+Q 相当）を送信し、強制終了（forceTerminate）は行わない
+        guard app.terminate() else {
+            return false
+        }
+
+        // 非同期の終了処理（最大約500ms）をポーリングして終了を確認する
+        let maxAttempts = 25
+        for _ in 0..<maxAttempts {
+            try? await Task.sleep(for: .milliseconds(20))
+            if app.isTerminated {
+                cachedWindowsByPID.removeValue(forKey: pid)
+                unregisterObserver(for: pid)
+                return true
+            }
+        }
+
+        // 未保存変更のダイアログ等で終了がキャンセル・保留された場合は残存とみなす
+        return false
+    }
+
     // MARK: - 内部ヘルパー
 
     /// CGWindowListCopyWindowInfo の抽出用メタデータ構造体
@@ -541,6 +621,99 @@ public final class WindowService: WindowServicing {
               let idx = list.firstIndex(where: { $0.id == windowID }) else { return }
         list[idx].lastActivatedAt = date
         cachedWindowsByPID[pid] = list
+    }
+
+    /// クローズ対象ウィンドウに対応するキャッシュ済み AXUIElement を解決する
+    /// - Parameter entry: クローズ対象のウィンドウ項目
+    /// - Returns: 一致したキャッシュエントリ（解決できない場合は nil）
+    private func resolveCachedWindowForClose(_ entry: WindowEntry) -> CachedAXWindow? {
+        if let list = cachedWindowsByPID[entry.pid] {
+            if let exact = list.first(where: { $0.id == entry.id }) {
+                return exact
+            }
+            if let cgID = entry.cgWindowID,
+               let byCG = list.first(where: { $0.cgWindowID == cgID }) {
+                return byCG
+            }
+        }
+
+        // 別スペース等で未キャッシュだった場合に備えて対象 PID の AX ウィンドウを再スキャンする
+        refreshAXWindows(for: entry.pid, markFrontmostAsActive: false)
+        guard let refreshed = cachedWindowsByPID[entry.pid] else { return nil }
+        if let exact = refreshed.first(where: { $0.id == entry.id }) {
+            return exact
+        }
+        if let cgID = entry.cgWindowID,
+           let byCG = refreshed.first(where: { $0.cgWindowID == cgID }) {
+            return byCG
+        }
+        // CGWindow 補完識別子 (cg-*) のみ保持していた場合はタイトル一致で補助照合する
+        if entry.id.hasPrefix("cg-"), !entry.windowTitle.isEmpty {
+            return refreshed.first(where: { $0.title == entry.windowTitle })
+        }
+        return nil
+    }
+
+    /// 別操作スペースに存在し未キャッシュのウィンドウに対し、必要に応じてスペース移動を行って AXUIElement を解決する
+    /// - Parameter entry: クローズ対象のウィンドウ項目
+    /// - Returns: 解決されたキャッシュエントリ（取得できない場合は nil）
+    private func resolveCachedWindowWithSpaceFallback(_ entry: WindowEntry) async -> CachedAXWindow? {
+        if let resolved = resolveCachedWindowForClose(entry) {
+            return resolved
+        }
+
+        // 別 Space 上のウィンドウ（cg-* 等）で AXUIElement が未取得の場合、アプリをアクティブ化して自動遷移させる
+        guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated else {
+            return nil
+        }
+
+        app.activate()
+        // Space 切り替えアニメーションと AX ツリー反映を待ちつつ最大約600ms再試行する
+        let maxAttempts = 15
+        for _ in 0..<maxAttempts {
+            try? await Task.sleep(for: .milliseconds(40))
+            if let resolved = resolveCachedWindowForClose(entry) {
+                return resolved
+            }
+        }
+        return nil
+    }
+
+    /// 指定された AXUIElement ウィンドウが現在もアプリケーション上に存在しているかを判定する
+    /// - Parameters:
+    ///   - axElement: 確認対象の AXUIElement
+    ///   - pid: 所有プロセスの PID
+    /// - Returns: ウィンドウがまだ生存している場合は true、閉じられて消滅している場合は false
+    private func isAXWindowAlive(_ axElement: AXUIElement, pid: Int32) -> Bool {
+        if let app = NSRunningApplication(processIdentifier: pid), app.isTerminated {
+            return false
+        }
+
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowsRef: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
+        if status == .success, let axWindows = windowsRef as? [AXUIElement] {
+            return axWindows.contains { CFEqual($0, axElement) }
+        }
+
+        // ウィンドウ一覧取得に失敗した場合は対象要素のロール読み取り可否で生存確認する
+        var roleRef: CFTypeRef?
+        return AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleRef) == .success
+    }
+
+    /// クローズ確認済みのウィンドウを内部キャッシュから除去する
+    /// - Parameters:
+    ///   - pid: 所有プロセスの PID
+    ///   - windowID: 除外するウィンドウ識別子
+    ///   - axElement: 除外する AXUIElement 参照
+    private func removeCachedWindow(pid: Int32, windowID: String, axElement: AXUIElement) {
+        guard var list = cachedWindowsByPID[pid] else { return }
+        list.removeAll { $0.id == windowID || CFEqual($0.axElement, axElement) }
+        if list.isEmpty {
+            cachedWindowsByPID.removeValue(forKey: pid)
+        } else {
+            cachedWindowsByPID[pid] = list
+        }
     }
 
     // MARK: - AXObserver 管理
