@@ -30,7 +30,7 @@ description: "Task list for 010-launcher-without-windows"
 
 **Purpose**: 既存ビルドおよび全ユニットテストのベースライン状態を確認する
 
-- [ ] T001 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、`Package.swift` および `Tests/WintchCoreTests/` の現状テストベースラインが全件合格することを確認する
+- [X] T001 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、`Package.swift` および `Tests/WintchCoreTests/` の現状テストベースラインが全件合格することを確認する
 
 ---
 
@@ -40,8 +40,8 @@ description: "Task list for 010-launcher-without-windows"
 
 **⚠️ CRITICAL**: すべてのユーザーストーリーは `LauncherEmptyState` に依存するため、Phase 2 完了後に各ストーリーの実装・検証へ進む
 
-- [ ] T002 `Tests/WintchCoreTests/LauncherEmptyStateTests.swift` を新規作成し、`LauncherEmptyState.resolve(hasOpenWindows:searchQuery:displayedWindowCount:displayedAppCount:)` の純粋判定規則（`displayedWindowCount > 0 || displayedAppCount > 0` なら常に `nil`、`!hasOpenWindows` かつ空文字/空白/全角スペースのみで `.noOpenWindows`、`!hasOpenWindows` かつ非空トークンで `.noMatchingApps`、`hasOpenWindows` かつ非空トークンで `.noMatchingCandidates`）および各状態の `message` 文言を検証する単体テストを先行記述する
-- [ ] T003 `Sources/WintchCore/Domain/LauncherEmptyState.swift` を新規作成し、`Equatable`・`Sendable` 準拠の `LauncherEmptyState` 列挙型（`.noOpenWindows` / `.noMatchingApps` / `.noMatchingCandidates`）、`FuzzySearchMatcher.tokenize(_:)` を用いた `resolve(...)` 純粋関数、および `message: String`（`noOpenWindows`: `"開いているウィンドウがありません（アプリ名を入力して起動）"`、`noMatchingApps`: `"一致するアプリがありません"`、`noMatchingCandidates`: `"一致するウィンドウやアプリがありません"`）を日本語ドキュメントコメント・インラインコメント付きで実装する（T002 に依存）
+- [X] T002 `Tests/WintchCoreTests/LauncherEmptyStateTests.swift` を新規作成し、`LauncherEmptyState.resolve(hasOpenWindows:searchQuery:displayedWindowCount:displayedAppCount:)` の純粋判定規則（`displayedWindowCount > 0 || displayedAppCount > 0` なら常に `nil`、`!hasOpenWindows` かつ空文字/空白/全角スペースのみで `.noOpenWindows`、`!hasOpenWindows` かつ非空トークンで `.noMatchingApps`、`hasOpenWindows` かつ非空トークンで `.noMatchingCandidates`）および各状態の `message` 文言を検証する単体テストを先行記述する
+- [X] T003 `Sources/WintchCore/Domain/LauncherEmptyState.swift` を新規作成し、`Equatable`・`Sendable` 準拠の `LauncherEmptyState` 列挙型（`.noOpenWindows` / `.noMatchingApps` / `.noMatchingCandidates`）、`FuzzySearchMatcher.tokenize(_:)` を用いた `resolve(...)` 純粋関数、および `message: String`（`noOpenWindows`: `"開いているウィンドウがありません（アプリ名を入力して起動）"`、`noMatchingApps`: `"一致するアプリがありません"`、`noMatchingCandidates`: `"一致するウィンドウやアプリがありません"`）を日本語ドキュメントコメント・インラインコメント付きで実装する（T002 に依存）
 
 **Checkpoint**: `LauncherEmptyStateTests` が合格し、空状態判定とメッセージ定義の基盤が利用可能になる
 
@@ -57,12 +57,12 @@ description: "Task list for 010-launcher-without-windows"
 
 > **NOTE: 対象テストを先行追加し、期待される 0 件起動・アプリ起動挙動を検証可能にする**
 
-- [ ] T004 [US1] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` に、ウィンドウ 0 件環境における検索ランチャー起動（`mode == .launcher`、`allEntries.isEmpty`、`displayedResults.isEmpty`、`displayedAppResults.isEmpty`、`selectedIndex == 0`、`emptyState == .noOpenWindows`、`hotKeyMonitor.activeMode == .launcher`、`scheduleInstalledAppsRefresh()` 実行）、未入力空白文字維持、文字入力によるアプリ起動候補表示（`emptyState == nil`）と `confirmSelection()` / `selectAndActivate(at:)` によるアプリ起動、キャンセル（`Esc`・トグル再押下）、および権限未許可時の `onPermissionDenied` フォールバックを検証するユニットテストを追加する
+- [X] T004 [US1] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` に、ウィンドウ 0 件環境における検索ランチャー起動（`mode == .launcher`、`allEntries.isEmpty`、`displayedResults.isEmpty`、`displayedAppResults.isEmpty`、`selectedIndex == 0`、`emptyState == .noOpenWindows`、`hotKeyMonitor.activeMode == .launcher`、`scheduleInstalledAppsRefresh()` 実行）、未入力空白文字維持、文字入力によるアプリ起動候補表示（`emptyState == nil`）と `confirmSelection()` / `selectAndActivate(at:)` によるアプリ起動、キャンセル（`Esc`・トグル再押下）、および権限未許可時の `onPermissionDenied` フォールバックを検証するユニットテストを追加する
 
 ### Implementation for User Story 1
 
-- [ ] T005 [US1] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` を更新し、`present(targetMode:)` で `sorted.isEmpty && targetMode != .launcher` の場合のみ早期リターン（`.launcher` は `sorted.isEmpty` でも `selectedIndex = initial ?? 0` で起動許可し、`scheduleInstalledAppsRefresh()` と通知ハンドラを実行）するよう修正し、導出プロパティ `hasOpenWindows: Bool`、`emptyState: LauncherEmptyState?`（`mode == .launcher` 時のみ `LauncherEmptyState.resolve(...)` を返却）、および `launchSectionHeaderTitle: String`（`hasOpenWindows && displayedResults.isEmpty` なら `"一致するウィンドウがないため、アプリを起動"`、それ以外は `"アプリを起動"`）を日本語ドキュメントコメント付きで追加する（T003, T004 に依存）
-- [ ] T006 [US1] `Sources/WintchCore/Views/SwitcherListView.swift` を更新し、`viewModel.emptyState` が非 `nil` の場合に `emptyResultView(for: emptyState)` で `emptyState.message` を描画するよう分岐を変更し、`appLaunchSectionHeader` の見出し文字列に `viewModel.launchSectionHeaderTitle` を適用する（T005 に依存）
+- [X] T005 [US1] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` を更新し、`present(targetMode:)` で `sorted.isEmpty && targetMode != .launcher` の場合のみ早期リターン（`.launcher` は `sorted.isEmpty` でも `selectedIndex = initial ?? 0` で起動許可し、`scheduleInstalledAppsRefresh()` と通知ハンドラを実行）するよう修正し、導出プロパティ `hasOpenWindows: Bool`、`emptyState: LauncherEmptyState?`（`mode == .launcher` 時のみ `LauncherEmptyState.resolve(...)` を返却）、および `launchSectionHeaderTitle: String`（`hasOpenWindows && displayedResults.isEmpty` なら `"一致するウィンドウがないため、アプリを起動"`、それ以外は `"アプリを起動"`）を日本語ドキュメントコメント付きで追加する（T003, T004 に依存）
+- [X] T006 [US1] `Sources/WintchCore/Views/SwitcherListView.swift` を更新し、`viewModel.emptyState` が非 `nil` の場合に `emptyResultView(for: emptyState)` で `emptyState.message` を描画するよう分岐を変更し、`appLaunchSectionHeader` の見出し文字列に `viewModel.launchSectionHeaderTitle` を適用する（T005 に依存）
 
 **Checkpoint**: User Story 1（MVP）が完結し、ウィンドウ 0 件の環境から検索ランチャーを起動してインストール済みアプリを検索・起動できるようになる
 
@@ -76,11 +76,11 @@ description: "Task list for 010-launcher-without-windows"
 
 ### Tests for User Story 2
 
-- [ ] T007 [US2] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` の既存テスト `lastWindowCloseDismissesAndBoundaryStatesAreSafe` を更新し、通常モードで最後の 1 件を閉じた場合の自動終了は維持しつつ、ランチャーモードで最後の 1 件を閉じた場合はパネルが維持されて `emptyState == .noOpenWindows` へ遷移する検証へ改定するとともに、検索キーワード入力中に最後のウィンドウを閉じた場合のアプリ起動候補再評価・検索語クリアによる `.noOpenWindows` 復帰・一致 0 件（`.noMatchingApps`）時の `confirmSelection()` / `moveSelection(_:)` / `closeSelectedWindow()` 安全無視・ウィンドウ 0 件時の通常スイッチャー（順・逆）非起動を検証するテストを追加する
+- [X] T007 [US2] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` の既存テスト `lastWindowCloseDismissesAndBoundaryStatesAreSafe` を更新し、通常モードで最後の 1 件を閉じた場合の自動終了は維持しつつ、ランチャーモードで最後の 1 件を閉じた場合はパネルが維持されて `emptyState == .noOpenWindows` へ遷移する検証へ改定するとともに、検索キーワード入力中に最後のウィンドウを閉じた場合のアプリ起動候補再評価・検索語クリアによる `.noOpenWindows` 復帰・一致 0 件（`.noMatchingApps`）時の `confirmSelection()` / `moveSelection(_:)` / `closeSelectedWindow()` 安全無視・ウィンドウ 0 件時の通常スイッチャー（順・逆）非起動を検証するテストを追加する
 
 ### Implementation for User Story 2
 
-- [ ] T008 [US2] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` の `closeSelectedWindow()` を更新し、`if allEntries.isEmpty && targetMode == .normal` の場合のみ `dismiss(reason: .cancelled)` を実行して終了し、`targetMode == .launcher` の場合は `dismiss` せず `updateLauncherSearchResults(for: searchQuery)`・`selectedIndex` 補正・`onSearchResultsUpdated?()`・`onPanelFocusRestoreNeeded?(targetMode)` をそのまま実行してパネルとフォーカスを維持する（T005, T007 に依存）
+- [X] T008 [US2] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` の `closeSelectedWindow()` を更新し、`if allEntries.isEmpty && targetMode == .normal` の場合のみ `dismiss(reason: .cancelled)` を実行して終了し、`targetMode == .launcher` の場合は `dismiss` せず `updateLauncherSearchResults(for: searchQuery)`・`selectedIndex` 補正・`onSearchResultsUpdated?()`・`onPanelFocusRestoreNeeded?(targetMode)` をそのまま実行してパネルとフォーカスを維持する（T005, T007 に依存）
 
 **Checkpoint**: User Stories 1 と 2 の双方が独立して機能・テスト合格し、通常スイッチャーと検索ランチャーの境界および最後のウィンドウ終了時の遷移が一貫する
 
@@ -90,13 +90,13 @@ description: "Task list for 010-launcher-without-windows"
 
 **Purpose**: 過去仕様書との整合化（FR-009）、日本語コメント・憲章準拠レビュー、全ユニットテスト実行、および `.app` ビルド・動作確認を行う
 
-- [ ] T009 [P] `specs/002-window-search-launcher/spec.md` の Edge Cases / Requirements における「ウィンドウ 0 件時はランチャーを起動しない」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
-- [ ] T010 [P] `specs/005-close-selected-window/spec.md` における「ランチャーで最後のウィンドウを閉じたらパネルを閉じる」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
-- [ ] T011 [P] `specs/006-launcher-app-launch/spec.md` の Assumptions における「有効な通常ウィンドウが 1 件以上開かれている場合にランチャーパネルを開く」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
-- [ ] T012 [P] `specs/008-launcher-ux-refinement/spec.md` の Edge Cases における「ウィンドウ 0 件時はランチャーでも空パネルを表示しない」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
-- [ ] T013 変更した全 Swift ファイル（`Sources/WintchCore/Domain/LauncherEmptyState.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`, `Sources/WintchCore/Views/SwitcherListView.swift`, `Tests/WintchCoreTests/LauncherEmptyStateTests.swift`, `Tests/WintchCoreTests/SwitcherViewModelTests.swift`）について、日本語ドキュメントコメント（`///`）・日本語インラインコメント・憲章遵守（外部依存ゼロ・非公開 API 禁止・画面収録権限不使用・コード重複なし）をレビュー確認する（T003, T006, T008 完了後）
-- [ ] T014 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、全ユニットテストが 100% 合格することを確認する（T009〜T013 完了後）
-- [ ] T015 `specs/010-launcher-without-windows/quickstart.md` に従い `./scripts/build-app.sh` で `.build/Wintch.app` をビルドし、エラーなくバンドルが生成されることを確認する（T014 完了後）
+- [X] T009 [P] `specs/002-window-search-launcher/spec.md` の Edge Cases / Requirements における「ウィンドウ 0 件時はランチャーを起動しない」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
+- [X] T010 [P] `specs/005-close-selected-window/spec.md` における「ランチャーで最後のウィンドウを閉じたらパネルを閉じる」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
+- [X] T011 [P] `specs/006-launcher-app-launch/spec.md` の Assumptions における「有効な通常ウィンドウが 1 件以上開かれている場合にランチャーパネルを開く」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
+- [X] T012 [P] `specs/008-launcher-ux-refinement/spec.md` の Edge Cases における「ウィンドウ 0 件時はランチャーでも空パネルを表示しない」旨の記述を `010-launcher-without-windows` への参照注記付きで改定・整合化する
+- [X] T013 変更した全 Swift ファイル（`Sources/WintchCore/Domain/LauncherEmptyState.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`, `Sources/WintchCore/Views/SwitcherListView.swift`, `Tests/WintchCoreTests/LauncherEmptyStateTests.swift`, `Tests/WintchCoreTests/SwitcherViewModelTests.swift`）について、日本語ドキュメントコメント（`///`）・日本語インラインコメント・憲章遵守（外部依存ゼロ・非公開 API 禁止・画面収録権限不使用・コード重複なし）をレビュー確認する（T003, T006, T008 完了後）
+- [X] T014 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、全ユニットテストが 100% 合格することを確認する（T009〜T013 完了後）
+- [X] T015 `specs/010-launcher-without-windows/quickstart.md` に従い `./scripts/build-app.sh` で `.build/Wintch.app` をビルドし、エラーなくバンドルが生成されることを確認する（T014 完了後）
 
 ---
 

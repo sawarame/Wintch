@@ -37,11 +37,8 @@ public struct SwitcherListView: View {
                     .overlay(.white.opacity(0.14))
             }
 
-            if viewModel.mode == .launcher
-                && viewModel.displayedResults.isEmpty
-                && viewModel.displayedAppResults.isEmpty
-            {
-                emptyResultView
+            if let emptyState = viewModel.emptyState {
+                emptyResultView(for: emptyState)
             } else {
                 resultListView
             }
@@ -96,11 +93,12 @@ public struct SwitcherListView: View {
         .padding(.vertical, 12)
     }
 
-    /// 検索一致 0 件時の案内表示
-    private var emptyResultView: some View {
+    /// 候補 0 件時の案内表示
+    /// - Parameter state: 現在の空状態種別
+    private func emptyResultView(for state: LauncherEmptyState) -> some View {
         HStack {
             Spacer(minLength: 0)
-            Text("一致するウィンドウがありません")
+            Text(state.message)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .padding(.vertical, 24)
@@ -171,11 +169,7 @@ public struct SwitcherListView: View {
                 Image(systemName: "arrow.up.forward.app")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(
-                    viewModel.displayedResults.isEmpty
-                        ? "一致するウィンドウがないため、アプリを起動"
-                        : "アプリを起動"
-                )
+                Text(viewModel.launchSectionHeaderTitle)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
