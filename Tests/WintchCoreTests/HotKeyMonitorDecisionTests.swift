@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 @testable import WintchCore
 
@@ -387,5 +388,78 @@ struct HotKeyMonitorDecisionTests {
         windowService.stopObserving()
         windowService.startObserving()
         windowService.stopObserving()
+    }
+
+    /// ユーザー操作／権限剥奪による無効化および権限喪失・上限超過時に即座にタップ破棄と判定されることを検証する
+    @Test("resolveTapDisableDisposition はユーザー無効化や権限喪失・上限超過時に即座に破棄を返す")
+    func tapDisableDispositionProtectsKeyboardInputOnRevocation() {
+        var tracker = TapTimeoutRecoveryTracker(
+            burstWindowSeconds: 10.0,
+            maxImmediateRetriesInWindow: 1,
+            cooldownSeconds: 5.0,
+            longWindowSeconds: 60.0,
+            maxTotalRetriesInLongWindow: 2
+        )
+
+        // tapDisabledByUserInput は権限あり表記でも再有効化せず即座に破棄する
+        #expect(HotKeyMonitorService.resolveTapDisableDisposition(
+            reason: .tapDisabledByUserInput,
+            isPermissionTrusted: true,
+            tracker: &tracker,
+            at: 10.0
+        ) == .terminateAndNotify)
+
+        // tapDisabledByTimeout でも権限が失われていれば再有効化せず即座に破棄する
+        #expect(HotKeyMonitorService.resolveTapDisableDisposition(
+            reason: .tapDisabledByTimeout,
+            isPermissionTrusted: false,
+            tracker: &tracker,
+            at: 11.0
+        ) == .terminateAndNotify)
+
+        // 権限有効な通常タイムアウトは段階的に即時→クールダウン→上限超過で破棄へ遷移する
+        #expect(HotKeyMonitorService.resolveTapDisableDisposition(
+            reason: .tapDisabledByTimeout,
+            isPermissionTrusted: true,
+            tracker: &tracker,
+            at: 12.0
+        ) == .attemptRecovery(.reenableImmediately))
+        #expect(HotKeyMonitorService.resolveTapDisableDisposition(
+            reason: .tapDisabledByTimeout,
+            isPermissionTrusted: true,
+            tracker: &tracker,
+            at: 13.0
+        ) == .attemptRecovery(.reenableAfterCooldown(seconds: 5.0)))
+        #expect(HotKeyMonitorService.resolveTapDisableDisposition(
+            reason: .tapDisabledByTimeout,
+            isPermissionTrusted: true,
+            tracker: &tracker,
+            at: 14.0
+        ) == .terminateAndNotify)
+    }
+
+    /// タップのヘルスチェック判定がポート有効性・タップ有効状態・権限の3条件をすべて要求することを検証する
+    @Test("isTapHealthy はポート・タップ・権限のすべてが有効な場合のみ true を返す")
+    func tapHealthRequiresAllConditions() {
+        #expect(HotKeyMonitorService.isTapHealthy(
+            isMachPortValid: true,
+            isTapEnabled: true,
+            isPermissionTrusted: true
+        ) == true)
+        #expect(HotKeyMonitorService.isTapHealthy(
+            isMachPortValid: false,
+            isTapEnabled: true,
+            isPermissionTrusted: true
+        ) == false)
+        #expect(HotKeyMonitorService.isTapHealthy(
+            isMachPortValid: true,
+            isTapEnabled: false,
+            isPermissionTrusted: true
+        ) == false)
+        #expect(HotKeyMonitorService.isTapHealthy(
+            isMachPortValid: true,
+            isTapEnabled: true,
+            isPermissionTrusted: false
+        ) == false)
     }
 }

@@ -25,6 +25,12 @@ public final class PermissionGuideViewModel {
         permissionService.openAccessibilitySettings()
     }
 
+    /// 外部の権限状態変化（または監視強制停止）をコールバック再発火なしで UI 状態へ同期する
+    /// - Parameter newStatus: 反映する最新の権限状態
+    public func syncStatus(_ newStatus: AccessibilityPermissionStatus) {
+        status = newStatus
+    }
+
     /// 現在の権限状態を再確認し、許可済みに変化していればコールバックを通知する
     public func refreshStatus() {
         let latest = permissionService.currentStatus()

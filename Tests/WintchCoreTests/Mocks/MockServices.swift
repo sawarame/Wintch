@@ -80,6 +80,8 @@ final class MockWindowService: WindowServicing {
 final class MockHotKeyMonitor: HotKeyMonitoring {
     /// イベント通知クロージャ
     var onEvent: ((HotKeyEvent) -> Void)?
+    /// システム無効化・権限剥奪等による監視中断通知クロージャ
+    var onMonitoringInterrupted: (() -> Void)?
     /// 現在の監視モード
     var activeMode: HotKeyMonitorMode = .inactive {
         didSet {
@@ -138,6 +140,13 @@ final class MockHotKeyMonitor: HotKeyMonitoring {
     /// - Parameter event: 送信するイベント
     func simulateEvent(_ event: HotKeyEvent) {
         onEvent?(event)
+    }
+
+    /// テストから監視中断イベント（タップ無効化／権限剥奪）を擬似発火するヘルパー
+    func simulateMonitoringInterrupted() {
+        isMonitoring = false
+        activeMode = .inactive
+        onMonitoringInterrupted?()
     }
 }
 

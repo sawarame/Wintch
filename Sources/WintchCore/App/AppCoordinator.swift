@@ -148,10 +148,9 @@ public final class AppCoordinator {
     /// アクセシビリティ権限誘導画面を最前面に表示する
     public func openPermissionGuide() {
         permissionGuideViewModel.refreshStatus()
-        let window = ensurePermissionWindow()
-        NSApplication.shared.activate()
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        // 再確認の結果すでに権限が回復していた場合は誘導画面を表示しない
+        guard permissionStatus == .denied else { return }
+        presentPermissionGuideWindow()
     }
 
     /// アプリケーションを安全に終了する
@@ -165,28 +164,60 @@ public final class AppCoordinator {
     /// 権限状態の変化に応じて監視サービスの起動・停止および誘導画面の表示を切り替える
     /// - Parameter status: 最新の権限状態
     public func updatePermissionState(_ status: AccessibilityPermissionStatus) {
-        permissionStatus = status
-        settingsViewModel.refreshStatus()
-
         switch status {
         case .granted:
+            // CGEventTap の作成・有効化に失敗した場合は未許可扱いとして安全に誘導画面を維持する
+            guard hotKeyMonitor.startMonitoring() else {
+                transitionToDeniedState()
+                return
+            }
+            permissionStatus = .granted
+            settingsViewModel.refreshStatus(permissionStatus: .granted)
+            permissionGuideViewModel.syncStatus(.granted)
             isPermissionGuidePresented = false
             permissionWindow?.orderOut(nil)
             windowService.startObserving()
-            hotKeyMonitor.startMonitoring()
         case .denied:
-            switcherViewModel.cancel()
-            hotKeyMonitor.stopMonitoring()
-            windowService.stopObserving()
-            isPermissionGuidePresented = true
-            openPermissionGuide()
+            transitionToDeniedState()
         }
+    }
+
+    /// 監視中に OS 側のイベントタップ無効化／権限剥奪を検知した際の安全停止処理
+    private func handleMonitoringInterrupted() {
+        transitionToDeniedState()
+    }
+
+    /// 権限未許可または監視中断時の安全停止と誘導状態への遷移を一元実行する
+    private func transitionToDeniedState() {
+        let shouldPresentGuide = permissionStatus != .denied || !isPermissionGuidePresented
+        permissionStatus = .denied
+        settingsViewModel.refreshStatus(permissionStatus: .denied)
+        permissionGuideViewModel.syncStatus(.denied)
+        switcherViewModel.cancel()
+        hotKeyMonitor.stopMonitoring()
+        windowService.stopObserving()
+        isPermissionGuidePresented = true
+        if shouldPresentGuide {
+            presentPermissionGuideWindow()
+        }
+    }
+
+    /// 再帰的な権限再チェックを発火させずに権限誘導ウィンドウを前面表示する
+    private func presentPermissionGuideWindow() {
+        let window = ensurePermissionWindow()
+        NSApplication.shared.activate()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// 各 ViewModel とサービスのイベントコールバックを接続する
     private func setupBindings() {
         hotKeyMonitor.onEvent = { [weak self] event in
             self?.switcherViewModel.handleHotKeyEvent(event)
+        }
+
+        hotKeyMonitor.onMonitoringInterrupted = { [weak self] in
+            self?.handleMonitoringInterrupted()
         }
 
         switcherViewModel.onModePresentationChanged = { [weak self] mode, reason in

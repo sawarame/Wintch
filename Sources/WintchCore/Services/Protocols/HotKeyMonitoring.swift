@@ -40,6 +40,9 @@ public protocol HotKeyMonitoring: AnyObject {
     /// イベント発生時のコールバックハンドラ
     var onEvent: ((HotKeyEvent) -> Void)? { get set }
 
+    /// 権限剥奪やシステム無効化等によりグローバル監視が意図せず中断・停止された際のコールバックハンドラ
+    var onMonitoringInterrupted: (() -> Void)? { get set }
+
     /// 現在のスイッチャー監視モード
     var activeMode: HotKeyMonitorMode { get set }
 

@@ -171,9 +171,10 @@ public final class SettingsViewModel {
     }
 
     /// 外部（システム設定）での変更を UI へ再同期する
-    public func refreshStatus() {
+    /// - Parameter overridePermissionStatus: コーディネーター側で確定済みの権限状態を直接反映する場合に指定
+    public func refreshStatus(permissionStatus overridePermissionStatus: AccessibilityPermissionStatus? = nil) {
         isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
-        permissionStatus = permissionService.currentStatus()
+        permissionStatus = overridePermissionStatus ?? permissionService.currentStatus()
     }
 
     /// アクセシビリティ権限設定画面を開く

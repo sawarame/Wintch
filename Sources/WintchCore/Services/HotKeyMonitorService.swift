@@ -30,6 +30,14 @@ public enum TapRecoveryAction: Equatable, Sendable {
     case stopAutoReenable
 }
 
+/// CGEventTap の無効化通知に対する対処方針
+public enum TapDisableDisposition: Equatable, Sendable {
+    /// 一時的なタイムアウトであり、指定のリカバリーアクションに従って再有効化を試行する
+    case attemptRecovery(TapRecoveryAction)
+    /// 権限剥奪・ユーザー／システムによる無効化・上限超過のため即座にタップを破棄し監視を停止する
+    case terminateAndNotify
+}
+
 /// CGEventTap のタイムアウト／システム無効化回数を監視し、無限再有効化ループを防ぐ状態トラッカー
 public struct TapTimeoutRecoveryTracker: Sendable {
     /// 短時間バースト判定のウィンドウ幅（秒）
@@ -123,6 +131,18 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         var pendingCooldownWorkItem: DispatchWorkItem?
     }
 
+    /// 専用 RunLoop でのタップ生存・権限定期ヘルスチェック間隔（秒）
+    private nonisolated static let healthCheckIntervalSeconds: TimeInterval = 0.2
+
+    /// CGEventTap の C コールバック関数（バックグラウンド RunLoop スレッドで非分離実行するため static nonisolated で定義）
+    private nonisolated static let eventTapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
+        guard let refcon else {
+            return Unmanaged.passUnretained(event)
+        }
+        let monitor = Unmanaged<HotKeyMonitorService>.fromOpaque(refcon).takeUnretainedValue()
+        return monitor.handleCGEvent(proxy: proxy, type: type, event: event)
+    }
+
     /// サービス用ロガー
     private nonisolated static let logger = Logger(
         subsystem: "dev.wintch",
@@ -131,6 +151,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
 
     /// イベント発生時の通知ハンドラ
     public var onEvent: ((HotKeyEvent) -> Void)?
+
+    /// 権限剥奪やシステム無効化等によりグローバル監視が意図せず中断された際の通知ハンドラ
+    public var onMonitoringInterrupted: (() -> Void)?
 
     /// 現在のスイッチャー監視モード
     public var activeMode: HotKeyMonitorMode {
@@ -207,6 +230,12 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             return true
         }
 
+        // 未許可状態で CGEventTap を開始しないよう事前検証する
+        guard AccessibilityPermissionService.isProcessTrusted() else {
+            Self.logger.warning("アクセシビリティ権限が確認できないため CGEventTap の開始を見送りました")
+            return false
+        }
+
         let eventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
 
@@ -216,13 +245,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: CGEventMask(eventMask),
-            callback: { proxy, type, event, refcon in
-                guard let refcon else {
-                    return Unmanaged.passUnretained(event)
-                }
-                let monitor = Unmanaged<HotKeyMonitorService>.fromOpaque(refcon).takeUnretainedValue()
-                return monitor.handleCGEvent(proxy: proxy, type: type, event: event)
-            },
+            callback: Self.eventTapCallback,
             userInfo: selfPtr
         ) else {
             return false
@@ -238,6 +261,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         let boxedTap = UncheckedSendable(value: tap)
         let boxedSource = UncheckedSendable(value: source)
         let readySemaphore = DispatchSemaphore(value: 0)
+        let startupLock = OSAllocatedUnfairLock(initialState: false)
         let thread = Thread { [weak self] in
             guard let self else {
                 readySemaphore.signal()
@@ -245,22 +269,27 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             }
 
             let currentRunLoop = UncheckedSendable(value: CFRunLoopGetCurrent())
-            var shouldRun = self.runtimeLock.withLock { state -> Bool in
+            let initialShouldRun = self.runtimeLock.withLock { state -> Bool in
                 guard state.isMonitoring else { return false }
                 state.runLoop = currentRunLoop.value
                 CFRunLoopAddSource(currentRunLoop.value, boxedSource.value, .commonModes)
                 CGEvent.tapEnable(tap: boxedTap.value, enable: true)
-                return true
+                return CFMachPortIsValid(boxedTap.value)
+                    && CGEvent.tapIsEnabled(tap: boxedTap.value)
+                    && AccessibilityPermissionService.isProcessTrusted()
             }
+            startupLock.withLock { $0 = initialShouldRun }
             readySemaphore.signal()
 
-            // stopMonitoring() による停止指示が来るまで専用 RunLoop でイベントタップを処理する
+            var shouldRun = initialShouldRun
+
+            // stopMonitoring() による停止指示またはヘルスチェック異常まで専用 RunLoop でイベントタップを処理する
             while shouldRun {
-                let result = CFRunLoopRunInMode(.defaultMode, 60.0, false)
-                shouldRun = self.runtimeLock.withLock { $0.isMonitoring }
+                let result = CFRunLoopRunInMode(.defaultMode, Self.healthCheckIntervalSeconds, false)
                 if result == .stopped || result == .finished {
                     break
                 }
+                shouldRun = self.evaluateActiveTapHealthOnRunLoopThread()
             }
         }
         thread.name = "dev.wintch.HotKeyMonitor.EventTap"
@@ -276,20 +305,27 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
 
         thread.start()
         readySemaphore.wait()
+
+        let didStartHealthy = startupLock.withLock { $0 }
+        if !didStartHealthy {
+            Self.logger.warning("CGEventTap の起動後健全性チェックに失敗したため即時破棄しました")
+            cleanupTapRuntime()
+            return false
+        }
+        Self.logger.notice("CGEventTap グローバルキーボード監視を開始しました")
         return true
     }
 
     /// グローバルイベント監視を停止し、専用スレッドとリソースを解放する
     public func stopMonitoring() {
         cleanupTapRuntime()
-        sharedState.withLock { state in
-            state.activeMode = .inactive
-            state.pendingNormalTrigger = false
-        }
+        resetSharedMonitoringState()
     }
 
     /// イベントタップ・RunLoop ソース・クールダウン予約をスレッドセーフに停止・破棄する
-    private nonisolated func cleanupTapRuntime() {
+    /// - Returns: 実際に監視中だったランタイムを破棄した場合は true
+    @discardableResult
+    private nonisolated func cleanupTapRuntime() -> Bool {
         let extracted = runtimeLock.withLock { state -> TapRuntime in
             let snapshot = state
             state = TapRuntime()
@@ -306,6 +342,15 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
                 CFRunLoopRemoveSource(runLoop, source, .commonModes)
             }
             CFRunLoopStop(runLoop)
+        }
+        return extracted.isMonitoring
+    }
+
+    /// 共有中のアクティブモードと保留トリガー状態を初期化する
+    private nonisolated func resetSharedMonitoringState() {
+        sharedState.withLock { state in
+            state.activeMode = .inactive
+            state.pendingNormalTrigger = false
         }
     }
 
@@ -381,32 +426,88 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         return decision.shouldConsume ? nil : Unmanaged.passUnretained(event)
     }
 
-    /// タイムアウト等でタップが無効化された際にリトライ上限とクールダウンに従って復帰処理を行う
-    /// - Parameter reason: 無効化理由の CGEventType
-    private nonisolated func handleTapDisabled(reason: CGEventType) {
-        let now = ProcessInfo.processInfo.systemUptime
-        let action = recoveryTracker.withLock { $0.recordDisableEvent(at: now) }
+    /// 専用 RunLoop 上で現在のイベントタップと権限の健全性を検証し、異常時は即座に破棄する
+    /// - Returns: 監視を継続可能な場合は true、停止または異常検知で終了すべき場合は false
+    private nonisolated func evaluateActiveTapHealthOnRunLoopThread() -> Bool {
+        let snapshot = runtimeLock.withLock { state -> (isMonitoring: Bool, tap: UncheckedSendable<CFMachPort>?, isCoolingDown: Bool) in
+            (
+                state.isMonitoring,
+                state.eventTap.map { UncheckedSendable(value: $0) },
+                state.pendingCooldownWorkItem != nil
+            )
+        }
 
-        switch action {
-        case .reenableImmediately:
-            scheduleImmediateTapReenable()
-        case let .reenableAfterCooldown(seconds):
-            Self.logger.warning(
-                "CGEventTap が短時間に繰り返し無効化されたため \(seconds, format: .fixed(precision: 1)) 秒後に再有効化します (reason: \(reason.rawValue))"
+        guard snapshot.isMonitoring, let tap = snapshot.tap?.value else {
+            return false
+        }
+
+        let isPortValid = CFMachPortIsValid(tap)
+        // クールダウン待機中は一時的に無効化されているため、ポート生存とライブ権限のみを検証する
+        let isTapEnabled = snapshot.isCoolingDown ? true : CGEvent.tapIsEnabled(tap: tap)
+        let isTrusted = AccessibilityPermissionService.isProcessTrusted()
+
+        if !Self.isTapHealthy(
+            isMachPortValid: isPortValid,
+            isTapEnabled: isTapEnabled,
+            isPermissionTrusted: isTrusted
+        ) {
+            terminateMonitoringFromSystem(
+                reason: "ヘルスチェック失敗 (valid=\(isPortValid), enabled=\(isTapEnabled), trusted=\(isTrusted))"
             )
-            scheduleDelayedTapReenable(after: seconds)
-        case .stopAutoReenable:
-            runtimeLock.withLock { state in
-                state.pendingCooldownWorkItem?.cancel()
-                state.pendingCooldownWorkItem = nil
+            return false
+        }
+        return true
+    }
+
+    /// 権限剥奪やシステム無効化により監視継続不能になった際、タップを安全破棄して MainActor へ通知する
+    /// - Parameter reason: 停止理由の説明文字列
+    private nonisolated func terminateMonitoringFromSystem(reason: String) {
+        let didCleanup = cleanupTapRuntime()
+        guard didCleanup else { return }
+        resetSharedMonitoringState()
+        Self.logger.warning("キーボード入力保護のため CGEventTap 監視を自動停止しました: \(reason, privacy: .public)")
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.onMonitoringInterrupted?()
             }
-            Self.logger.error(
-                "CGEventTap の無効化回数が上限に達したため、キーボード入力保護のため自動再有効化を停止しました (reason: \(reason.rawValue))"
-            )
         }
     }
 
-    /// 専用 RunLoop 上で即座にタップを再有効化する
+    /// タイムアウト等でタップが無効化された際に理由と権限を確認し、復帰または即時破棄を行う
+    /// - Parameter reason: 無効化理由の CGEventType
+    private nonisolated func handleTapDisabled(reason: CGEventType) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let isTrusted = AccessibilityPermissionService.isProcessTrusted()
+        let disposition = recoveryTracker.withLock { tracker in
+            Self.resolveTapDisableDisposition(
+                reason: reason,
+                isPermissionTrusted: isTrusted,
+                tracker: &tracker,
+                at: now
+            )
+        }
+
+        switch disposition {
+        case .terminateAndNotify:
+            terminateMonitoringFromSystem(
+                reason: "OS無効化通知 (reason=\(reason.rawValue), trusted=\(isTrusted))"
+            )
+        case let .attemptRecovery(action):
+            switch action {
+            case .reenableImmediately:
+                scheduleImmediateTapReenable()
+            case let .reenableAfterCooldown(seconds):
+                Self.logger.warning(
+                    "CGEventTap が短時間に繰り返し無効化されたため \(seconds, format: .fixed(precision: 1)) 秒後に再有効化します (reason: \(reason.rawValue))"
+                )
+                scheduleDelayedTapReenable(after: seconds)
+            case .stopAutoReenable:
+                terminateMonitoringFromSystem(reason: "自動再有効化上限に到達 (reason=\(reason.rawValue))")
+            }
+        }
+    }
+
+    /// 専用 RunLoop 上で即座にタップを再有効化し、健全性を検証する
     private nonisolated func scheduleImmediateTapReenable() {
         let snapshot = runtimeLock.withLock { state -> TapRuntime in
             let previous = state.pendingCooldownWorkItem
@@ -419,19 +520,15 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         let boxedTap = UncheckedSendable(value: tap)
         if let runLoop = snapshot.runLoop {
             CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
-                guard let self else { return }
-                let canEnable = self.runtimeLock.withLock { $0.isMonitoring && $0.eventTap != nil }
-                if canEnable {
-                    CGEvent.tapEnable(tap: boxedTap.value, enable: true)
-                }
+                self?.enableTapAndVerifyHealth(boxedTap.value, context: "即時再有効化")
             }
             CFRunLoopWakeUp(runLoop)
         } else {
-            CGEvent.tapEnable(tap: boxedTap.value, enable: true)
+            enableTapAndVerifyHealth(boxedTap.value, context: "即時再有効化")
         }
     }
 
-    /// 指定秒数のクールダウン経過後にタップを再有効化する
+    /// 指定秒数のクールダウン経過後にタップを再有効化し、健全性を検証する
     /// - Parameter seconds: 待機秒数
     private nonisolated func scheduleDelayedTapReenable(after seconds: TimeInterval) {
         let boxedWorkItem = UncheckedSendable(value: DispatchWorkItem { [weak self] in
@@ -442,7 +539,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
                 return UncheckedSendable(value: tap)
             }
             if let tap = boxedTap?.value {
-                CGEvent.tapEnable(tap: tap, enable: true)
+                self.enableTapAndVerifyHealth(tap, context: "クールダウン後再有効化")
             }
         })
 
@@ -461,6 +558,74 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             deadline: .now() + seconds,
             execute: boxedWorkItem.value
         )
+    }
+
+    /// タップを再有効化し、直後に権限およびポートの健全性を検証する（失敗時は即座に破棄して上位へ通知する）
+    /// - Parameters:
+    ///   - tap: 再有効化対象の CFMachPort
+    ///   - context: ログ出力用のコンテキスト文字列
+    private nonisolated func enableTapAndVerifyHealth(_ tap: CFMachPort, context: String) {
+        let boxedTap = UncheckedSendable(value: tap)
+        let isStillTargetTap = runtimeLock.withLock { state in
+            state.isMonitoring && state.eventTap.map { CFEqual($0, boxedTap.value) } == true
+        }
+        guard isStillTargetTap else { return }
+
+        guard AccessibilityPermissionService.isProcessTrusted() else {
+            terminateMonitoringFromSystem(reason: "\(context): 権限喪失を検知")
+            return
+        }
+
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        let isHealthy = Self.isTapHealthy(
+            isMachPortValid: CFMachPortIsValid(tap),
+            isTapEnabled: CGEvent.tapIsEnabled(tap: tap),
+            isPermissionTrusted: true
+        )
+        if !isHealthy {
+            terminateMonitoringFromSystem(reason: "\(context): 再有効化後のタップ健全性確認に失敗")
+        }
+    }
+
+    /// CGEventTap の無効化イベントに対する対処方針を決定する純粋判定関数
+    /// - Parameters:
+    ///   - reason: OS から受信した無効化理由の CGEventType
+    ///   - isPermissionTrusted: 現在のアクセシビリティ権限が有効であるか
+    ///   - tracker: タイムアウト復帰回数トラッカー
+    ///   - timestamp: イベント発生時の単調増加時刻（秒）
+    /// - Returns: 実行すべき TapDisableDisposition
+    public nonisolated static func resolveTapDisableDisposition(
+        reason: CGEventType,
+        isPermissionTrusted: Bool,
+        tracker: inout TapTimeoutRecoveryTracker,
+        at timestamp: TimeInterval
+    ) -> TapDisableDisposition {
+        // ユーザー操作・権限剥奪・権限未許可状態での無効化は絶対に再有効化せず即座に破棄する
+        guard reason == .tapDisabledByTimeout, isPermissionTrusted else {
+            return .terminateAndNotify
+        }
+        let recoveryAction = tracker.recordDisableEvent(at: timestamp)
+        switch recoveryAction {
+        case .reenableImmediately, .reenableAfterCooldown:
+            return .attemptRecovery(recoveryAction)
+        case .stopAutoReenable:
+            return .terminateAndNotify
+        }
+    }
+
+    /// タップの生存状態と権限状態から監視を継続可能か判定する純粋判定関数
+    /// - Parameters:
+    ///   - isMachPortValid: CFMachPortIsValid の結果
+    ///   - isTapEnabled: CGEvent.tapIsEnabled の結果
+    ///   - isPermissionTrusted: 現在のライブアクセシビリティ権限状態
+    /// - Returns: 継続可能な場合は true、即座にタップを破棄すべき場合は false
+    public nonisolated static func isTapHealthy(
+        isMachPortValid: Bool,
+        isTapEnabled: Bool,
+        isPermissionTrusted: Bool
+    ) -> Bool {
+        isMachPortValid && isTapEnabled && isPermissionTrusted
     }
 
     /// 選択中ウィンドウを閉じる操作に割り当てる Q キーの仮想キーコード (ANSI kVK_ANSI_Q)

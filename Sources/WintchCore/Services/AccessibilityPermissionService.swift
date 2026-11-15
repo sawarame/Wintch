@@ -13,10 +13,16 @@ public final class AccessibilityPermissionService: AccessibilityPermissionServic
     /// AccessibilityPermissionService を初期化する
     public init() {}
 
+    /// 現在のプロセスにアクセシビリティ権限が付与されているかをバックグラウンドスレッドからも安全に確認する
+    /// - Returns: 権限が有効な場合は true
+    public nonisolated static func isProcessTrusted() -> Bool {
+        AXIsProcessTrusted()
+    }
+
     /// 現在のアクセシビリティ権限状態を取得する
     /// - Returns: 許可済みなら .granted、未許可なら .denied
     public func currentStatus() -> AccessibilityPermissionStatus {
-        AXIsProcessTrusted() ? .granted : .denied
+        Self.isProcessTrusted() ? .granted : .denied
     }
 
     /// 権限状態の変化を定期的に監視する（1秒間隔の軽量ポーリング）
