@@ -30,7 +30,7 @@ description: "Task list for 008-launcher-ux-refinement"
 
 **Purpose**: 既存ビルドおよびテストのベースライン状態を確認する
 
-- [ ] T001 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行して `Package.swift` と `Tests/WintchCoreTests/` の現状テストベースラインを確認する
+- [X] T001 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行して `Package.swift` と `Tests/WintchCoreTests/` の現状テストベースラインを確認する
 
 ---
 
@@ -52,13 +52,13 @@ description: "Task list for 008-launcher-ux-refinement"
 
 > **NOTE: 実装前にテストを追加・更新し、実装前の状態で失敗することを確認する**
 
-- [ ] T002 [P] [US1] `Tests/WintchCoreTests/SwitcherSelectionTests.swift` に `initialIndex(count:preferSecondItem:)` の `true`（0件->nil, 1件->0, 2件以上->1）および `false`（0件->nil, 1件->0, 2件以上->0）の境界値テストを追加する
-- [ ] T003 [P] [US1] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` のランチャー起動テストを更新・拡充し、2件以上のウィンドウ存在下でランチャー起動直後に `selectedIndex == 0` となること、起動直後の「次へ」で `1`・「前へ」で末尾へ循環すること、および通常スイッチャー（リスト型・キャプチャ表示型）起動時は `selectedIndex == 1` を維持することを検証する
+- [X] T002 [P] [US1] `Tests/WintchCoreTests/SwitcherSelectionTests.swift` に `initialIndex(count:preferSecondItem:)` の `true`（0件->nil, 1件->0, 2件以上->1）および `false`（0件->nil, 1件->0, 2件以上->0）の境界値テストを追加する
+- [X] T003 [P] [US1] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` のランチャー起動テストを更新・拡充し、2件以上のウィンドウ存在下でランチャー起動直後に `selectedIndex == 0` となること、起動直後の「次へ」で `1`・「前へ」で末尾へ循環すること、および通常スイッチャー（リスト型・キャプチャ表示型）起動時は `selectedIndex == 1` を維持することを検証する
 
 ### Implementation for User Story 1
 
-- [ ] T004 [US1] `Sources/WintchCore/Domain/SwitcherSelection.swift` の `initialIndex(count: Int, preferSecondItem: Bool = true) -> Int?` を実装し（`count <= 0` は `nil`、`count == 1` は `0`、`count >= 2` は `preferSecondItem ? 1 : 0`）、日本語ドキュメントコメントおよびインラインコメントを更新する
-- [ ] T005 [US1] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` の `present(targetMode:)` で `SwitcherSelection.initialIndex(count: sorted.count, preferSecondItem: targetMode != .launcher)` を呼び出すように更新し、ランチャー起動時のみ初期選択を `0` に設定する（T004 に依存）
+- [X] T004 [US1] `Sources/WintchCore/Domain/SwitcherSelection.swift` の `initialIndex(count: Int, preferSecondItem: Bool = true) -> Int?` を実装し（`count <= 0` は `nil`、`count == 1` は `0`、`count >= 2` は `preferSecondItem ? 1 : 0`）、日本語ドキュメントコメントおよびインラインコメントを更新する
+- [X] T005 [US1] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` の `present(targetMode:)` で `SwitcherSelection.initialIndex(count: sorted.count, preferSecondItem: targetMode != .launcher)` を呼び出すように更新し、ランチャー起動時のみ初期選択を `0` に設定する（T004 に依存）
 
 **Checkpoint**: User Story 1 が単体で完結・テスト可能になる（`SwitcherSelectionTests` / `SwitcherViewModelTests` 合格）
 
@@ -74,11 +74,11 @@ description: "Task list for 008-launcher-ux-refinement"
 
 > **NOTE: 実装前にテストを追加し、実装前の状態で失敗または未定義であることを確認する**
 
-- [ ] T006 [P] [US2] `Tests/WintchCoreTests/LauncherSearchFieldTests.swift` を新規作成し、`LauncherSearchField.makePlaceholderAttributedString` が文字列 `"ウィンドウまたはアプリを検索..."`、`.foregroundColor` に `NSColor.secondaryLabelColor`、`.font` に `NSFont.systemFont(ofSize: 15, weight: .regular)` を設定すること、および `makeNSView` 相当で生成された `NSTextField` の `placeholderAttributedString` に反映されることを検証する単体テストを追加する
+- [X] T006 [P] [US2] `Tests/WintchCoreTests/LauncherSearchFieldTests.swift` を新規作成し、`LauncherSearchField.makePlaceholderAttributedString` が文字列 `"ウィンドウまたはアプリを検索..."`、`.foregroundColor` に `NSColor.secondaryLabelColor`、`.font` に `NSFont.systemFont(ofSize: 15, weight: .regular)` を設定すること、および `makeNSView` 相当で生成された `NSTextField` の `placeholderAttributedString` に反映されることを検証する単体テストを追加する
 
 ### Implementation for User Story 2
 
-- [ ] T007 [US2] `Sources/WintchCore/Views/LauncherSearchField.swift` に静的定数 `placeholderText = "ウィンドウまたはアプリを検索..."` および静的ヘルパー `makePlaceholderAttributedString(_:)`（`.foregroundColor: NSColor.secondaryLabelColor`、`.font: NSFont.systemFont(ofSize: 15, weight: .regular)`）を実装し、`makeNSView(context:)` で `textField.placeholderAttributedString` へ設定する（日本語ドキュメントコメント・インラインコメント必須）
+- [X] T007 [US2] `Sources/WintchCore/Views/LauncherSearchField.swift` に静的定数 `placeholderText = "ウィンドウまたはアプリを検索..."` および静的ヘルパー `makePlaceholderAttributedString(_:)`（`.foregroundColor: NSColor.secondaryLabelColor`、`.font: NSFont.systemFont(ofSize: 15, weight: .regular)`）を実装し、`makeNSView(context:)` で `textField.placeholderAttributedString` へ設定する（日本語ドキュメントコメント・インラインコメント必須）
 
 **Checkpoint**: User Story 1 と User Story 2 の双方が独立して機能し、単体テストで検証可能になる
 
@@ -88,10 +88,10 @@ description: "Task list for 008-launcher-ux-refinement"
 
 **Purpose**: 過去仕様書との整合化、全テスト実行、および `.app` バンドルビルドと実機動作確認
 
-- [ ] T008 [P] `specs/002-window-search-launcher/spec.md` の User Story 1 受入シナリオ 1 および `FR-006` に `008-launcher-ux-refinement` による改定注記（ランチャー起動時の初期選択は常に 1 番目）を追記して整合化する
-- [ ] T009 [P] `specs/004-launcher-switcher-nav/spec.md` の User Story 1 受入シナリオ 1 に `008-launcher-ux-refinement` による改定注記（ランチャー起動時の初期選択は 1 番目）を追記して整合化する
-- [ ] T010 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、全ユニットテストの 100% 合格を確認する（T005, T007 完了後）
-- [ ] T011 `specs/008-launcher-ux-refinement/quickstart.md` に従い `./scripts/build-app.sh` で `.build/Wintch.app` をビルドし、ランチャー起動時 1 番目選択・通常スイッチャー 2 番目選択・ライト／ダーク背景でのプレースホルダー視認性・日本語 IME 入力動作を最終確認する（T010 完了後）
+- [X] T008 [P] `specs/002-window-search-launcher/spec.md` の User Story 1 受入シナリオ 1 および `FR-006` に `008-launcher-ux-refinement` による改定注記（ランチャー起動時の初期選択は常に 1 番目）を追記して整合化する
+- [X] T009 [P] `specs/004-launcher-switcher-nav/spec.md` の User Story 1 受入シナリオ 1 に `008-launcher-ux-refinement` による改定注記（ランチャー起動時の初期選択は 1 番目）を追記して整合化する
+- [X] T010 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、全ユニットテストの 100% 合格を確認する（T005, T007 完了後）
+- [ ] T011 `specs/008-launcher-ux-refinement/quickstart.md` に従い `./scripts/build-app.sh` で `.build/Wintch.app` をビルドし、ランチャー起動時 1 番目選択・通常スイッチャー 2 番目選択・ライト／ダーク背景でのプレースホルダー視認性・日本語 IME 入力動作を最終確認する（T010 完了後 ※ `.app` ビルドは完了、GUI 実機確認はユーザー操作で実施）
 
 ---
 
