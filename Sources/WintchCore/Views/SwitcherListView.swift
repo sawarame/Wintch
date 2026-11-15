@@ -37,12 +37,11 @@ public struct SwitcherListView: View {
                     .overlay(.white.opacity(0.14))
             }
 
-            if viewModel.mode == .launcher && viewModel.displayedResults.isEmpty {
-                if viewModel.displayedAppResults.isEmpty {
-                    emptyResultView
-                } else {
-                    appLaunchSectionView
-                }
+            if viewModel.mode == .launcher
+                && viewModel.displayedResults.isEmpty
+                && viewModel.displayedAppResults.isEmpty
+            {
+                emptyResultView
             } else {
                 resultListView
             }
@@ -110,54 +109,7 @@ public struct SwitcherListView: View {
         .padding(.horizontal, 14)
     }
 
-    /// 既存ウィンドウ 0 件時に表示するアプリ新規起動候補セクション
-    private var appLaunchSectionView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.up.forward.app")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Text("一致するウィンドウがないため、アプリを起動")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 2)
-
-            ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(spacing: 4) {
-                        ForEach(Array(viewModel.displayedAppResults.enumerated()), id: \.element.id) { index, result in
-                            AppLaunchRowView(
-                                result: result,
-                                icon: viewModel.icon(forAppURL: result.app.bundleURL),
-                                isSelected: index == viewModel.selectedIndex
-                            )
-                            .id(result.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                viewModel.selectAndActivate(at: index)
-                            }
-                        }
-                    }
-                    .padding(10)
-                }
-                .frame(maxHeight: 396)
-                .fixedSize(horizontal: false, vertical: true)
-                .onChange(of: viewModel.selectedIndex) { _, newIndex in
-                    guard viewModel.displayedAppResults.indices.contains(newIndex) else { return }
-                    let targetID = viewModel.displayedAppResults[newIndex].id
-                    withAnimation(.easeOut(duration: 0.08)) {
-                        proxy.scrollTo(targetID, anchor: .center)
-                    }
-                }
-            }
-        }
-    }
-
-    /// ウィンドウ候補一覧の縦型スクロールリスト
+    /// ウィンドウ候補および（ランチャー検索時の）アプリ起動候補を統合表示する縦型スクロールリスト
     private var resultListView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
@@ -168,10 +120,28 @@ public struct SwitcherListView: View {
                             icon: viewModel.icon(for: result.entry.pid),
                             isSelected: index == viewModel.selectedIndex
                         )
-                        .id(result.id)
+                        .id(rowScrollID(forWindowID: result.id))
                         .contentShape(Rectangle())
                         .onTapGesture {
                             viewModel.selectAndActivate(at: index)
+                        }
+                    }
+
+                    if viewModel.isShowingLaunchCandidates {
+                        appLaunchSectionHeader
+
+                        ForEach(Array(viewModel.displayedAppResults.enumerated()), id: \.element.id) { appIndex, result in
+                            let unifiedIndex = viewModel.displayedResults.count + appIndex
+                            AppLaunchRowView(
+                                result: result,
+                                icon: viewModel.icon(forAppURL: result.app.bundleURL),
+                                isSelected: unifiedIndex == viewModel.selectedIndex
+                            )
+                            .id(rowScrollID(forAppID: result.id))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                viewModel.selectAndActivate(at: unifiedIndex)
+                            }
                         }
                     }
                 }
@@ -180,13 +150,67 @@ public struct SwitcherListView: View {
             .frame(maxHeight: 420)
             .fixedSize(horizontal: false, vertical: true)
             .onChange(of: viewModel.selectedIndex) { _, newIndex in
-                guard viewModel.displayedResults.indices.contains(newIndex) else { return }
-                let targetID = viewModel.displayedResults[newIndex].id
+                guard let targetID = scrollTargetID(for: newIndex) else { return }
                 withAnimation(.easeOut(duration: 0.08)) {
                     proxy.scrollTo(targetID, anchor: .center)
                 }
             }
         }
+    }
+
+    /// アプリ起動候補セクションの区切り線と見出し
+    private var appLaunchSectionHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !viewModel.displayedResults.isEmpty {
+                Divider()
+                    .overlay(.white.opacity(0.14))
+                    .padding(.vertical, 4)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(
+                    viewModel.displayedResults.isEmpty
+                        ? "一致するウィンドウがないため、アプリを起動"
+                        : "アプリを起動"
+                )
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, viewModel.displayedResults.isEmpty ? 2 : 4)
+            .padding(.bottom, 2)
+        }
+    }
+
+    /// ウィンドウ行の ScrollViewReader 用識別子を返す
+    /// - Parameter id: ウィンドウ検索結果の一意識別子
+    /// - Returns: 衝突を防ぐ接頭辞付き識別子文字列
+    private func rowScrollID(forWindowID id: String) -> String {
+        "window-\(id)"
+    }
+
+    /// アプリ起動候補行の ScrollViewReader 用識別子を返す
+    /// - Parameter id: アプリ検索結果の一意識別子
+    /// - Returns: 衝突を防ぐ接頭辞付き識別子文字列
+    private func rowScrollID(forAppID id: String) -> String {
+        "app-\(id)"
+    }
+
+    /// 統一選択インデックスに対応する ScrollViewReader 用の識別子を返す
+    /// - Parameter index: 統一インデックス
+    /// - Returns: 該当行が存在する場合は識別子、範囲外なら nil
+    private func scrollTargetID(for index: Int) -> String? {
+        if viewModel.displayedResults.indices.contains(index) {
+            return rowScrollID(forWindowID: viewModel.displayedResults[index].id)
+        }
+        guard viewModel.isShowingLaunchCandidates else { return nil }
+        let appIndex = index - viewModel.displayedResults.count
+        guard viewModel.displayedAppResults.indices.contains(appIndex) else { return nil }
+        return rowScrollID(forAppID: viewModel.displayedAppResults[appIndex].id)
     }
 }
 

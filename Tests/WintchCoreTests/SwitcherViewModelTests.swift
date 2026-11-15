@@ -634,18 +634,34 @@ struct SwitcherViewModelTests {
         #expect(viewModel.mode == .inactive)
     }
 
-    /// ランチャー検索で既存ウィンドウが 0 件の場合にアプリ起動候補を表示し、選択移動・確定で新規起動できることを検証する
-    @Test("ランチャー検索で既存ウィンドウが0件のときアプリ起動候補を表示し選択・起動できる")
+    /// ランチャー検索で既存ウィンドウ候補の下に重複除外されたアプリ起動候補が表示され、単一カーソルで横断選択・起動できることを検証する
+    @Test("ランチャー検索でウィンドウ候補の下に未重複アプリ起動候補を表示し横断移動・起動できる")
     @MainActor
-    func launcherZeroWindowMatchesShowsAndLaunchesAppCandidates() {
+    func launcherShowsWindowsAndDeduplicatedAppsWithUnifiedNavigation() {
         let windowService = MockWindowService()
         let hotKeyMonitor = MockHotKeyMonitor()
         let permissionService = MockAccessibilityPermissionService()
         let iconProvider = MockIconProvider()
         let installedAppService = MockInstalledAppService()
 
+        let now = Date()
         windowService.stubbedCandidates = [
-            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Safari", title: "Apple")
+            RawWindowCandidate(
+                id: "w1",
+                pid: 10,
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari",
+                title: "Docs",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "w2",
+                pid: 20,
+                bundleIdentifier: "com.tinyspeck.slackmacgap",
+                applicationName: "Slack",
+                title: "General",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            )
         ]
         installedAppService.stubbedApps = [
             LaunchableApp(
@@ -662,6 +678,128 @@ struct SwitcherViewModelTests {
                 displayName: "Safari",
                 bundleIdentifier: "com.apple.Safari",
                 bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")
+            ),
+            LaunchableApp(
+                displayName: "Simulator",
+                bundleIdentifier: "com.apple.iphonesimulator",
+                bundleURL: URL(fileURLWithPath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app")
+            ),
+            LaunchableApp(
+                displayName: "Sublime Text",
+                bundleIdentifier: "com.sublimetext.4",
+                bundleURL: URL(fileURLWithPath: "/Applications/Sublime Text.app")
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
+        )
+
+        // 初期状態（空検索語）および空白のみの場合はアプリ起動候補を出さない
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.isShowingLaunchCandidates == false)
+        #expect(viewModel.displayedAppResults.isEmpty)
+
+        viewModel.updateSearchQuery("   ")
+        #expect(viewModel.displayedResults.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.isShowingLaunchCandidates == false)
+        #expect(viewModel.displayedAppResults.isEmpty)
+
+        // "s" で検索すると上部ウィンドウ (Safari, Slack) の下に Safari を除外した Simulator / Sublime Text が出る
+        viewModel.updateSearchQuery("s")
+        #expect(viewModel.displayedResults.map(\.entry.applicationName) == ["Safari", "Slack"])
+        #expect(viewModel.isShowingLaunchCandidates == true)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Simulator", "Sublime Text"])
+        #expect(viewModel.selectedIndex == 0)
+
+        // 上部ウィンドウ (0, 1) と下部アプリ候補 (2, 3) の間を単一カーソルで貫通・循環移動できる
+        viewModel.moveSelection(.down)
+        #expect(viewModel.selectedIndex == 1)
+        viewModel.moveSelection(.down)
+        #expect(viewModel.selectedIndex == 2)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 3)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.selectedIndex == 3)
+        viewModel.moveSelection(.up)
+        #expect(viewModel.selectedIndex == 2)
+
+        // ランチャーモード中は修飾キー解放で確定せず開いたまま維持される
+        viewModel.handleHotKeyEvent(.modifierReleased)
+        #expect(viewModel.isPresented == true)
+        #expect(installedAppService.launchedApps.isEmpty)
+
+        // 検索語を空に戻すと既存ウィンドウ一覧のみに戻る
+        viewModel.updateSearchQuery("")
+        #expect(viewModel.isShowingLaunchCandidates == false)
+        #expect(viewModel.displayedAppResults.isEmpty)
+        #expect(viewModel.displayedResults.map(\.id) == ["w1", "w2"])
+
+        // 既存ウィンドウ 0 件の一致 ("cal") では下部セクション相当のアプリ候補 (index 0, 1) がそのまま選択・起動できる
+        viewModel.updateSearchQuery("cal")
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Calculator", "Calendar"])
+        viewModel.selectAndActivate(at: 1)
+        #expect(viewModel.isPresented == false)
+        #expect(viewModel.mode == .inactive)
+        #expect(hotKeyMonitor.activeMode == .inactive)
+        #expect(windowService.activatedWindows.isEmpty)
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["Calendar"])
+
+        // 再度ランチャーを開き、混在結果の既存ウィンドウ (w2: Slack) を確定した場合はウィンドウ切り替えのみ行う
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("s")
+        viewModel.selectAndActivate(at: 1)
+        #expect(viewModel.isPresented == false)
+        #expect(windowService.activatedWindows.map(\.id) == ["w2"])
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["Calendar"])
+    }
+
+    /// 混在表示中のアプリ候補選択時におけるウィンドウクローズ無視と、ウィンドウクローズ後の重複除外再評価を検証する
+    @Test("アプリ候補選択中のクローズ無視とウィンドウクローズ後の再評価が安全に動作する")
+    @MainActor
+    func closeWindowAndAppCandidateCoexistence() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                pid: 10,
+                bundleIdentifier: "com.tinyspeck.slackmacgap",
+                applicationName: "Slack",
+                title: "General",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "w2",
+                pid: 20,
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari",
+                title: "Docs",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            )
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Slack",
+                bundleIdentifier: "com.tinyspeck.slackmacgap",
+                bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+            ),
+            LaunchableApp(
+                displayName: "Slack Helper App",
+                bundleIdentifier: "com.example.slackhelper",
+                bundleURL: URL(fileURLWithPath: "/Applications/Slack Helper App.app")
             )
         ]
 
@@ -674,50 +812,38 @@ struct SwitcherViewModelTests {
         )
 
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
-        #expect(viewModel.isShowingLaunchCandidates == false)
-        #expect(viewModel.displayedAppResults.isEmpty)
-
-        // 既存ウィンドウに一致する場合はアプリ候補を出さない
-        viewModel.updateSearchQuery("saf")
+        viewModel.updateSearchQuery("sla")
         #expect(viewModel.displayedResults.map(\.id) == ["w1"])
-        #expect(viewModel.isShowingLaunchCandidates == false)
-        #expect(viewModel.displayedAppResults.isEmpty)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack Helper App"])
 
-        // 既存ウィンドウに一致しない "cal" を入力すると Calculator / Calendar がアプリ候補に出る
-        viewModel.updateSearchQuery("cal")
-        #expect(viewModel.displayedResults.isEmpty)
-        #expect(viewModel.isShowingLaunchCandidates == true)
-        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Calculator", "Calendar"])
-        #expect(viewModel.selectedIndex == 0)
-
-        // 上下キーおよび通常スイッチャーショートカットでアプリ候補内を循環移動できる
+        // 下部のアプリ起動候補 (index 1) にカーソルがある状態での closeSelectedWindow は安全に無視される
         viewModel.moveSelection(.down)
         #expect(viewModel.selectedIndex == 1)
-        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
-        #expect(viewModel.selectedIndex == 0)
-        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.closedWindows.isEmpty)
+        #expect(windowService.terminatedPIDs.isEmpty)
+        #expect(viewModel.isPresented == true)
         #expect(viewModel.selectedIndex == 1)
 
-        // 検索語を空に戻すと既存ウィンドウ一覧に戻る
-        viewModel.updateSearchQuery("")
-        #expect(viewModel.isShowingLaunchCandidates == false)
-        #expect(viewModel.displayedAppResults.isEmpty)
-        #expect(viewModel.displayedResults.map(\.id) == ["w1"])
+        // 上部のウィンドウ (index 0) を閉じると、重複除外が外れて下部に Slack が再び現れる
+        viewModel.moveSelection(.up)
+        #expect(viewModel.selectedIndex == 0)
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [10])
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.isShowingLaunchCandidates == true)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack", "Slack Helper App"])
 
-        // 再び "cal" で絞り込み、2番目の Calendar をクリック相当で確定するとアプリが起動しパネルが閉じる
-        viewModel.updateSearchQuery("cal")
-        viewModel.selectAndActivate(at: 1)
+        // Enter（confirmSelection）で先頭の Slack を起動する
+        viewModel.confirmSelection()
         #expect(viewModel.isPresented == false)
-        #expect(viewModel.mode == .inactive)
-        #expect(hotKeyMonitor.activeMode == .inactive)
-        #expect(windowService.activatedWindows.isEmpty)
-        #expect(installedAppService.launchedApps.map(\.displayName) == ["Calendar"])
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["Slack"])
     }
 
-    /// アプリ候補表示中のウィンドウクローズ無視、クローズによる 0 件化時のアプリ候補遷移、および非同期更新反映を検証する
-    @Test("ウィンドウクローズで0件になった場合のアプリ候補表示と非同期更新が安全に動作する")
+    /// 既存ウィンドウ候補がある混在表示中でもバックグラウンドのアプリ更新が反映され、ウィンドウ側の選択位置が維持されることを検証する
+    @Test("混在表示中にバックグラウンド更新が完了してもウィンドウ選択を維持しつつアプリ候補を更新する")
     @MainActor
-    func closeToZeroShowsAppCandidatesAndBackgroundRefreshUpdatesSafely() async {
+    func backgroundRefreshUpdatesCombinedAppResultsSafely() async {
         let windowService = MockWindowService()
         let hotKeyMonitor = MockHotKeyMonitor()
         let permissionService = MockAccessibilityPermissionService()
@@ -726,14 +852,33 @@ struct SwitcherViewModelTests {
 
         let now = Date()
         windowService.stubbedCandidates = [
-            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Slack", title: "General", lastActivatedAt: now),
-            RawWindowCandidate(id: "w2", pid: 20, applicationName: "Safari", title: "Docs", lastActivatedAt: now.addingTimeInterval(-10))
+            RawWindowCandidate(
+                id: "w1",
+                pid: 10,
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari",
+                title: "Docs",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "w2",
+                pid: 20,
+                bundleIdentifier: "com.tinyspeck.slackmacgap",
+                applicationName: "Slack",
+                title: "General",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            )
         ]
         installedAppService.stubbedApps = [
             LaunchableApp(
-                displayName: "Slack",
-                bundleIdentifier: "com.tinyspeck.slackmacgap",
-                bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+                displayName: "Safari",
+                bundleIdentifier: "com.apple.Safari",
+                bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")
+            ),
+            LaunchableApp(
+                displayName: "Simulator",
+                bundleIdentifier: "com.apple.iphonesimulator",
+                bundleURL: URL(fileURLWithPath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app")
             )
         ]
 
@@ -755,48 +900,50 @@ struct SwitcherViewModelTests {
             installedAppService: installedAppService
         )
 
-        // バックグラウンド更新が待機状態に入るのを確実に待ってからテストを進める
         await withCheckedContinuation { cont in
             refreshHandlerEnteredContinuation = cont
             viewModel.handleHotKeyEvent(.launcherTriggerPressed)
         }
-        viewModel.updateSearchQuery("sla")
-        #expect(viewModel.displayedResults.map(\.id) == ["w1"])
 
-        await viewModel.closeSelectedWindow()
-        #expect(windowService.terminatedPIDs == [10])
-        #expect(viewModel.displayedResults.isEmpty)
-        #expect(viewModel.isShowingLaunchCandidates == true)
-        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack"])
+        viewModel.updateSearchQuery("s")
+        viewModel.moveSelection(.down)
+        #expect(viewModel.displayedResults.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Simulator"])
+        #expect(viewModel.selectedIndex == 1)
 
-        // アプリ候補表示中の closeSelectedWindow は対象ウィンドウが無いため安全に無視される
-        await viewModel.closeSelectedWindow()
-        #expect(windowService.closedWindows.isEmpty)
-        #expect(windowService.terminatedPIDs == [10])
-
-        // ランチャー表示中に裏のアプリ一覧リフレッシュが完了し新アプリが増えた場合、候補が再評価される
+        // 既存ウィンドウが表示されている混在状態でも、裏リフレッシュ完了により新規アプリが下部に追加される（Safari は除外）
         await withCheckedContinuation { updateWaitCont in
             viewModel.onSearchResultsUpdated = {
                 updateWaitCont.resume()
             }
             refreshContinuation?.resume(returning: [
                 LaunchableApp(
-                    displayName: "Slack",
-                    bundleIdentifier: "com.tinyspeck.slackmacgap",
-                    bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+                    displayName: "Safari",
+                    bundleIdentifier: "com.apple.Safari",
+                    bundleURL: URL(fileURLWithPath: "/Applications/Safari.app")
                 ),
                 LaunchableApp(
-                    displayName: "Slack Helper App",
-                    bundleIdentifier: "com.example.slackhelper",
-                    bundleURL: URL(fileURLWithPath: "/Applications/Slack Helper App.app")
+                    displayName: "Simulator",
+                    bundleIdentifier: "com.apple.iphonesimulator",
+                    bundleURL: URL(fileURLWithPath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app")
+                ),
+                LaunchableApp(
+                    displayName: "Sublime Text",
+                    bundleIdentifier: "com.sublimetext.4",
+                    bundleURL: URL(fileURLWithPath: "/Applications/Sublime Text.app")
                 )
             ])
         }
-        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Slack", "Slack Helper App"])
 
-        // Enter（confirmSelection）で先頭の Slack を起動する
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["Simulator", "Sublime Text"])
+        // 上部ウィンドウ (w2: Slack) の選択カーソル位置は乱されない
+        #expect(viewModel.selectedIndex == 1)
+
+        // 末尾の Sublime Text へ移動して起動できる
+        viewModel.moveSelection(.down)
+        viewModel.moveSelection(.down)
+        #expect(viewModel.selectedIndex == 3)
         viewModel.confirmSelection()
-        #expect(viewModel.isPresented == false)
-        #expect(installedAppService.launchedApps.map(\.displayName) == ["Slack"])
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["Sublime Text"])
     }
 }

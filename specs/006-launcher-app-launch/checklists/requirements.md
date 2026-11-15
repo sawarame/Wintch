@@ -1,4 +1,4 @@
-# Specification Quality Checklist: 検索ランチャーでの既存ウィンドウ 0 件時のアプリ新規起動候補表示
+# Specification Quality Checklist: 検索ランチャーでの検索入力時におけるアプリ起動候補の併用表示
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-11-15
@@ -31,5 +31,5 @@
 
 ## Notes
 
-- すべての検証項目を満たしており、`/speckit-plan` 以降の工程へ進める状態です。
-- 関連する既存仕様書（`002-window-search-launcher`, `004-launcher-switcher-nav`, `005-close-selected-window`）との整合性修正もあわせて実施済みです。
+- 仕様変更（「既存ウィンドウ 0 件時のみ」から「検索入力時は常に既存ウィンドウ候補の下へ未表示アプリを起動候補として併用表示」）を反映し、すべてのチェック項目を満たしています。
+- 関連する既存仕様書（`002-window-search-launcher`, `004-launcher-switcher-nav`, `005-close-selected-window`）との整合性修正もあわせて反映済みです。

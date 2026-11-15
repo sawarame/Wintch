@@ -37,17 +37,17 @@ public final class SwitcherViewModel {
     /// 画面に表示する検索・ソート済みウィンドウ結果一覧
     public private(set) var displayedResults: [WindowSearchResult] = []
 
-    /// 既存ウィンドウ検索が 0 件のときに表示するアプリ起動候補一覧（ランチャーモード専用）
+    /// ランチャーモードでウィンドウ一覧の下に表示するアプリ起動候補一覧（表示中のウィンドウと同アプリは除外）
     public private(set) var displayedAppResults: [AppSearchResult] = []
 
-    /// 現在、既存ウィンドウの代わりにアプリ起動候補を表示中かどうか
+    /// 現在アプリ起動候補を表示中かどうか（ランチャーモードかつアプリ起動候補が 1 件以上ある場合）
     public var isShowingLaunchCandidates: Bool {
-        mode == .launcher && displayedResults.isEmpty && !displayedAppResults.isEmpty
+        mode == .launcher && !displayedAppResults.isEmpty
     }
 
-    /// 現在選択操作の対象となっているリストの件数
+    /// 現在選択操作の対象となっている全候補（ウィンドウ＋ランチャー時はアプリ起動候補）の合計件数
     private var activeResultCount: Int {
-        isShowingLaunchCandidates ? displayedAppResults.count : displayedResults.count
+        displayedResults.count + (mode == .launcher ? displayedAppResults.count : 0)
     }
 
     /// 表示対象のウィンドウ項目一覧（既存ビューおよびテスト互換プロパティ）
@@ -260,20 +260,21 @@ public final class SwitcherViewModel {
     /// 現在選択中のウィンドウまたはアプリ起動候補で確定し、パネルを閉じて実行する
     public func confirmSelection() {
         guard mode != .inactive else { return }
-        if isShowingLaunchCandidates {
-            guard displayedAppResults.indices.contains(selectedIndex) else { return }
-            let targetApp = displayedAppResults[selectedIndex].app
+
+        if displayedResults.indices.contains(selectedIndex) {
+            let target = displayedResults[selectedIndex].entry
             dismiss(reason: .confirmed)
-            installedAppService?.launchApplication(targetApp)
+            windowService.activateWindow(target)
             return
         }
 
-        // ランチャーで一致 0 件のときに Enter が押されても誤操作せず開いたまま維持する
-        guard displayedResults.indices.contains(selectedIndex) else { return }
-
-        let target = displayedResults[selectedIndex].entry
-        dismiss(reason: .confirmed)
-        windowService.activateWindow(target)
+        if mode == .launcher {
+            let appIndex = selectedIndex - displayedResults.count
+            guard displayedAppResults.indices.contains(appIndex) else { return }
+            let targetApp = displayedAppResults[appIndex].app
+            dismiss(reason: .confirmed)
+            installedAppService?.launchApplication(targetApp)
+        }
     }
 
     /// 切り替えを実行せずにパネルを閉じる（Esc や外部フォーカス喪失時）
@@ -365,21 +366,22 @@ public final class SwitcherViewModel {
         onModePresentationChanged?(.inactive, reason)
     }
 
-    /// 検索クエリを用いてウィンドウ検索結果と（0件時の）アプリ起動候補を更新する
+    /// 検索クエリを用いてウィンドウ検索結果とアプリ起動候補（表示中ウィンドウと重複するアプリを除外）を更新する
     /// - Parameter query: 適用する検索クエリ文字列
     private func updateLauncherSearchResults(for query: String) {
         displayedResults = WindowSearchEngine.search(query: query, in: allEntries)
-        if displayedResults.isEmpty, let installedAppService {
+        if let installedAppService {
             displayedAppResults = AppSearchEngine.search(
                 query: query,
-                in: installedAppService.cachedInstalledApps()
+                in: installedAppService.cachedInstalledApps(),
+                excludingWindowEntries: displayedResults.map(\.entry)
             )
         } else {
             displayedAppResults = []
         }
     }
 
-    /// バックグラウンドでアプリ一覧を更新し、ランチャーがアプリ候補表示中なら結果を即時再評価する
+    /// バックグラウンドでアプリ一覧を更新し、ランチャー表示中ならアプリ起動候補を即時再評価する
     private func scheduleInstalledAppsRefresh() {
         guard let installedAppService else { return }
         installedAppsRefreshTask?.cancel()
@@ -392,17 +394,20 @@ public final class SwitcherViewModel {
                   !Task.isCancelled,
                   self.mode == .launcher,
                   capturedMode == .launcher,
-                  self.presentationGeneration == capturedGeneration,
-                  self.displayedResults.isEmpty else {
+                  self.presentationGeneration == capturedGeneration else {
                 return
             }
 
-            let nextAppResults = AppSearchEngine.search(query: self.searchQuery, in: latestApps)
+            let nextAppResults = AppSearchEngine.search(
+                query: self.searchQuery,
+                in: latestApps,
+                excludingWindowEntries: self.displayedResults.map(\.entry)
+            )
             guard nextAppResults != self.displayedAppResults else { return }
             self.displayedAppResults = nextAppResults
             self.selectedIndex = SwitcherSelection.indexAfterRemoval(
                 current: self.selectedIndex,
-                remainingCount: nextAppResults.count
+                remainingCount: self.activeResultCount
             )
             self.onSearchResultsUpdated?()
         }

@@ -78,4 +78,61 @@ struct AppSearchEngineTests {
         let tieOrder = AppSearchEngine.search(query: "term", in: [appB, appA])
         #expect(tieOrder.map(\.app.displayName) == ["Term A", "Term B"])
     }
+
+    /// 表示中ウィンドウと同一アプリの起動候補がバンドル ID およびアプリ名フォールバックで重複除外されることを検証する
+    @Test("表示中ウィンドウと重複するアプリを起動候補から除外する")
+    func excludesAppsAlreadyShownInWindowEntries() {
+        let calculator = LaunchableApp(
+            displayName: "計算機",
+            alternateName: "Calculator",
+            bundleIdentifier: "com.apple.calculator",
+            bundleURL: URL(fileURLWithPath: "/System/Applications/Calculator.app")
+        )
+        let calendar = LaunchableApp(
+            displayName: "カレンダー",
+            alternateName: "Calendar",
+            bundleIdentifier: "com.apple.iCal",
+            bundleURL: URL(fileURLWithPath: "/System/Applications/Calendar.app")
+        )
+        let slack = LaunchableApp(
+            displayName: "Slack",
+            bundleIdentifier: "com.tinyspeck.slackmacgap",
+            bundleURL: URL(fileURLWithPath: "/Applications/Slack.app")
+        )
+        let slackHelper = LaunchableApp(
+            displayName: "Slack Helper",
+            bundleIdentifier: "com.example.slackhelper",
+            bundleURL: URL(fileURLWithPath: "/Applications/Slack Helper.app")
+        )
+
+        // bundleIdentifier が大文字小文字違いで一致する場合は表示名が異なっていても除外される
+        let windowByBundleID = WindowEntry(
+            id: "w1",
+            pid: 10,
+            bundleIdentifier: "COM.APPLE.CALCULATOR",
+            applicationName: "CalculatorWindow",
+            windowTitle: "基本"
+        )
+        let bundleFiltered = AppSearchEngine.search(
+            query: "cal",
+            in: [calculator, calendar],
+            excludingWindowEntries: [windowByBundleID]
+        )
+        #expect(bundleFiltered.map(\.app.displayName) == ["カレンダー"])
+
+        // bundleIdentifier が欠損している場合はアプリ名（大文字小文字無視）のフォールバックで除外される
+        let windowWithoutBundleID = WindowEntry(
+            id: "w2",
+            pid: 20,
+            bundleIdentifier: nil,
+            applicationName: "slack",
+            windowTitle: "general"
+        )
+        let fallbackFiltered = AppSearchEngine.search(
+            query: "slack",
+            in: [slack, slackHelper],
+            excludingWindowEntries: [windowWithoutBundleID]
+        )
+        #expect(fallbackFiltered.map(\.app.displayName) == ["Slack Helper"])
+    }
 }
