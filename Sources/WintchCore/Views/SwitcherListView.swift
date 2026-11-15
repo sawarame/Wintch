@@ -37,7 +37,10 @@ public struct SwitcherListView: View {
                     .overlay(.white.opacity(0.14))
             }
 
-            if viewModel.mode == .launcher && viewModel.displayedResults.isEmpty {
+            if viewModel.mode == .launcher
+                && viewModel.displayedResults.isEmpty
+                && viewModel.displayedAppResults.isEmpty
+            {
                 emptyResultView
             } else {
                 resultListView
@@ -106,7 +109,7 @@ public struct SwitcherListView: View {
         .padding(.horizontal, 14)
     }
 
-    /// ウィンドウ候補一覧の縦型スクロールリスト
+    /// ウィンドウ候補および（ランチャー検索時の）アプリ起動候補を統合表示する縦型スクロールリスト
     private var resultListView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
@@ -117,10 +120,28 @@ public struct SwitcherListView: View {
                             icon: viewModel.icon(for: result.entry.pid),
                             isSelected: index == viewModel.selectedIndex
                         )
-                        .id(result.id)
+                        .id(rowScrollID(forWindowID: result.id))
                         .contentShape(Rectangle())
                         .onTapGesture {
                             viewModel.selectAndActivate(at: index)
+                        }
+                    }
+
+                    if viewModel.isShowingLaunchCandidates {
+                        appLaunchSectionHeader
+
+                        ForEach(Array(viewModel.displayedAppResults.enumerated()), id: \.element.id) { appIndex, result in
+                            let unifiedIndex = viewModel.displayedResults.count + appIndex
+                            AppLaunchRowView(
+                                result: result,
+                                icon: viewModel.icon(forAppURL: result.app.bundleURL),
+                                isSelected: unifiedIndex == viewModel.selectedIndex
+                            )
+                            .id(rowScrollID(forAppID: result.id))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                viewModel.selectAndActivate(at: unifiedIndex)
+                            }
                         }
                     }
                 }
@@ -129,76 +150,72 @@ public struct SwitcherListView: View {
             .frame(maxHeight: 420)
             .fixedSize(horizontal: false, vertical: true)
             .onChange(of: viewModel.selectedIndex) { _, newIndex in
-                guard viewModel.displayedResults.indices.contains(newIndex) else { return }
-                let targetID = viewModel.displayedResults[newIndex].id
+                guard let targetID = scrollTargetID(for: newIndex) else { return }
                 withAnimation(.easeOut(duration: 0.08)) {
                     proxy.scrollTo(targetID, anchor: .center)
                 }
             }
         }
     }
-}
 
-/// スイッチャーリスト内の1行（アプリアイコン・アプリ名・ウィンドウタイトルのみ）を表す行ビュー
-private struct SwitcherRowView: View {
-    /// 表示対象の検索結果項目
-    let result: WindowSearchResult
-    /// 所有アプリのアイコン画像
-    let icon: NSImage?
-    /// 現在選択状態として強調表示するか
-    let isSelected: Bool
+    /// アプリ起動候補セクションの区切り線と見出し
+    private var appLaunchSectionHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !viewModel.displayedResults.isEmpty {
+                Divider()
+                    .overlay(.white.opacity(0.14))
+                    .padding(.vertical, 4)
+            }
 
-    /// 行ビューの本体構築
-    var body: some View {
-        HStack(spacing: 12) {
-            if let icon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 24, height: 24)
-            } else {
-                Image(systemName: "macwindow")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 22, height: 22)
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 8) {
                 Text(
-                    highlightedText(
-                        result.entry.applicationName,
-                        ranges: result.matchedAppNameRanges,
-                        baseWeight: .semibold,
-                        baseColor: isSelected ? .white : .primary,
-                        highlightColor: isSelected ? .white : .accentColor
-                    )
+                    viewModel.displayedResults.isEmpty
+                        ? "一致するウィンドウがないため、アプリを起動"
+                        : "アプリを起動"
                 )
-                .fixedSize(horizontal: true, vertical: false)
-
-                Text(
-                    highlightedText(
-                        result.entry.displayTitle,
-                        ranges: result.matchedTitleRanges,
-                        baseWeight: .regular,
-                        baseColor: isSelected ? .white.opacity(0.9) : .secondary,
-                        highlightColor: isSelected ? .white : .accentColor
-                    )
-                )
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
-
-            Spacer(minLength: 0)
+            .padding(.horizontal, 4)
+            .padding(.top, viewModel.displayedResults.isEmpty ? 2 : 4)
+            .padding(.bottom, 2)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.accentColor : Color.clear)
-        )
     }
 
+    /// ウィンドウ行の ScrollViewReader 用識別子を返す
+    /// - Parameter id: ウィンドウ検索結果の一意識別子
+    /// - Returns: 衝突を防ぐ接頭辞付き識別子文字列
+    private func rowScrollID(forWindowID id: String) -> String {
+        "window-\(id)"
+    }
+
+    /// アプリ起動候補行の ScrollViewReader 用識別子を返す
+    /// - Parameter id: アプリ検索結果の一意識別子
+    /// - Returns: 衝突を防ぐ接頭辞付き識別子文字列
+    private func rowScrollID(forAppID id: String) -> String {
+        "app-\(id)"
+    }
+
+    /// 統一選択インデックスに対応する ScrollViewReader 用の識別子を返す
+    /// - Parameter index: 統一インデックス
+    /// - Returns: 該当行が存在する場合は識別子、範囲外なら nil
+    private func scrollTargetID(for index: Int) -> String? {
+        if viewModel.displayedResults.indices.contains(index) {
+            return rowScrollID(forWindowID: viewModel.displayedResults[index].id)
+        }
+        guard viewModel.isShowingLaunchCandidates else { return nil }
+        let appIndex = index - viewModel.displayedResults.count
+        guard viewModel.displayedAppResults.indices.contains(appIndex) else { return nil }
+        return rowScrollID(forAppID: viewModel.displayedAppResults[appIndex].id)
+    }
+}
+
+/// リスト行内で使用するアイコン・ハイライト装飾・文字スタイル生成の共通部品
+private enum SwitcherRowStyling {
     /// 検索一致範囲に太字とハイライトカラーを適用した AttributedString を構築する
     /// - Parameters:
     ///   - text: 元の表示テキスト
@@ -207,7 +224,7 @@ private struct SwitcherRowView: View {
     ///   - baseColor: 非一致部分の文字色
     ///   - highlightColor: 一致部分の文字色
     /// - Returns: 属性付き文字列
-    private func highlightedText(
+    static func highlightedText(
         _ text: String,
         ranges: [Range<String.Index>],
         baseWeight: Font.Weight,
@@ -229,5 +246,140 @@ private struct SwitcherRowView: View {
         }
 
         return attributed
+    }
+
+    /// アプリアイコン（未取得時は代替 SF Symbol）を描画する
+    /// - Parameters:
+    ///   - icon: 表示対象のアプリアイコン画像
+    ///   - fallbackSymbol: アイコン未取得時の代替 SF Symbol 名
+    /// - Returns: 24x24 相当のアイコンビュー
+    @ViewBuilder
+    static func iconView(icon: NSImage?, fallbackSymbol: String) -> some View {
+        if let icon {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 24, height: 24)
+        } else {
+            Image(systemName: fallbackSymbol)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 22, height: 22)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 行の選択状態に応じた背景シェイプを返す
+    /// - Parameter isSelected: 現在選択中かどうか
+    /// - Returns: 選択ハイライト背景ビュー
+    static func rowBackground(isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(isSelected ? Color.accentColor : Color.clear)
+    }
+}
+
+/// スイッチャーリスト内の1行（アプリアイコン・アプリ名・ウィンドウタイトルのみ）を表す行ビュー
+private struct SwitcherRowView: View {
+    /// 表示対象の検索結果項目
+    let result: WindowSearchResult
+    /// 所有アプリのアイコン画像
+    let icon: NSImage?
+    /// 現在選択状態として強調表示するか
+    let isSelected: Bool
+
+    /// 行ビューの本体構築
+    var body: some View {
+        HStack(spacing: 12) {
+            SwitcherRowStyling.iconView(icon: icon, fallbackSymbol: "macwindow")
+
+            HStack(spacing: 8) {
+                Text(
+                    SwitcherRowStyling.highlightedText(
+                        result.entry.applicationName,
+                        ranges: result.matchedAppNameRanges,
+                        baseWeight: .semibold,
+                        baseColor: isSelected ? .white : .primary,
+                        highlightColor: isSelected ? .white : .accentColor
+                    )
+                )
+                .fixedSize(horizontal: true, vertical: false)
+
+                Text(
+                    SwitcherRowStyling.highlightedText(
+                        result.entry.displayTitle,
+                        ranges: result.matchedTitleRanges,
+                        baseWeight: .regular,
+                        baseColor: isSelected ? .white.opacity(0.9) : .secondary,
+                        highlightColor: isSelected ? .white : .accentColor
+                    )
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+}
+
+/// アプリ起動候補リスト内の1行（アプリアイコン・アプリ名・別名・起動バッジ）を表す行ビュー
+private struct AppLaunchRowView: View {
+    /// 表示対象のアプリ検索結果項目
+    let result: AppSearchResult
+    /// アプリケーションアイコン画像
+    let icon: NSImage?
+    /// 現在選択状態として強調表示するか
+    let isSelected: Bool
+
+    /// 行ビューの本体構築
+    var body: some View {
+        HStack(spacing: 12) {
+            SwitcherRowStyling.iconView(icon: icon, fallbackSymbol: "app")
+
+            HStack(spacing: 8) {
+                Text(
+                    SwitcherRowStyling.highlightedText(
+                        result.app.displayName,
+                        ranges: result.matchedDisplayNameRanges,
+                        baseWeight: .semibold,
+                        baseColor: isSelected ? .white : .primary,
+                        highlightColor: isSelected ? .white : .accentColor
+                    )
+                )
+                .fixedSize(horizontal: true, vertical: false)
+
+                if !result.app.alternateName.isEmpty {
+                    Text(
+                        SwitcherRowStyling.highlightedText(
+                            result.app.alternateName,
+                            ranges: result.matchedAlternateNameRanges,
+                            baseWeight: .regular,
+                            baseColor: isSelected ? .white.opacity(0.9) : .secondary,
+                            highlightColor: isSelected ? .white : .accentColor
+                        )
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Text("起動")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? .white.opacity(0.95) : .secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(isSelected ? Color.white.opacity(0.22) : Color.primary.opacity(0.08))
+                )
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
     }
 }

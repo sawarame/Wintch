@@ -11,6 +11,9 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
     /// 所有アプリケーションのプロセス ID
     public let pid: Int32
 
+    /// 所有アプリケーションのバンドル識別子（取得可能な場合）
+    public let bundleIdentifier: String?
+
     /// リストに表示するアプリケーション名
     public let applicationName: String
 
@@ -31,6 +34,7 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
     ///   - id: 一意識別子
     ///   - cgWindowID: CoreGraphics ウィンドウ ID
     ///   - pid: 所有プロセス ID
+    ///   - bundleIdentifier: 所有アプリケーションのバンドル識別子
     ///   - applicationName: アプリケーション名
     ///   - windowTitle: ウィンドウタイトル
     ///   - isMinimized: 最小化状態かどうか
@@ -40,6 +44,7 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
         id: String,
         cgWindowID: UInt32? = nil,
         pid: Int32,
+        bundleIdentifier: String? = nil,
         applicationName: String,
         windowTitle: String,
         isMinimized: Bool = false,
@@ -49,6 +54,7 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
         self.id = id
         self.cgWindowID = cgWindowID
         self.pid = pid
+        self.bundleIdentifier = bundleIdentifier
         self.applicationName = applicationName
         self.windowTitle = windowTitle
         self.isMinimized = isMinimized

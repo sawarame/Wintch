@@ -34,8 +34,21 @@ public final class SwitcherViewModel {
     /// 現在の検索クエリ文字列（ランチャーモード専用）
     public private(set) var searchQuery: String = ""
 
-    /// 画面に表示する検索・ソート済み結果一覧
+    /// 画面に表示する検索・ソート済みウィンドウ結果一覧
     public private(set) var displayedResults: [WindowSearchResult] = []
+
+    /// ランチャーモードでウィンドウ一覧の下に表示するアプリ起動候補一覧（表示中のウィンドウと同アプリは除外）
+    public private(set) var displayedAppResults: [AppSearchResult] = []
+
+    /// 現在アプリ起動候補を表示中かどうか（ランチャーモードかつアプリ起動候補が 1 件以上ある場合）
+    public var isShowingLaunchCandidates: Bool {
+        mode == .launcher && !displayedAppResults.isEmpty
+    }
+
+    /// 現在選択操作の対象となっている全候補（ウィンドウ＋ランチャー時はアプリ起動候補）の合計件数
+    private var activeResultCount: Int {
+        displayedResults.count + (mode == .launcher ? displayedAppResults.count : 0)
+    }
 
     /// 表示対象のウィンドウ項目一覧（既存ビューおよびテスト互換プロパティ）
     public var entries: [WindowEntry] {
@@ -77,6 +90,10 @@ public final class SwitcherViewModel {
     private let permissionService: any AccessibilityPermissionServicing
     /// アプリアイコン取得サービス
     private let iconProvider: any IconProviding
+    /// インストール済みアプリ取得・起動サービス
+    private let installedAppService: (any InstalledAppServicing)?
+    /// インストール済みアプリ一覧のバックグラウンド更新タスク
+    private var installedAppsRefreshTask: Task<Void, Never>?
 
     /// スイッチャー ViewModel を初期化する
     /// - Parameters:
@@ -84,16 +101,19 @@ public final class SwitcherViewModel {
     ///   - hotKeyMonitor: ホットキー監視サービス
     ///   - permissionService: 権限確認サービス
     ///   - iconProvider: アイコン取得サービス
+    ///   - installedAppService: インストール済みアプリ取得・起動サービス（省略時はアプリ起動候補なし）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
         permissionService: any AccessibilityPermissionServicing,
-        iconProvider: any IconProviding
+        iconProvider: any IconProviding,
+        installedAppService: (any InstalledAppServicing)? = nil
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
         self.permissionService = permissionService
         self.iconProvider = iconProvider
+        self.installedAppService = installedAppService
     }
 
     /// 指定されたプロセス ID のアプリアイコンを取得する
@@ -101,6 +121,18 @@ public final class SwitcherViewModel {
     /// - Returns: アプリアイコン画像（取得できない場合は nil）
     public func icon(for pid: Int32) -> NSImage? {
         iconProvider.icon(for: pid)
+    }
+
+    /// 指定されたアプリケーションバンドル URL のアプリアイコンを取得する
+    /// - Parameter url: アプリケーションバンドルの URL
+    /// - Returns: アプリアイコン画像（取得できない場合は nil）
+    public func icon(forAppURL url: URL) -> NSImage? {
+        iconProvider.icon(forAppURL: url)
+    }
+
+    /// ランチャー検索用にインストール済みアプリ一覧をバックグラウンドで事前取得する
+    public func preloadInstalledApps() {
+        scheduleInstalledAppsRefresh()
     }
 
     /// サービス層から通知されたキーイベントを処理する
@@ -177,16 +209,17 @@ public final class SwitcherViewModel {
         switch targetMode {
         case .normal:
             displayedResults = allEntries.map { WindowSearchResult(entry: $0) }
+            displayedAppResults = []
         case .launcher:
-            // 検索キーワードを維持したまま最新の残余ウィンドウで絞り込みを再評価する
-            displayedResults = WindowSearchEngine.search(query: searchQuery, in: allEntries)
+            // 検索キーワードを維持したまま最新の残余ウィンドウおよびアプリ起動候補を再評価する
+            updateLauncherSearchResults(for: searchQuery)
         case .inactive:
             return
         }
 
         selectedIndex = SwitcherSelection.indexAfterRemoval(
             current: previousIndex,
-            remainingCount: displayedResults.count
+            remainingCount: activeResultCount
         )
         onSearchResultsUpdated?()
         onPanelFocusRestoreNeeded?(targetMode)
@@ -197,7 +230,7 @@ public final class SwitcherViewModel {
     public func updateSearchQuery(_ query: String) {
         guard mode == .launcher, searchQuery != query else { return }
         searchQuery = query
-        displayedResults = WindowSearchEngine.search(query: query, in: allEntries)
+        updateLauncherSearchResults(for: query)
         // 検索入力が変化したら先頭候補へ選択カーソルを戻す
         selectedIndex = 0
         onSearchResultsUpdated?()
@@ -206,32 +239,42 @@ public final class SwitcherViewModel {
     /// 選択カーソルを上下に移動する（リストが空の場合は何もしない）
     /// - Parameter direction: 移動方向
     public func moveSelection(_ direction: ArrowDirection) {
-        guard mode != .inactive, !displayedResults.isEmpty else { return }
+        let count = activeResultCount
+        guard mode != .inactive, count > 0 else { return }
         switch direction {
         case .up:
-            selectedIndex = SwitcherSelection.previousIndex(current: selectedIndex, count: displayedResults.count)
+            selectedIndex = SwitcherSelection.previousIndex(current: selectedIndex, count: count)
         case .down:
-            selectedIndex = SwitcherSelection.nextIndex(current: selectedIndex, count: displayedResults.count)
+            selectedIndex = SwitcherSelection.nextIndex(current: selectedIndex, count: count)
         }
     }
 
-    /// 指定インデックスの項目をクリック等で直接選択して即座にアクティブ化する
+    /// 指定インデックスの項目をクリック等で直接選択して即座にアクティブ化または起動する
     /// - Parameter index: 選択された項目のインデックス
     public func selectAndActivate(at index: Int) {
-        guard mode != .inactive, displayedResults.indices.contains(index) else { return }
+        guard mode != .inactive, (0..<activeResultCount).contains(index) else { return }
         selectedIndex = index
         confirmSelection()
     }
 
-    /// 現在選択中のウィンドウで確定し、パネルを閉じてアクティブ化する
+    /// 現在選択中のウィンドウまたはアプリ起動候補で確定し、パネルを閉じて実行する
     public func confirmSelection() {
         guard mode != .inactive else { return }
-        // ランチャーで一致 0 件のときに Enter が押されても誤操作せず開いたまま維持する
-        guard displayedResults.indices.contains(selectedIndex) else { return }
 
-        let target = displayedResults[selectedIndex].entry
-        dismiss(reason: .confirmed)
-        windowService.activateWindow(target)
+        if displayedResults.indices.contains(selectedIndex) {
+            let target = displayedResults[selectedIndex].entry
+            dismiss(reason: .confirmed)
+            windowService.activateWindow(target)
+            return
+        }
+
+        if mode == .launcher {
+            let appIndex = selectedIndex - displayedResults.count
+            guard displayedAppResults.indices.contains(appIndex) else { return }
+            let targetApp = displayedAppResults[appIndex].app
+            dismiss(reason: .confirmed)
+            installedAppService?.launchApplication(targetApp)
+        }
     }
 
     /// 切り替えを実行せずにパネルを閉じる（Esc や外部フォーカス喪失時）
@@ -291,10 +334,16 @@ public final class SwitcherViewModel {
         allEntries = sorted
         searchQuery = ""
         displayedResults = sorted.map { WindowSearchResult(entry: $0) }
+        displayedAppResults = []
         selectedIndex = initial
         presentationGeneration += 1
         mode = targetMode
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
+
+        if targetMode == .launcher {
+            // 新規インストール済みアプリを反映するためバックグラウンドでキャッシュを最新化する
+            scheduleInstalledAppsRefresh()
+        }
 
         onPresentationChanged?(true)
         onModePresentationChanged?(targetMode, nil)
@@ -304,13 +353,63 @@ public final class SwitcherViewModel {
     /// - Parameter reason: パネル終了の理由
     private func dismiss(reason: SwitcherDismissReason) {
         presentationGeneration += 1
+        installedAppsRefreshTask?.cancel()
+        installedAppsRefreshTask = nil
         mode = .inactive
         hotKeyMonitor.activeMode = .inactive
         allEntries = []
         searchQuery = ""
         displayedResults = []
+        displayedAppResults = []
         selectedIndex = 0
         onPresentationChanged?(false)
         onModePresentationChanged?(.inactive, reason)
+    }
+
+    /// 検索クエリを用いてウィンドウ検索結果とアプリ起動候補（表示中ウィンドウと重複するアプリを除外）を更新する
+    /// - Parameter query: 適用する検索クエリ文字列
+    private func updateLauncherSearchResults(for query: String) {
+        displayedResults = WindowSearchEngine.search(query: query, in: allEntries)
+        if let installedAppService {
+            displayedAppResults = AppSearchEngine.search(
+                query: query,
+                in: installedAppService.cachedInstalledApps(),
+                excludingWindowEntries: displayedResults.map(\.entry)
+            )
+        } else {
+            displayedAppResults = []
+        }
+    }
+
+    /// バックグラウンドでアプリ一覧を更新し、ランチャー表示中ならアプリ起動候補を即時再評価する
+    private func scheduleInstalledAppsRefresh() {
+        guard let installedAppService else { return }
+        installedAppsRefreshTask?.cancel()
+        let capturedGeneration = presentationGeneration
+        let capturedMode = mode
+
+        installedAppsRefreshTask = Task { @MainActor [weak self] in
+            let latestApps = await installedAppService.refreshInstalledApps()
+            guard let self,
+                  !Task.isCancelled,
+                  self.mode == .launcher,
+                  capturedMode == .launcher,
+                  self.presentationGeneration == capturedGeneration else {
+                return
+            }
+
+            let nextAppResults = AppSearchEngine.search(
+                query: self.searchQuery,
+                in: latestApps,
+                excludingWindowEntries: self.displayedResults.map(\.entry)
+            )
+            guard nextAppResults != self.displayedAppResults else { return }
+            self.displayedAppResults = nextAppResults
+            self.selectedIndex = SwitcherSelection.indexAfterRemoval(
+                current: self.selectedIndex,
+                remainingCount: self.activeResultCount
+            )
+            self.onSearchResultsUpdated?()
+        }
     }
 }

@@ -98,6 +98,7 @@ public enum WindowFilter {
                     id: candidate.id,
                     cgWindowID: candidate.cgWindowID,
                     pid: candidate.pid,
+                    bundleIdentifier: candidate.bundleIdentifier,
                     applicationName: candidate.applicationName,
                     windowTitle: candidate.title ?? "",
                     isMinimized: candidate.isMinimized,

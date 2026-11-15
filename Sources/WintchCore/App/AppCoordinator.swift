@@ -33,6 +33,8 @@ public final class AppCoordinator {
     private let launchAtLoginService: any LaunchAtLoginServicing
     /// アプリアイコン取得サービス
     private let iconProvider: any IconProviding
+    /// インストール済みアプリ取得・起動サービス
+    private let installedAppService: any InstalledAppServicing
 
     /// フローティングスイッチャーパネル（遅延生成）
     private var switcherPanel: SwitcherPanel?
@@ -53,7 +55,8 @@ public final class AppCoordinator {
             permissionService: AccessibilityPermissionService(),
             preferencesStore: PreferencesStore(),
             launchAtLoginService: LaunchAtLoginService(),
-            iconProvider: IconProviderService()
+            iconProvider: IconProviderService(),
+            installedAppService: InstalledAppService()
         )
     }
 
@@ -65,13 +68,15 @@ public final class AppCoordinator {
     ///   - preferencesStore: 設定ストア
     ///   - launchAtLoginService: ログイン時自動起動サービス
     ///   - iconProvider: アイコン取得サービス
+    ///   - installedAppService: インストール済みアプリ取得・起動サービス
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
         permissionService: any AccessibilityPermissionServicing,
         preferencesStore: any PreferencesStoring,
         launchAtLoginService: any LaunchAtLoginServicing,
-        iconProvider: any IconProviding
+        iconProvider: any IconProviding,
+        installedAppService: any InstalledAppServicing = InstalledAppService()
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -79,13 +84,15 @@ public final class AppCoordinator {
         self.preferencesStore = preferencesStore
         self.launchAtLoginService = launchAtLoginService
         self.iconProvider = iconProvider
+        self.installedAppService = installedAppService
         self.permissionStatus = permissionService.currentStatus()
 
         self.switcherViewModel = SwitcherViewModel(
             windowService: windowService,
             hotKeyMonitor: hotKeyMonitor,
             permissionService: permissionService,
-            iconProvider: iconProvider
+            iconProvider: iconProvider,
+            installedAppService: installedAppService
         )
         self.settingsViewModel = SettingsViewModel(
             preferencesStore: preferencesStore,
@@ -116,6 +123,9 @@ public final class AppCoordinator {
         permissionService.startMonitoring { [weak self] latestStatus in
             self?.updatePermissionState(latestStatus)
         }
+
+        // 初回ランチャー検索から即時応答できるようインストール済みアプリ一覧をバックグラウンドで事前収集する
+        switcherViewModel.preloadInstalledApps()
     }
 
     /// 設定画面を最前面に表示する
