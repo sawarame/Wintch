@@ -6,6 +6,22 @@ import CoreGraphics
 /// 画面収録権限および非公開 API なしで全操作スペースのウィンドウ管理を行うサービス
 @MainActor
 public final class WindowService: WindowServicing {
+    /// AXUIElement 参照をスレッド境界を跨いで受け渡すための Sendable ラッパー
+    private struct SendableAXElement: @unchecked Sendable {
+        let value: AXUIElement
+    }
+
+    /// バックグラウンドキューで取得した 1 ウィンドウ分の AX スナップショット
+    private struct ScannedAXWindowSnapshot: Sendable {
+        let uniqueID: String
+        let axElement: SendableAXElement
+        let role: String?
+        let title: String?
+        let subrole: String?
+        let bounds: CGRect?
+        let isMinimized: Bool
+    }
+
     /// キャッシュされた AX ウィンドウ情報
     private struct CachedAXWindow {
         let id: String
@@ -26,11 +42,35 @@ public final class WindowService: WindowServicing {
     /// PID ごとの AXObserver インスタンス
     private var observersByPID: [Int32: AXObserver] = [:]
 
+    /// PID ごとのデバウンス付きバックグラウンド更新タスク
+    private var pendingRefreshTasksByPID: [Int32: Task<Void, Never>] = [:]
+
+    /// スペース切り替え／初期スキャン用のバックグラウンド走査タスク
+    private var pendingSpaceScanTask: Task<Void, Never>?
+
     /// Workspace 通知監視トークン群
     private var workspaceObservers: [NSObjectProtocol] = []
 
     /// 監視中フラグ
     private var isObserving = false
+
+    /// AX IPC 呼び出しをメインスレッド外で直列実行するためのワーカーキュー
+    private nonisolated let axWorkerQueue = DispatchQueue(
+        label: "dev.wintch.WindowService.AXWorker",
+        qos: .utility
+    )
+
+    /// 応答しないアプリによる長時間ブロックを防ぐための AX IPC タイムアウト（秒）
+    nonisolated static let axMessagingTimeoutSeconds: Float = 0.2
+
+    /// 高頻度なタイトル変更通知（kAXTitleChangedNotification）のデバウンス間隔
+    static let titleChangeDebounceDuration: Duration = .milliseconds(150)
+
+    /// フォーカス／ウィンドウ作成通知のデバウンス間隔
+    static let focusChangeDebounceDuration: Duration = .milliseconds(40)
+
+    /// 操作スペース切り替え時の全体再走査デバウンス間隔
+    static let spaceChangeDebounceDuration: Duration = .milliseconds(60)
 
     /// 照合および補完候補として許可する CoreGraphics ウィンドウレイヤー（通常・フローティング）
     private static let allowedCGWindowLayers: Set<Int> = [
@@ -46,13 +86,16 @@ public final class WindowService: WindowServicing {
         guard !isObserving else { return }
         isObserving = true
 
-        // 起動済みの通常アプリを初期登録する
+        // プロセス全体および個別 AXUIElement の IPC タイムアウトを短縮し、無応答アプリでの固着を防ぐ
+        Self.applyMessagingTimeout(to: AXUIElementCreateSystemWide())
+
+        // 起動済みの通常アプリにオブザーバを登録し、初期スキャンはバックグラウンドで実行する
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let pid = app.processIdentifier
             guard pid != ProcessInfo.processInfo.processIdentifier else { continue }
             registerObserver(for: pid)
-            refreshAXWindows(for: pid, markFrontmostAsActive: app.isActive)
         }
+        scheduleBackgroundScanAllRegularApps(debounce: nil)
 
         let center = NSWorkspace.shared.notificationCenter
 
@@ -66,9 +109,15 @@ public final class WindowService: WindowServicing {
                 guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                       app.activationPolicy == .regular else { return }
                 let pid = app.processIdentifier
+                let isActive = app.isActive
                 Task { @MainActor [weak self] in
-                    self?.registerObserver(for: pid)
-                    self?.refreshAXWindows(for: pid, markFrontmostAsActive: app.isActive)
+                    guard let self, self.isObserving else { return }
+                    self.registerObserver(for: pid)
+                    self.scheduleBackgroundRefresh(
+                        for: pid,
+                        markFrontmostAsActive: isActive,
+                        debounce: nil
+                    )
                 }
             }
         )
@@ -89,7 +138,7 @@ public final class WindowService: WindowServicing {
             }
         )
 
-        // アプリ切り替え時に最前面ウィンドウの MRU 時刻を更新
+        // アプリ切り替え時に最前面ウィンドウの MRU 時刻を更新（AX 問い合わせはバックグラウンド実行）
         workspaceObservers.append(
             center.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification,
@@ -100,12 +149,12 @@ public final class WindowService: WindowServicing {
                       app.activationPolicy == .regular else { return }
                 let pid = app.processIdentifier
                 Task { @MainActor [weak self] in
-                    self?.markFocusedWindowActivated(for: pid)
+                    self?.markFocusedWindowActivatedInBackground(for: pid)
                 }
             }
         )
 
-        // 操作スペース切り替え時に新スペースのウィンドウをキャッシュへ取り込む
+        // 操作スペース切り替え時に新スペースのウィンドウをデバウンス付きバックグラウンド走査で取り込む
         workspaceObservers.append(
             center.addObserver(
                 forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -113,7 +162,7 @@ public final class WindowService: WindowServicing {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.scanAllRegularApps()
+                    self?.scheduleBackgroundScanAllRegularApps(debounce: Self.spaceChangeDebounceDuration)
                 }
             }
         )
@@ -123,6 +172,13 @@ public final class WindowService: WindowServicing {
     public func stopObserving() {
         guard isObserving else { return }
         isObserving = false
+
+        pendingSpaceScanTask?.cancel()
+        pendingSpaceScanTask = nil
+        for task in pendingRefreshTasksByPID.values {
+            task.cancel()
+        }
+        pendingRefreshTasksByPID.removeAll()
 
         let center = NSWorkspace.shared.notificationCenter
         for token in workspaceObservers {
@@ -277,14 +333,15 @@ public final class WindowService: WindowServicing {
             raiseAXWindow(targetAX, unminimize: entry.isMinimized)
         }
 
-        // 別スペースへのアニメーション切り替え完了後に、対象ウィンドウのフォーカスを再確定する
+        // 別スペースへのアニメーション切り替え完了後に、バックグラウンドで最新情報を取得しフォーカスを再確定する
         let targetPID = entry.pid
         let targetTitle = entry.windowTitle
         let targetID = entry.id
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(80))
             guard let self else { return }
-            self.refreshAXWindows(for: targetPID, markFrontmostAsActive: false)
+            let snapshots = await self.fetchAXWindowSnapshotsInBackground(for: targetPID)
+            self.applyAXWindowSnapshots(snapshots, for: targetPID, markFrontmostAsActive: false)
             if let resolved = self.findCachedWindow(pid: targetPID, preferredID: targetID, title: targetTitle) {
                 self.raiseAXWindow(resolved.axElement, unminimize: entry.isMinimized)
                 self.updateMRUTimestamp(pid: targetPID, windowID: resolved.id, date: Date())
@@ -301,6 +358,7 @@ public final class WindowService: WindowServicing {
         }
 
         // クローズボタン属性が存在し、かつ無効化されていない場合のみ押下アクションを実行する
+        Self.applyMessagingTimeout(to: target.axElement)
         var closeButtonRef: CFTypeRef?
         let buttonStatus = AXUIElementCopyAttributeValue(
             target.axElement,
@@ -314,7 +372,8 @@ public final class WindowService: WindowServicing {
         }
 
         let closeButton = closeButtonVal as! AXUIElement
-        if let isEnabled = copyBoolAttribute(closeButton, attribute: kAXEnabledAttribute as CFString), !isEnabled {
+        Self.applyMessagingTimeout(to: closeButton)
+        if let isEnabled = Self.copyBoolAttribute(closeButton, attribute: kAXEnabledAttribute as CFString), !isEnabled {
             return false
         }
 
@@ -413,7 +472,7 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// 起動中の全通常アプリの AX ウィンドウをスキャンしてキャッシュを更新する
+    /// 起動中の全通常アプリの AX ウィンドウをスキャンしてキャッシュを更新する（同期呼び出し用）
     private func scanAllRegularApps() {
         let selfPID = ProcessInfo.processInfo.processIdentifier
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
@@ -426,49 +485,152 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// 指定 PID のアプリから現在の AX ウィンドウ一覧を読み取りキャッシュを更新する
+    /// 起動中の全通常アプリをバックグラウンドキューでスキャンし、結果をキャッシュへ反映する
+    /// - Parameter debounce: 連続発生時のデバウンス待機時間（即時実行時は nil）
+    private func scheduleBackgroundScanAllRegularApps(debounce: Duration?) {
+        pendingSpaceScanTask?.cancel()
+        pendingSpaceScanTask = Task { @MainActor [weak self] in
+            if let debounce {
+                try? await Task.sleep(for: debounce)
+            }
+            guard !Task.isCancelled, let self, self.isObserving else { return }
+
+            let selfPID = ProcessInfo.processInfo.processIdentifier
+            let scanTargets: [(pid: Int32, isActive: Bool)] = NSWorkspace.shared.runningApplications.compactMap { app in
+                guard app.activationPolicy == .regular else { return nil }
+                let pid = app.processIdentifier
+                guard pid != selfPID else { return nil }
+                if self.observersByPID[pid] == nil {
+                    self.registerObserver(for: pid)
+                }
+                return (pid: pid, isActive: app.isActive)
+            }
+
+            let results = await withCheckedContinuation { continuation in
+                self.axWorkerQueue.async {
+                    let scanned = scanTargets.map { target in
+                        (
+                            pid: target.pid,
+                            isActive: target.isActive,
+                            snapshots: Self.fetchAXWindowSnapshots(for: target.pid)
+                        )
+                    }
+                    continuation.resume(returning: scanned)
+                }
+            }
+
+            guard !Task.isCancelled, self.isObserving else { return }
+            for item in results {
+                self.applyAXWindowSnapshots(
+                    item.snapshots,
+                    for: item.pid,
+                    markFrontmostAsActive: item.isActive
+                )
+            }
+        }
+    }
+
+    /// 指定 PID の AX ウィンドウスキャンをデバウンス付きでバックグラウンド実行する
+    /// - Parameters:
+    ///   - pid: 対象プロセス ID
+    ///   - markFrontmostAsActive: 最前面アプリの先頭ウィンドウをアクティブとして記録するか
+    ///   - debounce: デバウンス待機時間（即時実行時は nil）
+    ///   - activatedElement: 更新後に MRU 時刻を更新する対象要素（任意）
+    ///   - activatedAt: 記録するアクティブ時刻（任意）
+    private func scheduleBackgroundRefresh(
+        for pid: Int32,
+        markFrontmostAsActive: Bool,
+        debounce: Duration?,
+        activatedElement: SendableAXElement? = nil,
+        activatedAt: Date? = nil
+    ) {
+        pendingRefreshTasksByPID[pid]?.cancel()
+        pendingRefreshTasksByPID[pid] = Task { @MainActor [weak self] in
+            if let debounce {
+                try? await Task.sleep(for: debounce)
+            }
+            guard !Task.isCancelled, let self, self.isObserving else { return }
+
+            let snapshots = await self.fetchAXWindowSnapshotsInBackground(for: pid)
+            guard !Task.isCancelled, self.isObserving else { return }
+            self.pendingRefreshTasksByPID.removeValue(forKey: pid)
+
+            self.applyAXWindowSnapshots(
+                snapshots,
+                for: pid,
+                markFrontmostAsActive: markFrontmostAsActive
+            )
+
+            if let activatedElement, let activatedAt {
+                self.updateMRUTimestamp(
+                    pid: pid,
+                    axElement: activatedElement.value,
+                    date: activatedAt
+                )
+            }
+        }
+    }
+
+    /// バックグラウンドの直列ワーカーキューで指定 PID の AX ウィンドウ一覧を取得する
+    /// - Parameter pid: 対象プロセス ID
+    /// - Returns: 取得された AX ウィンドウスナップショット配列
+    private func fetchAXWindowSnapshotsInBackground(for pid: Int32) async -> [ScannedAXWindowSnapshot] {
+        await withCheckedContinuation { continuation in
+            axWorkerQueue.async {
+                let snapshots = Self.fetchAXWindowSnapshots(for: pid)
+                continuation.resume(returning: snapshots)
+            }
+        }
+    }
+
+    /// 指定 PID のアプリから現在の AX ウィンドウ一覧を読み取りキャッシュを更新する（同期版）
     /// - Parameters:
     ///   - pid: 対象プロセス ID
     ///   - markFrontmostAsActive: 最前面アプリの先頭ウィンドウをアクティブとして記録するか
     private func refreshAXWindows(for pid: Int32, markFrontmostAsActive: Bool) {
-        let appElement = AXUIElementCreateApplication(pid)
-        let axWindows = collectAXWindows(for: appElement)
-        guard !axWindows.isEmpty else {
+        let snapshots = Self.fetchAXWindowSnapshots(for: pid)
+        applyAXWindowSnapshots(snapshots, for: pid, markFrontmostAsActive: markFrontmostAsActive)
+    }
+
+    /// 取得済み AX スナップショット一覧を既存のキャッシュ・MRU 時刻を保持したままマージする
+    /// - Parameters:
+    ///   - snapshots: バックグラウンドまたは同期で取得した AX ウィンドウスナップショット
+    ///   - pid: 対象プロセス ID
+    ///   - markFrontmostAsActive: 最前面アプリの先頭ウィンドウをアクティブとして記録するか
+    private func applyAXWindowSnapshots(
+        _ snapshots: [ScannedAXWindowSnapshot],
+        for pid: Int32,
+        markFrontmostAsActive: Bool
+    ) {
+        guard !snapshots.isEmpty else {
             return
         }
 
         var existing = cachedWindowsByPID[pid] ?? []
         let now = Date()
 
-        for (index, axWin) in axWindows.enumerated() {
-            let role = copyStringAttribute(axWin, attribute: kAXRoleAttribute as CFString)
-            let title = copyStringAttribute(axWin, attribute: kAXTitleAttribute as CFString)
-            let subrole = copyStringAttribute(axWin, attribute: kAXSubroleAttribute as CFString)
-            let bounds = copyBounds(axWin)
-            let isMinimized = copyBoolAttribute(axWin, attribute: kAXMinimizedAttribute as CFString) ?? false
-
-            if let matchIdx = existing.firstIndex(where: { CFEqual($0.axElement, axWin) }) {
-                existing[matchIdx].role = role
-                existing[matchIdx].title = title
-                existing[matchIdx].subrole = subrole
-                existing[matchIdx].bounds = bounds
-                existing[matchIdx].isMinimized = isMinimized
+        for (index, snapshot) in snapshots.enumerated() {
+            if let matchIdx = existing.firstIndex(where: { CFEqual($0.axElement, snapshot.axElement.value) }) {
+                existing[matchIdx].role = snapshot.role
+                existing[matchIdx].title = snapshot.title
+                existing[matchIdx].subrole = snapshot.subrole
+                existing[matchIdx].bounds = snapshot.bounds
+                existing[matchIdx].isMinimized = snapshot.isMinimized
                 if markFrontmostAsActive && index == 0 && existing[matchIdx].lastActivatedAt == nil {
                     existing[matchIdx].lastActivatedAt = now
                 }
             } else {
-                let uniqueID = "ax-\(pid)-\(CFHash(axWin))"
                 existing.append(
                     CachedAXWindow(
-                        id: uniqueID,
+                        id: snapshot.uniqueID,
                         pid: pid,
-                        axElement: axWin,
+                        axElement: snapshot.axElement.value,
                         cgWindowID: nil,
-                        role: role,
-                        title: title,
-                        subrole: subrole,
-                        bounds: bounds,
-                        isMinimized: isMinimized,
+                        role: snapshot.role,
+                        title: snapshot.title,
+                        subrole: snapshot.subrole,
+                        bounds: snapshot.bounds,
+                        isMinimized: snapshot.isMinimized,
                         lastActivatedAt: (markFrontmostAsActive && index == 0) ? now : nil
                     )
                 )
@@ -478,22 +640,46 @@ public final class WindowService: WindowServicing {
         cachedWindowsByPID[pid] = existing
     }
 
-    /// 指定 PID のフォーカス中ウィンドウの MRU 時刻を更新する
+    /// 指定 PID のフォーカス中ウィンドウの MRU 時刻をバックグラウンドの AX 問い合わせを用いて更新する
     /// - Parameter pid: アクティブになったプロセス ID
-    private func markFocusedWindowActivated(for pid: Int32) {
-        let appElement = AXUIElementCreateApplication(pid)
-        var focusedRef: CFTypeRef?
-        let status = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedRef)
-        refreshAXWindows(for: pid, markFrontmostAsActive: true)
+    private func markFocusedWindowActivatedInBackground(for pid: Int32) {
+        pendingRefreshTasksByPID[pid]?.cancel()
+        let capturedNow = Date()
+        pendingRefreshTasksByPID[pid] = Task { @MainActor [weak self] in
+            guard let self, self.isObserving else { return }
 
-        guard status == .success, let focusedWin = focusedRef else { return }
-        let axWin = focusedWin as! AXUIElement
-        let now = Date()
+            let result = await withCheckedContinuation { continuation in
+                self.axWorkerQueue.async {
+                    let appElement = AXUIElementCreateApplication(pid)
+                    Self.applyMessagingTimeout(to: appElement)
+                    var focusedRef: CFTypeRef?
+                    let status = AXUIElementCopyAttributeValue(
+                        appElement,
+                        kAXFocusedWindowAttribute as CFString,
+                        &focusedRef
+                    )
+                    let focusedElement: SendableAXElement?
+                    if status == .success,
+                       let focusedWin = focusedRef,
+                       CFGetTypeID(focusedWin) == AXUIElementGetTypeID() {
+                        let axWin = focusedWin as! AXUIElement
+                        Self.applyMessagingTimeout(to: axWin)
+                        focusedElement = SendableAXElement(value: axWin)
+                    } else {
+                        focusedElement = nil
+                    }
+                    let snapshots = Self.fetchAXWindowSnapshots(for: pid)
+                    continuation.resume(returning: (focusedElement, snapshots))
+                }
+            }
 
-        if var list = cachedWindowsByPID[pid],
-           let idx = list.firstIndex(where: { CFEqual($0.axElement, axWin) }) {
-            list[idx].lastActivatedAt = now
-            cachedWindowsByPID[pid] = list
+            guard !Task.isCancelled, self.isObserving else { return }
+            self.pendingRefreshTasksByPID.removeValue(forKey: pid)
+            self.applyAXWindowSnapshots(result.1, for: pid, markFrontmostAsActive: true)
+
+            if let focusedElement = result.0 {
+                self.updateMRUTimestamp(pid: pid, axElement: focusedElement.value, date: capturedNow)
+            }
         }
     }
 
@@ -509,6 +695,7 @@ public final class WindowService: WindowServicing {
             }
             let filtered = list.filter { cached in
                 // AX 属性にアクセスできれば生存している（または別スペースにある）
+                Self.applyMessagingTimeout(to: cached.axElement)
                 var roleRef: CFTypeRef?
                 let err = AXUIElementCopyAttributeValue(cached.axElement, kAXRoleAttribute as CFString, &roleRef)
                 if err == .success {
@@ -602,6 +789,7 @@ public final class WindowService: WindowServicing {
     ///   - axWin: 対象の AXUIElement ウィンドウ参照
     ///   - unminimize: 最小化されている場合に解除を行うか
     private func raiseAXWindow(_ axWin: AXUIElement, unminimize: Bool) {
+        Self.applyMessagingTimeout(to: axWin)
         if unminimize {
             AXUIElementSetAttributeValue(axWin, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
@@ -626,7 +814,7 @@ public final class WindowService: WindowServicing {
         return list.first
     }
 
-    /// キャッシュ内の MRU 時刻を更新する
+    /// キャッシュ内の MRU 時刻を更新する（ウィンドウ識別子指定）
     /// - Parameters:
     ///   - pid: 所有プロセス ID
     ///   - windowID: 更新対象ウィンドウ識別子
@@ -634,6 +822,18 @@ public final class WindowService: WindowServicing {
     private func updateMRUTimestamp(pid: Int32, windowID: String, date: Date) {
         guard var list = cachedWindowsByPID[pid],
               let idx = list.firstIndex(where: { $0.id == windowID }) else { return }
+        list[idx].lastActivatedAt = date
+        cachedWindowsByPID[pid] = list
+    }
+
+    /// キャッシュ内の MRU 時刻を更新する（AXUIElement 一致指定）
+    /// - Parameters:
+    ///   - pid: 所有プロセス ID
+    ///   - axElement: 更新対象の AXUIElement
+    ///   - date: 記録するアクティブ日時
+    private func updateMRUTimestamp(pid: Int32, axElement: AXUIElement, date: Date) {
+        guard var list = cachedWindowsByPID[pid],
+              let idx = list.firstIndex(where: { CFEqual($0.axElement, axElement) }) else { return }
         list[idx].lastActivatedAt = date
         cachedWindowsByPID[pid] = list
     }
@@ -705,42 +905,16 @@ public final class WindowService: WindowServicing {
         }
 
         let appElement = AXUIElementCreateApplication(pid)
-        let axWindows = collectAXWindows(for: appElement)
+        Self.applyMessagingTimeout(to: appElement)
+        let axWindows = Self.collectAXWindows(for: appElement)
         if !axWindows.isEmpty {
             return axWindows.contains { CFEqual($0, axElement) }
         }
 
         // ウィンドウ一覧取得に失敗した場合は対象要素のロール読み取り可否で生存確認する
+        Self.applyMessagingTimeout(to: axElement)
         var roleRef: CFTypeRef?
         return AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleRef) == .success
-    }
-
-    /// アプリケーション要素から kAXWindowsAttribute に加え、フォーカス／メインウィンドウを重複排除して収集する
-    /// - Parameter appElement: 対象アプリケーションの AXUIElement
-    /// - Returns: 重複のないウィンドウ AXUIElement 配列
-    private func collectAXWindows(for appElement: AXUIElement) -> [AXUIElement] {
-        var result: [AXUIElement] = []
-        var windowsRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-           let axWindows = windowsRef as? [AXUIElement] {
-            result = axWindows
-        }
-
-        // kAXWindowsAttribute に含まれないフローティングパネルや別スペースの現在ウィンドウを補完する
-        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
-            var extraRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(appElement, attribute as CFString, &extraRef) == .success,
-                  let extraValue = extraRef,
-                  CFGetTypeID(extraValue) == AXUIElementGetTypeID() else {
-                continue
-            }
-            let extraWindow = extraValue as! AXUIElement
-            if !result.contains(where: { CFEqual($0, extraWindow) }) {
-                result.append(extraWindow)
-            }
-        }
-
-        return result
     }
 
     /// クローズ確認済みのウィンドウを内部キャッシュから除去する
@@ -772,15 +946,16 @@ public final class WindowService: WindowServicing {
             let notifName = notification as String
             let service = Unmanaged<WindowService>.fromOpaque(refcon).takeUnretainedValue()
             // C コールバックからの通知を MainActor へディスパッチする
-            let retainedElement = element
+            let wrappedElement = SendableAXElement(value: element)
             Task { @MainActor in
-                service.handleAXNotification(element: retainedElement, notification: notifName)
+                service.handleAXNotification(element: wrappedElement.value, notification: notifName)
             }
         }, &observerRef)
 
         guard err == .success, let observer = observerRef else { return }
 
         let appElement = AXUIElementCreateApplication(pid)
+        Self.applyMessagingTimeout(to: appElement)
         let notifications = [
             kAXWindowCreatedNotification,
             kAXFocusedWindowChangedNotification,
@@ -796,18 +971,20 @@ public final class WindowService: WindowServicing {
         observersByPID[pid] = observer
     }
 
-    /// 指定 PID の AXObserver を RunLoop から解除して破棄する
+    /// 指定 PID の AXObserver と保留中のデバウンス更新タスクを解除して破棄する
     /// - Parameter pid: 監視を解除するプロセスの PID
     private func unregisterObserver(for pid: Int32) {
+        pendingRefreshTasksByPID.removeValue(forKey: pid)?.cancel()
         guard let observer = observersByPID.removeValue(forKey: pid) else { return }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
     }
 
-    /// AXObserver コールバックを受信してキャッシュと MRU を更新する
+    /// AXObserver コールバックを受信し、高頻度通知をデバウンスしながらバックグラウンドでキャッシュと MRU を更新する
     /// - Parameters:
     ///   - element: イベントが発生した AXUIElement
     ///   - notification: 通知名
     private func handleAXNotification(element: AXUIElement, notification: String) {
+        guard isObserving else { return }
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success, pid != 0 else { return }
 
@@ -819,28 +996,93 @@ public final class WindowService: WindowServicing {
             return
         }
 
-        refreshAXWindows(for: pid, markFrontmostAsActive: false)
-
-        if notification == kAXFocusedWindowChangedNotification
+        let isActivationEvent = notification == kAXFocusedWindowChangedNotification
             || notification == kAXMainWindowChangedNotification
-            || notification == kAXWindowCreatedNotification {
-            let now = Date()
-            if var list = cachedWindowsByPID[pid],
-               let idx = list.firstIndex(where: { CFEqual($0.axElement, element) }) {
-                list[idx].lastActivatedAt = now
-                cachedWindowsByPID[pid] = list
-            }
+            || notification == kAXWindowCreatedNotification
+
+        let now = Date()
+        if isActivationEvent {
+            // キャッシュ済みウィンドウであれば MRU 時刻だけは即時反映する
+            updateMRUTimestamp(pid: pid, axElement: element, date: now)
+        }
+
+        let debounce = isActivationEvent ? Self.focusChangeDebounceDuration : Self.titleChangeDebounceDuration
+        scheduleBackgroundRefresh(
+            for: pid,
+            markFrontmostAsActive: false,
+            debounce: debounce,
+            activatedElement: isActivationEvent ? SendableAXElement(value: element) : nil,
+            activatedAt: isActivationEvent ? now : nil
+        )
+    }
+
+    // MARK: - AX スナップショット収集・属性読み取り（nonisolated）
+
+    /// 指定された AXUIElement に短い IPC タイムアウトを設定する
+    /// - Parameter element: タイムアウトを設定する AXUIElement
+    private nonisolated static func applyMessagingTimeout(to element: AXUIElement) {
+        AXUIElementSetMessagingTimeout(element, axMessagingTimeoutSeconds)
+    }
+
+    /// 指定 PID のアプリから現在の AX ウィンドウ一覧と属性をバックグラウンド安全に収集する
+    /// - Parameter pid: 対象プロセス ID
+    /// - Returns: 収集された ScannedAXWindowSnapshot 配列
+    private nonisolated static func fetchAXWindowSnapshots(for pid: Int32) -> [ScannedAXWindowSnapshot] {
+        let appElement = AXUIElementCreateApplication(pid)
+        applyMessagingTimeout(to: appElement)
+        let axWindows = collectAXWindows(for: appElement)
+        guard !axWindows.isEmpty else {
+            return []
+        }
+
+        return axWindows.map { axWin in
+            applyMessagingTimeout(to: axWin)
+            return ScannedAXWindowSnapshot(
+                uniqueID: "ax-\(pid)-\(CFHash(axWin))",
+                axElement: SendableAXElement(value: axWin),
+                role: copyStringAttribute(axWin, attribute: kAXRoleAttribute as CFString),
+                title: copyStringAttribute(axWin, attribute: kAXTitleAttribute as CFString),
+                subrole: copyStringAttribute(axWin, attribute: kAXSubroleAttribute as CFString),
+                bounds: copyBounds(axWin),
+                isMinimized: copyBoolAttribute(axWin, attribute: kAXMinimizedAttribute as CFString) ?? false
+            )
         }
     }
 
-    // MARK: - AX 属性読み取りユーティリティ
+    /// アプリケーション要素から kAXWindowsAttribute に加え、フォーカス／メインウィンドウを重複排除して収集する
+    /// - Parameter appElement: 対象アプリケーションの AXUIElement
+    /// - Returns: 重複のないウィンドウ AXUIElement 配列
+    private nonisolated static func collectAXWindows(for appElement: AXUIElement) -> [AXUIElement] {
+        var result: [AXUIElement] = []
+        var windowsRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+           let axWindows = windowsRef as? [AXUIElement] {
+            result = axWindows
+        }
+
+        // kAXWindowsAttribute に含まれないフローティングパネルや別スペースの現在ウィンドウを補完する
+        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+            var extraRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appElement, attribute as CFString, &extraRef) == .success,
+                  let extraValue = extraRef,
+                  CFGetTypeID(extraValue) == AXUIElementGetTypeID() else {
+                continue
+            }
+            let extraWindow = extraValue as! AXUIElement
+            if !result.contains(where: { CFEqual($0, extraWindow) }) {
+                result.append(extraWindow)
+            }
+        }
+
+        return result
+    }
 
     /// 文字列属性を読み取る
     /// - Parameters:
     ///   - element: 対象の AXUIElement
     ///   - attribute: 読み取る属性名
     /// - Returns: 取得された文字列（失敗時は nil）
-    private func copyStringAttribute(_ element: AXUIElement, attribute: CFString) -> String? {
+    private nonisolated static func copyStringAttribute(_ element: AXUIElement, attribute: CFString) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
         return value as? String
@@ -851,7 +1093,7 @@ public final class WindowService: WindowServicing {
     ///   - element: 対象の AXUIElement
     ///   - attribute: 読み取る属性名
     /// - Returns: 取得された真偽値（失敗時は nil）
-    private func copyBoolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
+    private nonisolated static func copyBoolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
         return value as? Bool
@@ -860,7 +1102,7 @@ public final class WindowService: WindowServicing {
     /// 位置 (kAXPositionAttribute) とサイズ (kAXSizeAttribute) を組み合わせて CGRect を構築する
     /// - Parameter element: 対象の AXUIElement
     /// - Returns: 取得されたウィンドウ矩形（失敗時は nil）
-    private func copyBounds(_ element: AXUIElement) -> CGRect? {
+    private nonisolated static func copyBounds(_ element: AXUIElement) -> CGRect? {
         var posRef: CFTypeRef?
         var sizeRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,

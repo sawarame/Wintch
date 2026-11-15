@@ -316,4 +316,76 @@ struct HotKeyMonitorDecisionTests {
             launcherShortcut: .default
         ) == HotKeyKeyDownDecision(event: nil, shouldConsume: false))
     }
+
+    /// タイムアウト無効化がバースト上限を超えた場合にクールダウンおよび自動再有効化停止へ段階遷移することを検証する
+    @Test("TapTimeoutRecoveryTracker はバースト時にクールダウン・上限超過時に自動停止を返す")
+    func tapTimeoutRecoveryEscalatesToCooldownAndCircuitBreaker() {
+        var tracker = TapTimeoutRecoveryTracker(
+            burstWindowSeconds: 10.0,
+            maxImmediateRetriesInWindow: 3,
+            cooldownSeconds: 5.0,
+            longWindowSeconds: 60.0,
+            maxTotalRetriesInLongWindow: 6
+        )
+
+        // 1〜3回目はバースト上限内のため即時再有効化
+        #expect(tracker.recordDisableEvent(at: 100.0) == .reenableImmediately)
+        #expect(tracker.recordDisableEvent(at: 101.0) == .reenableImmediately)
+        #expect(tracker.recordDisableEvent(at: 102.0) == .reenableImmediately)
+
+        // 4〜6回目はバースト上限超過のためクールダウン待機へ移行
+        #expect(tracker.recordDisableEvent(at: 103.0) == .reenableAfterCooldown(seconds: 5.0))
+        #expect(tracker.recordDisableEvent(at: 104.0) == .reenableAfterCooldown(seconds: 5.0))
+        #expect(tracker.recordDisableEvent(at: 105.0) == .reenableAfterCooldown(seconds: 5.0))
+
+        // 7回目以降は長期ウィンドウの上限超過によりサーキットブレーカー発動
+        #expect(tracker.recordDisableEvent(at: 106.0) == .stopAutoReenable)
+        #expect(tracker.recordDisableEvent(at: 120.0) == .stopAutoReenable)
+
+        // 長期ウィンドウ (60秒) を十分に過ぎると履歴が失効して再び即時再有効化へ戻る
+        #expect(tracker.recordDisableEvent(at: 200.0) == .reenableImmediately)
+    }
+
+    /// リセット呼び出しによってタイムアウト履歴がクリアされ、再度即時再有効化から再開できることを検証する
+    @Test("TapTimeoutRecoveryTracker は reset により履歴を初期化する")
+    func tapTimeoutRecoveryResetRestoresImmediateReenable() {
+        var tracker = TapTimeoutRecoveryTracker(
+            burstWindowSeconds: 10.0,
+            maxImmediateRetriesInWindow: 2,
+            cooldownSeconds: 4.0,
+            longWindowSeconds: 60.0,
+            maxTotalRetriesInLongWindow: 3
+        )
+
+        #expect(tracker.recordDisableEvent(at: 10.0) == .reenableImmediately)
+        #expect(tracker.recordDisableEvent(at: 11.0) == .reenableImmediately)
+        #expect(tracker.recordDisableEvent(at: 12.0) == .reenableAfterCooldown(seconds: 4.0))
+        #expect(tracker.recordDisableEvent(at: 13.0) == .stopAutoReenable)
+
+        tracker.reset()
+        #expect(tracker.recordDisableEvent(at: 14.0) == .reenableImmediately)
+    }
+
+    /// HotKeyMonitorService と WindowService の保護設定値および停止時状態リセットを検証する
+    @Test("HotKeyMonitorService の停止処理と WindowService のタイムアウト／デバウンス設定が安全に構成されている")
+    @MainActor
+    func serviceProtectionSettingsAndLifecycle() {
+        let monitor = HotKeyMonitorService()
+        monitor.activeMode = .normal
+        #expect(monitor.isSwitcherActive == true)
+
+        monitor.stopMonitoring()
+        #expect(monitor.activeMode == .inactive)
+        #expect(monitor.isSwitcherActive == false)
+
+        // WindowService は短時間の AX IPC タイムアウトとデバウンス間隔を備え、開始・停止を安全に繰り返せる
+        #expect(WindowService.axMessagingTimeoutSeconds > 0 && WindowService.axMessagingTimeoutSeconds <= 0.5)
+        #expect(WindowService.titleChangeDebounceDuration > .zero)
+        #expect(WindowService.spaceChangeDebounceDuration > .zero)
+
+        let windowService = WindowService()
+        windowService.stopObserving()
+        windowService.startObserving()
+        windowService.stopObserving()
+    }
 }

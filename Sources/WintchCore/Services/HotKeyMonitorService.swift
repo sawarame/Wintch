@@ -20,16 +20,114 @@ public struct HotKeyKeyDownDecision: Equatable, Sendable {
     }
 }
 
+/// CGEventTap のタイムアウト等で無効化された際の復帰アクション
+public enum TapRecoveryAction: Equatable, Sendable {
+    /// 即座にタップを再有効化する
+    case reenableImmediately
+    /// 指定秒数のクールダウン後に再有効化を試行する
+    case reenableAfterCooldown(seconds: TimeInterval)
+    /// 上限超過のため自動再有効化を停止する（サーキットブレーカー）
+    case stopAutoReenable
+}
+
+/// CGEventTap のタイムアウト／システム無効化回数を監視し、無限再有効化ループを防ぐ状態トラッカー
+public struct TapTimeoutRecoveryTracker: Sendable {
+    /// 短時間バースト判定のウィンドウ幅（秒）
+    public let burstWindowSeconds: TimeInterval
+    /// バーストウィンドウ内で即時再有効化を許可する最大回数
+    public let maxImmediateRetriesInWindow: Int
+    /// バースト超過時のクールダウン待機時間（秒）
+    public let cooldownSeconds: TimeInterval
+    /// 長期サーキットブレーカー判定のウィンドウ幅（秒）
+    public let longWindowSeconds: TimeInterval
+    /// 長期ウィンドウ内で自動再有効化を許可する最大合計回数
+    public let maxTotalRetriesInLongWindow: Int
+
+    /// 記録された無効化イベントの単調増加タイムスタンプ履歴（秒）
+    private var disableTimestamps: [TimeInterval] = []
+
+    /// 復帰トラッカーを初期化する
+    /// - Parameters:
+    ///   - burstWindowSeconds: 短時間バースト判定ウィンドウ（秒）
+    ///   - maxImmediateRetriesInWindow: 即時再有効化の上限回数
+    ///   - cooldownSeconds: バースト超過時のクールダウン秒数
+    ///   - longWindowSeconds: 長期判定ウィンドウ（秒）
+    ///   - maxTotalRetriesInLongWindow: 長期ウィンドウ内の再有効化上限回数
+    public init(
+        burstWindowSeconds: TimeInterval = 10.0,
+        maxImmediateRetriesInWindow: Int = 3,
+        cooldownSeconds: TimeInterval = 5.0,
+        longWindowSeconds: TimeInterval = 60.0,
+        maxTotalRetriesInLongWindow: Int = 6
+    ) {
+        self.burstWindowSeconds = burstWindowSeconds
+        self.maxImmediateRetriesInWindow = maxImmediateRetriesInWindow
+        self.cooldownSeconds = cooldownSeconds
+        self.longWindowSeconds = longWindowSeconds
+        self.maxTotalRetriesInLongWindow = maxTotalRetriesInLongWindow
+    }
+
+    /// 記録済みの無効化履歴をすべてリセットする
+    public mutating func reset() {
+        disableTimestamps.removeAll()
+    }
+
+    /// 無効化イベントを記録し、今回の試行で行うべき復帰アクションを返す
+    /// - Parameter timestamp: イベント発生時の単調増加時刻（秒）
+    /// - Returns: 実行すべき TapRecoveryAction
+    public mutating func recordDisableEvent(at timestamp: TimeInterval) -> TapRecoveryAction {
+        let longCutoff = timestamp - longWindowSeconds
+        disableTimestamps.removeAll { $0 < longCutoff }
+
+        if disableTimestamps.count >= maxTotalRetriesInLongWindow {
+            return .stopAutoReenable
+        }
+
+        disableTimestamps.append(timestamp)
+
+        let burstCutoff = timestamp - burstWindowSeconds
+        let burstCount = disableTimestamps.count { $0 >= burstCutoff }
+        if burstCount <= maxImmediateRetriesInWindow {
+            return .reenableImmediately
+        }
+
+        return .reenableAfterCooldown(seconds: cooldownSeconds)
+    }
+}
+
 /// CGEventTap を用いてグローバルショートカットおよびスイッチャー表示中のキー操作を監視・横取りするサービス
 @MainActor
 public final class HotKeyMonitorService: HotKeyMonitoring {
+    /// 非 Sendable な CoreFoundation / Foundation 参照をロック境界外へ安全に受け渡すラッパー
+    private struct UncheckedSendable<Value>: @unchecked Sendable {
+        let value: Value
+    }
+
     /// スレッドセーフに共有する監視状態（C コールバックからの同期判定用）
     private struct TapState: Sendable {
         var shortcut: ShortcutPreference = .default
         var launcherShortcut: LauncherShortcutPreference = .default
         var activeMode: HotKeyMonitorMode = .inactive
         var isSuspendedForRecording: Bool = false
+        /// 非同期ディスパッチ待ちの通常モード起動トリガーが存在するかどうか
+        var pendingNormalTrigger: Bool = false
     }
+
+    /// バックグラウンド監視スレッドおよびイベントタップのランタイム参照
+    private struct TapRuntime: @unchecked Sendable {
+        var eventTap: CFMachPort?
+        var runLoopSource: CFRunLoopSource?
+        var runLoop: CFRunLoop?
+        var thread: Thread?
+        var isMonitoring: Bool = false
+        var pendingCooldownWorkItem: DispatchWorkItem?
+    }
+
+    /// サービス用ロガー
+    private nonisolated static let logger = Logger(
+        subsystem: "dev.wintch",
+        category: "HotKeyMonitorService"
+    )
 
     /// イベント発生時の通知ハンドラ
     public var onEvent: ((HotKeyEvent) -> Void)?
@@ -37,7 +135,12 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// 現在のスイッチャー監視モード
     public var activeMode: HotKeyMonitorMode {
         get { sharedState.withLock { $0.activeMode } }
-        set { sharedState.withLock { $0.activeMode = newValue } }
+        set {
+            sharedState.withLock { state in
+                state.activeMode = newValue
+                state.pendingNormalTrigger = false
+            }
+        }
     }
 
     /// スイッチャーが現在表示中かどうか（activeMode と同期）
@@ -52,6 +155,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
                 } else {
                     state.activeMode = .inactive
                 }
+                state.pendingNormalTrigger = false
             }
         }
     }
@@ -65,14 +169,19 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// 非同期イベントタップコールバックと同期的に共有するロック付き状態
     private nonisolated let sharedState = OSAllocatedUnfairLock(initialState: TapState())
 
-    /// アクティブな CGEventTap ポート
-    private var eventTap: CFMachPort?
+    /// バックグラウンド監視スレッドとイベントタップのライフサイクルを保護するロック
+    private nonisolated let runtimeLock = OSAllocatedUnfairLock(initialState: TapRuntime())
 
-    /// メイン RunLoop へ登録したソース
-    private var runLoopSource: CFRunLoopSource?
+    /// タイムアウト無効化からの復帰回数・クールダウンを管理するロック付きトラッカー
+    private nonisolated let recoveryTracker = OSAllocatedUnfairLock(initialState: TapTimeoutRecoveryTracker())
 
     /// HotKeyMonitorService を初期化する
     public init() {}
+
+    /// インスタンス破棄時にバックグラウンドのイベントタップと監視スレッドを確実に停止する
+    deinit {
+        cleanupTapRuntime()
+    }
 
     /// 通常スイッチャーの監視対象ショートカット設定を更新する
     /// - Parameter preference: 新しいショートカット設定
@@ -90,11 +199,11 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
     }
 
-    /// グローバルイベント監視を開始する（アクセシビリティ権限が必要）
+    /// グローバルイベント監視を専用バックグラウンドスレッドで開始する（アクセシビリティ権限が必要）
     /// - Returns: イベントタップの作成・有効化に成功した場合は true
     @discardableResult
     public func startMonitoring() -> Bool {
-        if eventTap != nil {
+        if runtimeLock.withLock({ $0.isMonitoring }) {
             return true
         }
 
@@ -119,26 +228,85 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             return false
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            return false
+        }
 
-        self.eventTap = tap
-        self.runLoopSource = source
+        recoveryTracker.withLock { $0.reset() }
+
+        let boxedTap = UncheckedSendable(value: tap)
+        let boxedSource = UncheckedSendable(value: source)
+        let readySemaphore = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            guard let self else {
+                readySemaphore.signal()
+                return
+            }
+
+            let currentRunLoop = UncheckedSendable(value: CFRunLoopGetCurrent())
+            var shouldRun = self.runtimeLock.withLock { state -> Bool in
+                guard state.isMonitoring else { return false }
+                state.runLoop = currentRunLoop.value
+                CFRunLoopAddSource(currentRunLoop.value, boxedSource.value, .commonModes)
+                CGEvent.tapEnable(tap: boxedTap.value, enable: true)
+                return true
+            }
+            readySemaphore.signal()
+
+            // stopMonitoring() による停止指示が来るまで専用 RunLoop でイベントタップを処理する
+            while shouldRun {
+                let result = CFRunLoopRunInMode(.defaultMode, 60.0, false)
+                shouldRun = self.runtimeLock.withLock { $0.isMonitoring }
+                if result == .stopped || result == .finished {
+                    break
+                }
+            }
+        }
+        thread.name = "dev.wintch.HotKeyMonitor.EventTap"
+        thread.qualityOfService = .userInteractive
+
+        let boxedThread = UncheckedSendable(value: thread)
+        runtimeLock.withLock { state in
+            state.eventTap = boxedTap.value
+            state.runLoopSource = boxedSource.value
+            state.thread = boxedThread.value
+            state.isMonitoring = true
+        }
+
+        thread.start()
+        readySemaphore.wait()
         return true
     }
 
-    /// グローバルイベント監視を停止し、リソースを解放する
+    /// グローバルイベント監視を停止し、専用スレッドとリソースを解放する
     public func stopMonitoring() {
-        if let tap = eventTap {
+        cleanupTapRuntime()
+        sharedState.withLock { state in
+            state.activeMode = .inactive
+            state.pendingNormalTrigger = false
+        }
+    }
+
+    /// イベントタップ・RunLoop ソース・クールダウン予約をスレッドセーフに停止・破棄する
+    private nonisolated func cleanupTapRuntime() {
+        let extracted = runtimeLock.withLock { state -> TapRuntime in
+            let snapshot = state
+            state = TapRuntime()
+            return snapshot
+        }
+
+        extracted.pendingCooldownWorkItem?.cancel()
+        if let tap = extracted.eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        if let runLoop = extracted.runLoop {
+            if let source = extracted.runLoopSource {
+                CFRunLoopRemoveSource(runLoop, source, .commonModes)
+            }
+            CFRunLoopStop(runLoop)
         }
-        eventTap = nil
-        runLoopSource = nil
-        activeMode = .inactive
     }
 
     // MARK: - イベントコールバック処理（nonisolated）
@@ -154,13 +322,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         type: CGEventType,
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
-        // OS のタイムアウト等でタップが無効化された場合は即座に再有効化する
+        // OS のタイムアウト等でタップが無効化された場合は制限・クールダウン付きで再有効化する
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            Task { @MainActor [weak self] in
-                if let tap = self?.eventTap {
-                    CGEvent.tapEnable(tap: tap, enable: true)
-                }
-            }
+            handleTapDisabled(reason: type)
             return Unmanaged.passUnretained(event)
         }
 
@@ -175,8 +339,20 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         let currentModifiers = extractShortcutModifiers(from: flags)
 
         if type == .flagsChanged {
-            // 通常モード表示中のみ必須修飾キーのいずれかが離されたら確定イベントを送信する
-            if snapshot.activeMode == .normal && !snapshot.shortcut.modifiers.isSubset(of: currentModifiers) {
+            // 通常モード表示中（または起動ディスパッチ待ち中）に必須修飾キーが離されたら確定イベントを送信する
+            let shouldDispatchRelease = sharedState.withLock { state -> Bool in
+                let isReleased = !state.shortcut.modifiers.isSubset(of: currentModifiers)
+                guard isReleased else { return false }
+                if state.activeMode == .normal {
+                    return true
+                }
+                if state.pendingNormalTrigger {
+                    state.pendingNormalTrigger = false
+                    return true
+                }
+                return false
+            }
+            if shouldDispatchRelease {
                 dispatchEvent(.modifierReleased)
             }
             return Unmanaged.passUnretained(event)
@@ -195,9 +371,96 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             launcherShortcut: snapshot.launcherShortcut
         )
         if let hotKeyEvent = decision.event {
+            if case .triggerPressed = hotKeyEvent, snapshot.activeMode == .inactive {
+                sharedState.withLock { state in
+                    state.pendingNormalTrigger = true
+                }
+            }
             dispatchEvent(hotKeyEvent)
         }
         return decision.shouldConsume ? nil : Unmanaged.passUnretained(event)
+    }
+
+    /// タイムアウト等でタップが無効化された際にリトライ上限とクールダウンに従って復帰処理を行う
+    /// - Parameter reason: 無効化理由の CGEventType
+    private nonisolated func handleTapDisabled(reason: CGEventType) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let action = recoveryTracker.withLock { $0.recordDisableEvent(at: now) }
+
+        switch action {
+        case .reenableImmediately:
+            scheduleImmediateTapReenable()
+        case let .reenableAfterCooldown(seconds):
+            Self.logger.warning(
+                "CGEventTap が短時間に繰り返し無効化されたため \(seconds, format: .fixed(precision: 1)) 秒後に再有効化します (reason: \(reason.rawValue))"
+            )
+            scheduleDelayedTapReenable(after: seconds)
+        case .stopAutoReenable:
+            runtimeLock.withLock { state in
+                state.pendingCooldownWorkItem?.cancel()
+                state.pendingCooldownWorkItem = nil
+            }
+            Self.logger.error(
+                "CGEventTap の無効化回数が上限に達したため、キーボード入力保護のため自動再有効化を停止しました (reason: \(reason.rawValue))"
+            )
+        }
+    }
+
+    /// 専用 RunLoop 上で即座にタップを再有効化する
+    private nonisolated func scheduleImmediateTapReenable() {
+        let snapshot = runtimeLock.withLock { state -> TapRuntime in
+            let previous = state.pendingCooldownWorkItem
+            state.pendingCooldownWorkItem = nil
+            previous?.cancel()
+            return state
+        }
+
+        guard snapshot.isMonitoring, let tap = snapshot.eventTap else { return }
+        let boxedTap = UncheckedSendable(value: tap)
+        if let runLoop = snapshot.runLoop {
+            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
+                guard let self else { return }
+                let canEnable = self.runtimeLock.withLock { $0.isMonitoring && $0.eventTap != nil }
+                if canEnable {
+                    CGEvent.tapEnable(tap: boxedTap.value, enable: true)
+                }
+            }
+            CFRunLoopWakeUp(runLoop)
+        } else {
+            CGEvent.tapEnable(tap: boxedTap.value, enable: true)
+        }
+    }
+
+    /// 指定秒数のクールダウン経過後にタップを再有効化する
+    /// - Parameter seconds: 待機秒数
+    private nonisolated func scheduleDelayedTapReenable(after seconds: TimeInterval) {
+        let boxedWorkItem = UncheckedSendable(value: DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let boxedTap = self.runtimeLock.withLock { state -> UncheckedSendable<CFMachPort>? in
+                state.pendingCooldownWorkItem = nil
+                guard state.isMonitoring, let tap = state.eventTap else { return nil }
+                return UncheckedSendable(value: tap)
+            }
+            if let tap = boxedTap?.value {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+        })
+
+        let previousWorkItem = runtimeLock.withLock { state -> UncheckedSendable<DispatchWorkItem>? in
+            let prev = state.pendingCooldownWorkItem.map { UncheckedSendable(value: $0) }
+            guard state.isMonitoring else {
+                state.pendingCooldownWorkItem = nil
+                return prev
+            }
+            state.pendingCooldownWorkItem = boxedWorkItem.value
+            return prev
+        }
+        previousWorkItem?.value.cancel()
+
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(
+            deadline: .now() + seconds,
+            execute: boxedWorkItem.value
+        )
     }
 
     /// 選択中ウィンドウを閉じる操作に割り当てる Q キーの仮想キーコード (ANSI kVK_ANSI_Q)
@@ -303,11 +566,13 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
     }
 
-    /// 検出されたキーイベントを MainActor 上のハンドラへ非同期配送する
+    /// 検出されたキーイベントを MainActor 上のハンドラへ発生順を保って非同期配送する
     /// - Parameter event: 配送する HotKeyEvent
     private nonisolated func dispatchEvent(_ event: HotKeyEvent) {
-        Task { @MainActor [weak self] in
-            self?.onEvent?(event)
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.onEvent?(event)
+            }
         }
     }
 
