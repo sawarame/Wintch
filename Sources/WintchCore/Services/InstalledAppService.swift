@@ -4,6 +4,9 @@ import Foundation
 /// 標準のアプリケーションディレクトリから起動可能アプリを収集し、NSWorkspace で起動するサービス
 @MainActor
 public final class InstalledAppService: InstalledAppServicing {
+    /// アプリ起動要求の実行に使用するハンドラ型（テスト差し替え用）
+    public typealias OpenApplicationHandler = @MainActor (URL, NSWorkspace.OpenConfiguration) -> Void
+
     /// 走査対象とするディレクトリの最大階層深さ
     private nonisolated static let maxScanDepth = 3
 
@@ -15,6 +18,9 @@ public final class InstalledAppService: InstalledAppServicing {
 
     /// 候補から除外するバンドル識別子（自分自身など）
     private let excludedBundleIdentifier: String?
+
+    /// テスト時に NSWorkspace.openApplication 呼び出しを差し替えるための任意ハンドラ
+    private let openApplicationHandler: OpenApplicationHandler?
 
     /// メモリ上にキャッシュされた起動可能アプリ一覧
     private var cachedApps: [LaunchableApp] = []
@@ -45,14 +51,17 @@ public final class InstalledAppService: InstalledAppServicing {
     ///   - searchDirectories: 再帰走査するアプリケーションディレクトリ一覧
     ///   - directAppURLs: 直接候補に含める `.app` バンドル URL 一覧
     ///   - excludedBundleIdentifier: 除外対象のバンドル識別子
+    ///   - openApplicationHandler: テスト時に起動処理を差し替えるための任意ハンドラ（通常は nil）
     public init(
         searchDirectories: [URL],
         directAppURLs: [URL] = [],
-        excludedBundleIdentifier: String? = Bundle.main.bundleIdentifier
+        excludedBundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        openApplicationHandler: OpenApplicationHandler? = nil
     ) {
         self.searchDirectories = searchDirectories
         self.directAppURLs = directAppURLs
         self.excludedBundleIdentifier = excludedBundleIdentifier
+        self.openApplicationHandler = openApplicationHandler
     }
 
     /// 現在メモリ上にキャッシュされている起動可能アプリ一覧を同期で返す
@@ -92,7 +101,12 @@ public final class InstalledAppService: InstalledAppServicing {
     public func launchApplication(_ app: LaunchableApp) {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
-        NSWorkspace.shared.openApplication(at: app.bundleURL, configuration: configuration) { _, _ in }
+        if let openApplicationHandler {
+            openApplicationHandler(app.bundleURL, configuration)
+            return
+        }
+        // LaunchServices のバックグラウンドキュー上で @MainActor 分離クロージャが呼ばれてクラッシュするのを防ぐため completionHandler は nil を渡す
+        NSWorkspace.shared.openApplication(at: app.bundleURL, configuration: configuration, completionHandler: nil)
     }
 
     /// 指定されたディレクトリ群および個別 URL から起動可能なアプリ一覧を同期スキャンする

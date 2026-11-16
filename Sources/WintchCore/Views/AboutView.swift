@@ -9,16 +9,22 @@ public struct AboutView: View {
     /// 表示用のアプリアイコン画像（未指定時はバンドルまたは実行中アプリから取得）
     private let appIcon: NSImage?
 
-    /// 「Wintchについて」ビューを初期化する
+    /// 表示対象のアプリ識別情報（開発版・配布版名称の切り替え用）
+    private let appIdentity: AppIdentity
+
+    /// 「〜について」ビューを初期化する
     /// - Parameters:
     ///   - versionInfo: 表示するバージョン情報（既定値はメインバンドルから取得）
     ///   - appIcon: 表示するアプリアイコン画像（既定値はアプリバンドルのアイコン）
+    ///   - appIdentity: 表示するアプリ識別情報（既定値はメインバンドルから取得）
     public init(
         versionInfo: AppVersionInfo = .current,
-        appIcon: NSImage? = nil
+        appIcon: NSImage? = nil,
+        appIdentity: AppIdentity = .current
     ) {
         self.versionInfo = versionInfo
         self.appIcon = appIcon ?? Self.resolveAppIcon()
+        self.appIdentity = appIdentity
     }
 
     /// ビューの本体構築
@@ -39,7 +45,7 @@ public struct AboutView: View {
             }
 
             VStack(spacing: 4) {
-                Text("Wintch")
+                Text(appIdentity.displayName)
                     .font(.title2.bold())
 
                 Text(versionInfo.displayVersionText)

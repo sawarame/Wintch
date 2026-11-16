@@ -31,7 +31,7 @@ description: "Task list for 011-fix-app-launch-dev-name"
 
 **Purpose**: 既存ビルドおよび全ユニットテストのベースライン状態を確認する
 
-- [ ] T001 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、現行コードベースの全ユニットテストが合格することを確認する
+- [X] T001 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、現行コードベースの全ユニットテストが合格することを確認する
 
 ---
 
@@ -41,8 +41,8 @@ description: "Task list for 011-fix-app-launch-dev-name"
 
 **⚠️ CRITICAL**: User Story 2 および User Story 3 は `AppIdentity` に依存するため、Phase 2 完了後にこれらへ進む（User Story 1 は独立しており並列進行可能）
 
-- [ ] T002 `Tests/WintchCoreTests/AppIdentityTests.swift` を新規作成し、`AppIdentity` のメタデータ抽出優先順位（`CFBundleDisplayName` > `CFBundleName` > `fallbackDisplayName`、`CFBundleIdentifier` > `fallbackBundleIdentifier`）、前後空白・改行のトリミング、空文字・非文字列時のフォールバック、`isDevelopment` 判定（`"Wintch_dev"` / `"dev.wintch.Wintch.dev"` / `".dev"` 接尾辞）、および UI 文言導出プロパティ（`aboutMenuTitle` / `quitMenuTitle` / `settingsWindowTitle` / `permissionGuideWindowTitle` / `accessibilitySwitchInstruction`）を検証する単体テストを先行記述する
-- [ ] T003 `Sources/WintchCore/Domain/AppIdentity.swift` を新規作成し、`Equatable`・`Sendable` 準拠の `AppIdentity` 構造体（`releaseDisplayName = "Wintch"`, `developmentDisplayName = "Wintch_dev"`, `releaseBundleIdentifier = "dev.wintch.Wintch"`, `developmentBundleIdentifier = "dev.wintch.Wintch.dev"`、`init(infoDictionary:fallbackDisplayName:fallbackBundleIdentifier:)`、`current`、および UI 文言導出プロパティ）を日本語ドキュメントコメント・インラインコメント付きで実装する（T002 に依存）
+- [X] T002 `Tests/WintchCoreTests/AppIdentityTests.swift` を新規作成し、`AppIdentity` のメタデータ抽出優先順位（`CFBundleDisplayName` > `CFBundleName` > `fallbackDisplayName`、`CFBundleIdentifier` > `fallbackBundleIdentifier`）、前後空白・改行のトリミング、空文字・非文字列時のフォールバック、`isDevelopment` 判定（`"Wintch_dev"` / `"dev.wintch.Wintch.dev"` / `".dev"` 接尾辞）、および UI 文言導出プロパティ（`aboutMenuTitle` / `quitMenuTitle` / `settingsWindowTitle` / `permissionGuideWindowTitle` / `accessibilitySwitchInstruction`）を検証する単体テストを先行記述する
+- [X] T003 `Sources/WintchCore/Domain/AppIdentity.swift` を新規作成し、`Equatable`・`Sendable` 準拠の `AppIdentity` 構造体（`releaseDisplayName = "Wintch"`, `developmentDisplayName = "Wintch_dev"`, `releaseBundleIdentifier = "dev.wintch.Wintch"`, `developmentBundleIdentifier = "dev.wintch.Wintch.dev"`、`init(infoDictionary:fallbackDisplayName:fallbackBundleIdentifier:)`、`current`、および UI 文言導出プロパティ）を日本語ドキュメントコメント・インラインコメント付きで実装する（T002 に依存）
 
 **Checkpoint**: `AppIdentityTests` が合格し、アプリ識別名・識別子・UI 文言解決の共通基盤が利用可能になる
 
@@ -58,11 +58,11 @@ description: "Task list for 011-fix-app-launch-dev-name"
 
 > **NOTE: 起動要求パラメータ検証テストを先行記述し、リグレッションを防止する**
 
-- [ ] T004 [P] [US1] `Tests/WintchCoreTests/InstalledAppServiceTests.swift` に、`InstalledAppService.launchApplication(_:)` が指定した `LaunchableApp.bundleURL` と `activates == true` を設定した `NSWorkspace.OpenConfiguration` を用いて起動要求を発行することを検証するユニットテストを追加する
+- [X] T004 [P] [US1] `Tests/WintchCoreTests/InstalledAppServiceTests.swift` に、`InstalledAppService.launchApplication(_:)` が指定した `LaunchableApp.bundleURL` と `activates == true` を設定した `NSWorkspace.OpenConfiguration` を用いて起動要求を発行することを検証するユニットテストを追加する
 
 ### Implementation for User Story 1
 
-- [ ] T005 [US1] `Sources/WintchCore/Services/InstalledAppService.swift` の `launchApplication(_:)` を更新し、`NSWorkspace.shared.openApplication(at:configuration:completionHandler:)` の空クロージャ `{ _, _ in }` を廃止して `completionHandler: nil` を渡すように修正するとともに、既定値 `nil` の任意テスト用起動ハンドラ注入に対応し、日本語ドキュメントコメント・インラインコメントを整備する（T004 に依存）
+- [X] T005 [US1] `Sources/WintchCore/Services/InstalledAppService.swift` の `launchApplication(_:)` を更新し、`NSWorkspace.shared.openApplication(at:configuration:completionHandler:)` の空クロージャ `{ _, _ in }` を廃止して `completionHandler: nil` を渡すように修正するとともに、既定値 `nil` の任意テスト用起動ハンドラ注入に対応し、日本語ドキュメントコメント・インラインコメントを整備する（T004 に依存）
 
 **Checkpoint**: User Story 1（MVP）が完結し、ランチャーからのアプリ起動直後に Wintch がクラッシュ終了しなくなる
 
@@ -76,11 +76,11 @@ description: "Task list for 011-fix-app-launch-dev-name"
 
 ### Implementation for User Story 2
 
-- [ ] T006 [P] [US2] `Sources/WintchCore/Views/AboutView.swift` を更新し、`appIdentity: AppIdentity = .current` 引数を追加して見出しの固定文字列 `"Wintch"` を `appIdentity.displayName` へ置き換える（T003 に依存）
-- [ ] T007 [P] [US2] `Sources/WintchCore/Views/PermissionGuideView.swift` を更新し、`appIdentity: AppIdentity = .current` 引数を追加して手順 2 の固定文字列 `"2. 一覧の「Wintch」のスイッチをオンにします"` を `appIdentity.accessibilitySwitchInstruction` へ置き換える（T003 に依存）
-- [ ] T008 [US2] `Sources/WintchCore/App/AppCoordinator.swift` を更新し、`public let appIdentity: AppIdentity`（既定値 `.current`）を保持して、設定ウィンドウタイトル（`appIdentity.settingsWindowTitle`）、About ウィンドウタイトル（`appIdentity.aboutMenuTitle`）、権限誘導ウィンドウタイトル（`appIdentity.permissionGuideWindowTitle`）および `AboutView` / `PermissionGuideView` の初期化へ `appIdentity` を渡すよう変更する（T003, T006, T007 に依存）
-- [ ] T009 [P] [US2] `Sources/Wintch/WintchApp.swift` を更新し、`appDelegate.coordinator.appIdentity` を用いてメニューバー項目 `"Wintchについて"` と `"Wintch を終了"` をそれぞれ `aboutMenuTitle` と `quitMenuTitle` に動的化する（T008 に依存）
-- [ ] T010 [P] [US2] `scripts/build-app.sh` を更新し、`CONFIGURATION=debug`（既定）時はバンドル名・実行ファイル名・表示名を `Wintch_dev`、出力バンドルを `.build/Wintch_dev.app`、バンドル内 `Info.plist` の `CFBundleExecutable`・`CFBundleName`・`CFBundleDisplayName` を `Wintch_dev`、`CFBundleIdentifier` を `dev.wintch.Wintch.dev` に設定し、`CONFIGURATION=release` 時は従来通り `Wintch`（`.build/Wintch.app`、`dev.wintch.Wintch`）を生成するよう拡張する（`Resources/Info.plist` 本体は無変更を維持）
+- [X] T006 [P] [US2] `Sources/WintchCore/Views/AboutView.swift` を更新し、`appIdentity: AppIdentity = .current` 引数を追加して見出しの固定文字列 `"Wintch"` を `appIdentity.displayName` へ置き換える（T003 に依存）
+- [X] T007 [P] [US2] `Sources/WintchCore/Views/PermissionGuideView.swift` を更新し、`appIdentity: AppIdentity = .current` 引数を追加して手順 2 の固定文字列 `"2. 一覧の「Wintch」のスイッチをオンにします"` を `appIdentity.accessibilitySwitchInstruction` へ置き換える（T003 に依存）
+- [X] T008 [US2] `Sources/WintchCore/App/AppCoordinator.swift` を更新し、`public let appIdentity: AppIdentity`（既定値 `.current`）を保持して、設定ウィンドウタイトル（`appIdentity.settingsWindowTitle`）、About ウィンドウタイトル（`appIdentity.aboutMenuTitle`）、権限誘導ウィンドウタイトル（`appIdentity.permissionGuideWindowTitle`）および `AboutView` / `PermissionGuideView` の初期化へ `appIdentity` を渡すよう変更する（T003, T006, T007 に依存）
+- [X] T009 [P] [US2] `Sources/Wintch/WintchApp.swift` を更新し、`appDelegate.coordinator.appIdentity` を用いてメニューバー項目 `"Wintchについて"` と `"Wintch を終了"` をそれぞれ `aboutMenuTitle` と `quitMenuTitle` に動的化する（T008 に依存）
+- [X] T010 [P] [US2] `scripts/build-app.sh` を更新し、`CONFIGURATION=debug`（既定）時はバンドル名・実行ファイル名・表示名を `Wintch_dev`、出力バンドルを `.build/Wintch_dev.app`、バンドル内 `Info.plist` の `CFBundleExecutable`・`CFBundleName`・`CFBundleDisplayName` を `Wintch_dev`、`CFBundleIdentifier` を `dev.wintch.Wintch.dev` に設定し、`CONFIGURATION=release` 時は従来通り `Wintch`（`.build/Wintch.app`、`dev.wintch.Wintch`）を生成するよう拡張する（`Resources/Info.plist` 本体は無変更を維持）
 
 **Checkpoint**: User Story 2 が完結し、ローカル開発版が `Wintch_dev` として完全に識別でき、リリースビルドとの切替が動作する
 
@@ -94,8 +94,8 @@ description: "Task list for 011-fix-app-launch-dev-name"
 
 ### Tests for User Story 3
 
-- [ ] T011 [P] [US3] `Tests/WintchCoreTests/InstalledAppServiceTests.swift` に、開発版（`Wintch_dev.app`, `dev.wintch.Wintch.dev`）と配布版（`Wintch.app`, `dev.wintch.Wintch`）が共存する環境を模擬し、`excludedBundleIdentifier` に一致する自分自身のみが検索候補から除外されることを検証するテストを追加する（T005 に依存）
-- [ ] T012 [P] [US3] `Tests/WintchCoreTests/AppCoordinatorTests.swift` に、開発版と配布版それぞれの `AppIdentity` を渡した `AppCoordinator` が対応する `appIdentity`（表示名・タイトル群・`isDevelopment`）を保持することを検証するテストを追加する（T008 に依存）
+- [X] T011 [P] [US3] `Tests/WintchCoreTests/InstalledAppServiceTests.swift` に、開発版（`Wintch_dev.app`, `dev.wintch.Wintch.dev`）と配布版（`Wintch.app`, `dev.wintch.Wintch`）が共存する環境を模擬し、`excludedBundleIdentifier` に一致する自分自身のみが検索候補から除外されることを検証するテストを追加する（T005 に依存）
+- [X] T012 [P] [US3] `Tests/WintchCoreTests/AppCoordinatorTests.swift` に、開発版と配布版それぞれの `AppIdentity` を渡した `AppCoordinator` が対応する `appIdentity`（表示名・タイトル群・`isDevelopment`）を保持することを検証するテストを追加する（T008 に依存）
 
 **Checkpoint**: 全 User Stories（US1, US2, US3）が独立して検証・テスト合格する
 
@@ -105,9 +105,9 @@ description: "Task list for 011-fix-app-launch-dev-name"
 
 **Purpose**: 憲章・日本語コメント規約レビュー、全ユニットテスト実行、および開発版／リリース版両方の `.app` バンドル・バイナリ検証を完了する
 
-- [ ] T013 変更した全 Swift ファイル（`Sources/WintchCore/Domain/AppIdentity.swift`, `Sources/WintchCore/Services/InstalledAppService.swift`, `Sources/WintchCore/App/AppCoordinator.swift`, `Sources/WintchCore/Views/AboutView.swift`, `Sources/WintchCore/Views/PermissionGuideView.swift`, `Sources/Wintch/WintchApp.swift`, `Tests/WintchCoreTests/*.swift`）および `scripts/build-app.sh` について、日本語ドキュメントコメント（`///`）・日本語インラインコメント・憲章遵守（外部依存ゼロ・非公開 API 不使用・画面収録権限不使用・コード重複なし）および `Resources/Info.plist` が未変更であることを確認する（T005, T009, T010, T011, T012 完了後）
-- [ ] T014 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、新規テストを含む全ユニットテストが 100% 合格することを確認する（T013 完了後）
-- [ ] T015 `specs/011-fix-app-launch-dev-name/quickstart.md` に従い、`./scripts/build-app.sh` で `.build/Wintch_dev.app` のメタデータ検証、および `./scripts/build-app.sh release` で `.build/Wintch.app` のメタデータと `nm -n` による `launchApplication` 完了クロージャシンボル不在確認を実施する（T014 完了後）
+- [X] T013 変更した全 Swift ファイル（`Sources/WintchCore/Domain/AppIdentity.swift`, `Sources/WintchCore/Services/InstalledAppService.swift`, `Sources/WintchCore/App/AppCoordinator.swift`, `Sources/WintchCore/Views/AboutView.swift`, `Sources/WintchCore/Views/PermissionGuideView.swift`, `Sources/Wintch/WintchApp.swift`, `Tests/WintchCoreTests/*.swift`）および `scripts/build-app.sh` について、日本語ドキュメントコメント（`///`）・日本語インラインコメント・憲章遵守（外部依存ゼロ・非公開 API 不使用・画面収録権限不使用・コード重複なし）および `Resources/Info.plist` が未変更であることを確認する（T005, T009, T010, T011, T012 完了後）
+- [X] T014 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、新規テストを含む全ユニットテストが 100% 合格することを確認する（T013 完了後）
+- [X] T015 `specs/011-fix-app-launch-dev-name/quickstart.md` に従い、`./scripts/build-app.sh` で `.build/Wintch_dev.app` のメタデータ検証、および `./scripts/build-app.sh release` で `.build/Wintch.app` のメタデータと `nm -n` による `launchApplication` 完了クロージャシンボル不在確認を実施する（T014 完了後）
 
 ---
 

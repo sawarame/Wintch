@@ -12,6 +12,9 @@ public final class AppCoordinator {
     /// 権限未許可時の誘導画面を表示すべきかどうか
     public var isPermissionGuidePresented: Bool = false
 
+    /// 実行中アプリケーションの表示名・識別情報
+    public let appIdentity: AppIdentity
+
     /// スイッチャーパネルの状態管理 ViewModel
     public let switcherViewModel: SwitcherViewModel
 
@@ -80,6 +83,7 @@ public final class AppCoordinator {
     ///   - installedAppService: インストール済みアプリ取得・起動サービス
     ///   - screenRecordingPermissionService: 画面収録権限サービス
     ///   - windowCaptureService: ウィンドウキャプチャサービス
+    ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -89,8 +93,10 @@ public final class AppCoordinator {
         iconProvider: any IconProviding,
         installedAppService: any InstalledAppServicing = InstalledAppService(),
         screenRecordingPermissionService: any ScreenRecordingPermissionServicing = ScreenRecordingPermissionService(),
-        windowCaptureService: any WindowCaptureServicing = WindowCaptureService()
+        windowCaptureService: any WindowCaptureServicing = WindowCaptureService(),
+        appIdentity: AppIdentity = .current
     ) {
+        self.appIdentity = appIdentity
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
         self.permissionService = permissionService
@@ -314,27 +320,27 @@ public final class AppCoordinator {
             backing: .buffered,
             defer: false
         )
-        window.title = "Wintch 設定"
+        window.title = appIdentity.settingsWindowTitle
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
         settingsWindow = window
         return window
     }
 
-    /// 「Wintchについて」画面用の NSWindow を必要に応じて生成して返す
+    /// 「〜について」画面用の NSWindow を必要に応じて生成して返す
     /// - Returns: 設定済みの NSWindow
     private func ensureAboutWindow() -> NSWindow {
         if let aboutWindow {
             return aboutWindow
         }
-        let hostingView = NSHostingView(rootView: AboutView())
+        let hostingView = NSHostingView(rootView: AboutView(appIdentity: appIdentity))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Wintchについて"
+        window.title = appIdentity.aboutMenuTitle
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
         aboutWindow = window
@@ -347,14 +353,16 @@ public final class AppCoordinator {
         if let permissionWindow {
             return permissionWindow
         }
-        let hostingView = NSHostingView(rootView: PermissionGuideView(viewModel: permissionGuideViewModel))
+        let hostingView = NSHostingView(
+            rootView: PermissionGuideView(viewModel: permissionGuideViewModel, appIdentity: appIdentity)
+        )
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 280),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Wintch - 権限の確認"
+        window.title = appIdentity.permissionGuideWindowTitle
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
         permissionWindow = window

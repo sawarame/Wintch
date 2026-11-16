@@ -34,7 +34,7 @@ struct WintchApp: App {
                 Divider()
             }
 
-            Button("Wintchについて") {
+            Button(appDelegate.coordinator.appIdentity.aboutMenuTitle) {
                 appDelegate.coordinator.openAbout()
             }
 
@@ -47,7 +47,7 @@ struct WintchApp: App {
 
             Divider()
 
-            Button("Wintch を終了") {
+            Button(appDelegate.coordinator.appIdentity.quitMenuTitle) {
                 appDelegate.coordinator.quit()
             }
             .keyboardShortcut("q")

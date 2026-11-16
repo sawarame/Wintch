@@ -51,8 +51,17 @@ else
     BUILD_NUMBER="1"
 fi
 
-APP_NAME="Wintch"
-APP_BUNDLE="${REPO_ROOT}/.build/${APP_NAME}.app"
+EXECUTABLE_NAME="Wintch"
+if [ "${CONFIGURATION}" = "release" ]; then
+    BUNDLE_APP_NAME="Wintch"
+    BUNDLE_IDENTIFIER="dev.wintch.Wintch"
+else
+    # ローカル開発用ビルドでは配布版と名称・識別子・設定領域を分離する
+    BUNDLE_APP_NAME="Wintch_dev"
+    BUNDLE_IDENTIFIER="dev.wintch.Wintch.dev"
+fi
+
+APP_BUNDLE="${REPO_ROOT}/.build/${BUNDLE_APP_NAME}.app"
 CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
@@ -65,11 +74,11 @@ if [ "${IS_UNIVERSAL}" = "true" ]; then
     ARCH_LABEL="universal (arm64 + x86_64)"
 fi
 
-echo "[Wintch] ビルドを実行しています (${CONFIGURATION}, ${ARCH_LABEL}, v${APP_VERSION} [${BUILD_NUMBER}])..."
+echo "[Wintch] ビルドを実行しています (${CONFIGURATION}, ${BUNDLE_APP_NAME}, ${ARCH_LABEL}, v${APP_VERSION} [${BUILD_NUMBER}])..."
 swift build "${SWIFT_BUILD_ARGS[@]}"
 
 BIN_PATH="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
-EXECUTABLE_PATH="${BIN_PATH}/${APP_NAME}"
+EXECUTABLE_PATH="${BIN_PATH}/${EXECUTABLE_NAME}"
 
 if [ ! -f "${EXECUTABLE_PATH}" ]; then
     echo "[Wintch] エラー: 実行バイナリが見つかりません (${EXECUTABLE_PATH})" >&2
@@ -80,13 +89,17 @@ echo "[Wintch] .app バンドルを組み立てています..."
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
-cp "${EXECUTABLE_PATH}" "${MACOS_DIR}/${APP_NAME}"
+cp "${EXECUTABLE_PATH}" "${MACOS_DIR}/${BUNDLE_APP_NAME}"
 cp "${REPO_ROOT}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
 
-# バンドル内の Info.plist にのみバージョンとビルド番号を反映する（元ファイルは変更しない）
+# バンドル内の Info.plist にのみバージョン・ビルド番号・ビルド種別に応じたアプリ名と識別子を反映する（元ファイルは変更しない）
 if [ -x "/usr/libexec/PlistBuddy" ]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "${CONTENTS_DIR}/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${CONTENTS_DIR}/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable ${BUNDLE_APP_NAME}" "${CONTENTS_DIR}/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleName ${BUNDLE_APP_NAME}" "${CONTENTS_DIR}/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${BUNDLE_APP_NAME}" "${CONTENTS_DIR}/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_IDENTIFIER}" "${CONTENTS_DIR}/Info.plist"
 else
     echo "[Wintch] エラー: /usr/libexec/PlistBuddy が見つかりません" >&2
     exit 1
@@ -134,7 +147,7 @@ if [ -n "${WINTCH_SIGN_IDENTITY:-}" ]; then
     # 公証対応のため実行バイナリとアプリバンドルを順にタイムスタンプ付きで署名する
     codesign --force --options runtime --timestamp \
         --sign "${WINTCH_SIGN_IDENTITY}" \
-        "${MACOS_DIR}/${APP_NAME}"
+        "${MACOS_DIR}/${BUNDLE_APP_NAME}"
     codesign --force --options runtime --timestamp \
         --sign "${WINTCH_SIGN_IDENTITY}" \
         "${APP_BUNDLE}"
@@ -144,4 +157,4 @@ elif command -v codesign >/dev/null 2>&1; then
     codesign --force --deep --sign - "${APP_BUNDLE}"
 fi
 
-echo "[Wintch] 完了: ${APP_BUNDLE} (v${APP_VERSION}, build ${BUILD_NUMBER})"
+echo "[Wintch] 完了: ${APP_BUNDLE} (${BUNDLE_IDENTIFIER}, v${APP_VERSION}, build ${BUILD_NUMBER})"

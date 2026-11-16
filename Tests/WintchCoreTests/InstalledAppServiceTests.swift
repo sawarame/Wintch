@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import WintchCore
@@ -97,6 +98,69 @@ struct InstalledAppServiceTests {
         let names = discovered.map(\.displayName)
         #expect(names == ["Alpha", "Beta Tool", "Finder", "Gamma"])
         #expect(discovered.first(where: { $0.displayName == "Gamma" })?.bundleURL == realGamma.standardizedFileURL)
+    }
+
+    /// launchApplication が対象バンドル URL と activates = true の起動設定を安全に引き渡すことを検証する
+    @Test("launchApplication は対象バンドル URL とアクティブ化有効設定で起動要求を発行する")
+    @MainActor
+    func launchApplicationPassesBundleURLAndActivatesConfiguration() {
+        var capturedURL: URL?
+        var capturedActivates: Bool?
+
+        let service = InstalledAppService(
+            searchDirectories: [],
+            directAppURLs: [],
+            excludedBundleIdentifier: nil,
+            openApplicationHandler: { url, configuration in
+                capturedURL = url
+                capturedActivates = configuration.activates
+            }
+        )
+
+        let appURL = URL(fileURLWithPath: "/Applications/Calculator.app", isDirectory: true)
+        let targetApp = LaunchableApp(
+            id: appURL.path,
+            displayName: "計算機",
+            alternateName: "Calculator",
+            bundleIdentifier: "com.apple.calculator",
+            bundleURL: appURL
+        )
+
+        service.launchApplication(targetApp)
+
+        #expect(capturedURL == appURL)
+        #expect(capturedActivates == true)
+    }
+
+    /// 開発版と配布版が共存する環境で excludedBundleIdentifier に一致する自分自身のみが除外されることを検証する
+    @Test("開発版と配布版の識別子が共存する場合は自身の識別子のみを除外する")
+    @MainActor
+    func excludesOnlyMatchingVariantWhenDevAndReleaseCoexist() async throws {
+        let fileManager = FileManager.default
+        let tempRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("WintchVariantCoexistTests-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempRoot) }
+
+        try createMockApp(
+            at: tempRoot.appendingPathComponent("Wintch.app"),
+            bundleID: AppIdentity.releaseBundleIdentifier,
+            executable: "Wintch"
+        )
+        try createMockApp(
+            at: tempRoot.appendingPathComponent("Wintch_dev.app"),
+            bundleID: AppIdentity.developmentBundleIdentifier,
+            executable: "Wintch_dev"
+        )
+
+        let devService = InstalledAppService(
+            searchDirectories: [tempRoot],
+            directAppURLs: [],
+            excludedBundleIdentifier: AppIdentity.developmentBundleIdentifier
+        )
+
+        let discovered = await devService.refreshInstalledApps()
+        #expect(discovered.map(\.bundleIdentifier) == [AppIdentity.releaseBundleIdentifier])
     }
 
     /// テスト用のダミー `.app` バンドルと Info.plist を生成するヘルパー

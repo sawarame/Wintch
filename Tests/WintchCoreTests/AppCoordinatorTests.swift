@@ -140,4 +140,46 @@ struct AppCoordinatorTests {
         coordinator.settingsViewModel.updateNormalDisplayStyle(.capture)
         #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
     }
+
+    /// 開発版と配布版それぞれの AppIdentity が AppCoordinator に正しく保持されることを検証する
+    @Test("注入された開発版および配布版の AppIdentity を保持する")
+    @MainActor
+    func retainsInjectedAppIdentity() {
+        let devIdentity = AppIdentity(infoDictionary: [
+            "CFBundleDisplayName": "Wintch_dev",
+            "CFBundleIdentifier": "dev.wintch.Wintch.dev"
+        ])
+        let releaseIdentity = AppIdentity(infoDictionary: [
+            "CFBundleDisplayName": "Wintch",
+            "CFBundleIdentifier": "dev.wintch.Wintch"
+        ])
+
+        let devCoordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            preferencesStore: MockPreferencesStore(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            appIdentity: devIdentity
+        )
+        #expect(devCoordinator.appIdentity.displayName == "Wintch_dev")
+        #expect(devCoordinator.appIdentity.isDevelopment == true)
+        #expect(devCoordinator.appIdentity.settingsWindowTitle == "Wintch_dev 設定")
+
+        let releaseCoordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            preferencesStore: MockPreferencesStore(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            appIdentity: releaseIdentity
+        )
+        #expect(releaseCoordinator.appIdentity.displayName == "Wintch")
+        #expect(releaseCoordinator.appIdentity.isDevelopment == false)
+        #expect(releaseCoordinator.appIdentity.settingsWindowTitle == "Wintch 設定")
+    }
 }
