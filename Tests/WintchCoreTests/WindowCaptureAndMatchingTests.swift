@@ -243,4 +243,113 @@ struct WindowCaptureAndMatchingTests {
         }
         #expect(capturedCount == 0)
     }
+
+    /// 全体スキャン時や別スペースに独立 CGWindow が生存している場合、通常サイズの同矩形キャッシュを誤削除しないことを検証する
+    @Test("shouldEvictCachedWindowAsReplacedTab は別スペース同矩形ウィンドウを保護し同一スペースの旧タブのみ削除する")
+    func shouldEvictCachedWindowProtectsOffspaceSameBoundsWindow() {
+        let screens = [WindowBounds(x: 0, y: 0, width: 1920, height: 1080)]
+        let normalRect = CGRect(x: 100, y: 100, width: 1200, height: 800)
+
+        // 1. 全体再スキャン・スペース移動時（allowDisplaySpanningReplacement == false）は削除しない
+        #expect(
+            !WindowService.shouldEvictCachedWindowAsReplacedTab(
+                oldBounds: normalRect,
+                oldIsMinimized: false,
+                oldCGWindowID: nil,
+                newBounds: normalRect,
+                newIsMinimized: false,
+                newCGWindowID: nil,
+                survivingCGWindowIDs: [],
+                allowDisplaySpanningReplacement: false,
+                screenBounds: screens
+            )
+        )
+
+        // 2. 同一スペースイベント由来でも、別スペースに独立 CGWindowID (201) が生存中なら誤削除しない
+        #expect(
+            !WindowService.shouldEvictCachedWindowAsReplacedTab(
+                oldBounds: normalRect,
+                oldIsMinimized: false,
+                oldCGWindowID: 201,
+                newBounds: normalRect,
+                newIsMinimized: false,
+                newCGWindowID: 202,
+                survivingCGWindowIDs: [201, 202],
+                allowDisplaySpanningReplacement: true,
+                screenBounds: screens
+            )
+        )
+
+        // 3. 同一スペース内のタブ置換（同 CGWindowID または消滅済み）は旧タブとして削除する
+        #expect(
+            WindowService.shouldEvictCachedWindowAsReplacedTab(
+                oldBounds: normalRect,
+                oldIsMinimized: false,
+                oldCGWindowID: 201,
+                newBounds: normalRect,
+                newIsMinimized: false,
+                newCGWindowID: 201,
+                survivingCGWindowIDs: [201],
+                allowDisplaySpanningReplacement: true,
+                screenBounds: screens
+            )
+        )
+        #expect(
+            WindowService.shouldEvictCachedWindowAsReplacedTab(
+                oldBounds: normalRect,
+                oldIsMinimized: false,
+                oldCGWindowID: nil,
+                newBounds: normalRect,
+                newIsMinimized: false,
+                newCGWindowID: 202,
+                survivingCGWindowIDs: [202],
+                allowDisplaySpanningReplacement: true,
+                screenBounds: screens
+            )
+        )
+    }
+
+    /// ウィンドウアクティブ化時の実行計画が、メニュー遷移成功時に同期 app.activate を抑止し競合を防ぐことを検証する
+    @Test("makeActivationPlan はメニュー遷移成功時に同期前面化を並走させずフォローアップへ委ねる")
+    func activationPlanPreventsSyncActivateRaceWhenMenuNavigationSucceeds() {
+        // 同一スペース上で AX 捕捉済みなら即時前面化・即時 raiseAXWindow
+        let sameSpacePlan = WindowService.makeActivationPlan(
+            hasTargetAX: true,
+            isPresentInCurrentSpace: true,
+            menuNavigationSucceeded: false
+        )
+        #expect(sameSpacePlan.shouldActivateApplicationImmediately == true)
+        #expect(sameSpacePlan.shouldRaiseTargetAXImmediately == true)
+        #expect(sameSpacePlan.usesSteppedSpaceFollowUp == false)
+
+        // 別スペース等でメニュー遷移に成功した場合、同期 app.activate() は行わず段階フォローアップへ委ねる
+        let menuSuccessPlan = WindowService.makeActivationPlan(
+            hasTargetAX: false,
+            isPresentInCurrentSpace: false,
+            menuNavigationSucceeded: true
+        )
+        #expect(menuSuccessPlan.shouldActivateApplicationImmediately == false)
+        #expect(menuSuccessPlan.shouldRaiseTargetAXImmediately == false)
+        #expect(menuSuccessPlan.usesSteppedSpaceFollowUp == true)
+
+        // メニュー遷移が利用不能・失敗した場合のみフォールバックとして即時 app.activate() する
+        let menuFailurePlan = WindowService.makeActivationPlan(
+            hasTargetAX: true,
+            isPresentInCurrentSpace: false,
+            menuNavigationSucceeded: false
+        )
+        #expect(menuFailurePlan.shouldActivateApplicationImmediately == true)
+        #expect(menuFailurePlan.shouldRaiseTargetAXImmediately == true)
+        #expect(menuFailurePlan.usesSteppedSpaceFollowUp == true)
+    }
+
+    /// メニューキャッシュの鮮度判定が TTL（2.0秒）以内のみ有効とみなすことを検証する
+    @Test("isMenuCacheFresh は TTL 以内のみ有効とし期限切れや逆転時刻を無効と判定する")
+    func menuCacheFreshnessChecksTTLBoundaries() {
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(WindowService.isMenuCacheFresh(fetchedAt: baseDate, now: baseDate.addingTimeInterval(0.5), ttl: 2.0) == true)
+        #expect(WindowService.isMenuCacheFresh(fetchedAt: baseDate, now: baseDate.addingTimeInterval(2.0), ttl: 2.0) == true)
+        #expect(WindowService.isMenuCacheFresh(fetchedAt: baseDate, now: baseDate.addingTimeInterval(2.01), ttl: 2.0) == false)
+        #expect(WindowService.isMenuCacheFresh(fetchedAt: baseDate, now: baseDate.addingTimeInterval(-0.5), ttl: 2.0) == false)
+    }
 }

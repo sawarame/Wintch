@@ -34,6 +34,16 @@ public final class WindowService: WindowServicing {
         var fetchedAt: Date
     }
 
+    /// ウィンドウアクティブ化時の実行戦略を表す値型
+    struct ActivationPlan: Equatable, Sendable {
+        /// 同期的にアプリ全体アクティブ化（`app.activate`）を即時実行するか
+        let shouldActivateApplicationImmediately: Bool
+        /// 同期的に対象 AXUIElement を前面化（`raiseAXWindow`）するか
+        let shouldRaiseTargetAXImmediately: Bool
+        /// 別スペース遷移やフォーカス定着を段階確認するフォローアップを実行するか
+        let usesSteppedSpaceFollowUp: Bool
+    }
+
     /// キャッシュされた AX ウィンドウ情報
     private struct CachedAXWindow {
         let id: String
@@ -63,6 +73,9 @@ public final class WindowService: WindowServicing {
 
     /// スペース切り替え／初期スキャン用のバックグラウンド走査タスク
     private var pendingSpaceScanTask: Task<Void, Never>?
+
+    /// 別スペース遷移後のウィンドウフォーカス確定用フォローアップタスク
+    private var pendingActivationFollowUpTask: Task<Void, Never>?
 
     /// Workspace 通知監視トークン群
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -217,6 +230,8 @@ public final class WindowService: WindowServicing {
 
         pendingSpaceScanTask?.cancel()
         pendingSpaceScanTask = nil
+        pendingActivationFollowUpTask?.cancel()
+        pendingActivationFollowUpTask = nil
         for task in pendingRefreshTasksByPID.values {
             task.cancel()
         }
@@ -373,6 +388,9 @@ public final class WindowService: WindowServicing {
     /// 指定されたウィンドウを最前面にアクティブ化する（必要なら操作スペース移動・最小化解除を行う）
     /// - Parameter entry: アクティブ化対象のウィンドウ項目
     public func activateWindow(_ entry: WindowEntry) {
+        pendingActivationFollowUpTask?.cancel()
+        pendingActivationFollowUpTask = nil
+
         let now = Date()
         let app = NSRunningApplication(processIdentifier: entry.pid)
 
@@ -387,40 +405,73 @@ public final class WindowService: WindowServicing {
             cachedWindowsByPID[entry.pid] = list
         }
 
-        // AX 未取得（別スペースの cg-* 候補）または現在スペース不在時は「ウィンドウ」メニュー項目からの直接切り替えを併用する
+        // AX 未取得（別スペースの cg-* 候補）または現在スペース不在時は「ウィンドウ」メニュー項目からの直接切り替えを実行する
         let needsMenuNavigation = (targetAX == nil) || !isPresentInCurrentSpace
-        let menuItemElement: AXUIElement? = if needsMenuNavigation, !entry.windowTitle.isEmpty {
-            resolveWindowMenuItemElement(pid: entry.pid, windowTitle: entry.windowTitle)
+        let menuNavigationSucceeded: Bool
+        if needsMenuNavigation, !entry.windowTitle.isEmpty {
+            menuNavigationSucceeded = performMenuNavigationWithRetry(
+                pid: entry.pid,
+                windowTitle: entry.windowTitle,
+                preferUnchecked: true
+            )
         } else {
-            nil
+            menuNavigationSucceeded = false
         }
 
-        // 先に特定ウィンドウの「ウィンドウ」メニュー項目を押下（makeKeyAndOrderFront: 相当）してからアプリをアクティブ化する
-        if let menuItemElement {
-            Self.applyMessagingTimeout(to: menuItemElement)
-            AXUIElementPerformAction(menuItemElement, kAXPressAction as CFString)
+        let plan = Self.makeActivationPlan(
+            hasTargetAX: targetAX != nil,
+            isPresentInCurrentSpace: isPresentInCurrentSpace,
+            menuNavigationSucceeded: menuNavigationSucceeded
+        )
+
+        if plan.shouldActivateApplicationImmediately {
+            app?.activate(options: [])
         }
-
-        // macOS 14+ 標準のアプリアクティブ化（別スペースにある場合 OS がスペース移動を誘発）
-        app?.activate(options: [])
-
-        if let targetAX {
+        if plan.shouldRaiseTargetAXImmediately, let targetAX {
             raiseAXWindow(targetAX, unminimize: entry.isMinimized)
         }
 
-        // 別スペースへのアニメーション切り替え完了後に、バックグラウンドで最新情報を取得しフォーカスを再確定する
+        guard plan.usesSteppedSpaceFollowUp else {
+            return
+        }
+
+        // 別スペースへのアニメーション切り替え完了を段階的に確認しつつ、対象ウィンドウの出現とフォーカスを確定する
         let targetPID = entry.pid
         let targetTitle = entry.windowTitle
         let targetID = entry.id
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(80))
-            guard let self else { return }
-            let snapshots = await self.fetchAXWindowSnapshotsInBackground(for: targetPID)
-            self.applyAXWindowSnapshots(snapshots, for: targetPID, markFrontmostAsActive: false)
-            if let resolved = self.findCachedWindow(pid: targetPID, preferredID: targetID, title: targetTitle) {
-                self.raiseAXWindow(resolved.axElement, unminimize: entry.isMinimized)
-                self.updateMRUTimestamp(pid: targetPID, windowID: resolved.id, date: Date())
+        let needsUnminimize = entry.isMinimized
+        pendingActivationFollowUpTask = Task { @MainActor [weak self] in
+            let stepDelaysMs: [UInt64] = [60, 80, 140, 170]
+            var didActivateAndRaise = false
+
+            for delayMs in stepDelaysMs {
+                try? await Task.sleep(for: .milliseconds(delayMs))
+                guard !Task.isCancelled, let self else { return }
+
+                let snapshots = await self.fetchAXWindowSnapshotsInBackground(for: targetPID)
+                guard !Task.isCancelled else { return }
+                self.applyAXWindowSnapshots(snapshots, for: targetPID, markFrontmostAsActive: false)
+
+                if let resolved = self.findCachedWindow(pid: targetPID, preferredID: targetID, title: targetTitle),
+                   resolved.isPresentInLatestAXScan {
+                    if let runningApp = NSRunningApplication(processIdentifier: targetPID), !runningApp.isActive {
+                        runningApp.activate(options: [])
+                    }
+                    self.raiseAXWindow(resolved.axElement, unminimize: needsUnminimize)
+                    self.updateMRUTimestamp(pid: targetPID, windowID: resolved.id, date: Date())
+                    didActivateAndRaise = true
+                    break
+                }
             }
+
+            guard !Task.isCancelled, let self else { return }
+            // 規定時間内に遷移を捕捉できなかった場合も、別ウィンドウへの誤前面化を避けつつ未アクティブなら前面化のみ補完する
+            if !didActivateAndRaise,
+               let runningApp = NSRunningApplication(processIdentifier: targetPID),
+               !runningApp.isActive {
+                runningApp.activate(options: [])
+            }
+            self.pendingActivationFollowUpTask = nil
         }
     }
 
@@ -747,24 +798,29 @@ public final class WindowService: WindowServicing {
             }
         }
 
-        // 今回捕捉された有効ウィンドウと同矩形で今回から姿を消した旧タブをキャッシュから除去する
+        // 同一スペースの AX 通知由来で姿を消した旧タブ候補がある場合のみ、独立 CGWindow の生存確認を伴って整理する
+        let hasDisappearedCandidates = existing.contains { !$0.isPresentInLatestAXScan && $0.role == "AXWindow" }
         let screenBounds = currentDisplayBounds()
         let activeWindowEntries = existing.filter {
             $0.isPresentInLatestAXScan && $0.role == "AXWindow" && $0.subrole != nil
         }
 
-        if !activeWindowEntries.isEmpty {
+        if allowDisplaySpanningReplacement, hasDisappearedCandidates, !activeWindowEntries.isEmpty {
+            let survivingCGWindowIDs = Self.fetchSurvivingCGWindowIDs(for: pid)
             var inheritedDateByReplacementID: [String: Date] = [:]
             existing.removeAll { candidate in
                 guard !candidate.isPresentInLatestAXScan, candidate.role == "AXWindow" else {
                     return false
                 }
                 guard let replacement = activeWindowEntries.first(where: { active in
-                    Self.isReplacedTabBounds(
+                    Self.shouldEvictCachedWindowAsReplacedTab(
                         oldBounds: candidate.bounds,
                         oldIsMinimized: candidate.isMinimized,
+                        oldCGWindowID: candidate.cgWindowID,
                         newBounds: active.bounds,
                         newIsMinimized: active.isMinimized,
+                        newCGWindowID: active.cgWindowID,
+                        survivingCGWindowIDs: survivingCGWindowIDs,
                         allowDisplaySpanningReplacement: allowDisplaySpanningReplacement,
                         screenBounds: screenBounds
                     )
@@ -1294,6 +1350,117 @@ public final class WindowService: WindowServicing {
         )
     }
 
+    /// 今回スキャンから消えたキャッシュ要素を「同一スペース内のタブ切り替えで消えた旧タブ」として削除すべきか判定する
+    /// - Parameters:
+    ///   - oldBounds: 今回スキャンから消えたキャッシュ要素の矩形
+    ///   - oldIsMinimized: 今回スキャンから消えたキャッシュ要素の最小化状態
+    ///   - oldCGWindowID: 今回スキャンから消えたキャッシュ要素に紐付いていた CGWindowID（任意）
+    ///   - newBounds: 今回スキャンに存在する有効ウィンドウの矩形
+    ///   - newIsMinimized: 今回スキャンに存在する有効ウィンドウの最小化状態
+    ///   - newCGWindowID: 置換先候補ウィンドウに紐付く CGWindowID（任意）
+    ///   - survivingCGWindowIDs: 現在システム上に生存している該当アプリの CGWindowID 集合
+    ///   - allowDisplaySpanningReplacement: 同一スペース上の AX イベント由来でタブ置換を許可するか
+    ///   - screenBounds: 接続中ディスプレイの矩形一覧
+    /// - Returns: 旧タブとしてキャッシュから除去すべき場合は true
+    nonisolated static func shouldEvictCachedWindowAsReplacedTab(
+        oldBounds: CGRect?,
+        oldIsMinimized: Bool,
+        oldCGWindowID: UInt32?,
+        newBounds: CGRect?,
+        newIsMinimized: Bool,
+        newCGWindowID: UInt32?,
+        survivingCGWindowIDs: Set<UInt32>,
+        allowDisplaySpanningReplacement: Bool,
+        screenBounds: [WindowBounds]
+    ) -> Bool {
+        // 全体再スキャンやスペース移動時は別スペースの同矩形ウィンドウを誤削除しない
+        guard allowDisplaySpanningReplacement else {
+            return false
+        }
+        // 置換先とは異なる独立 CGWindowID が現在もシステム上に生存している場合は別スペース等の実ウィンドウとして保持する
+        if let oldCGWindowID,
+           oldCGWindowID != newCGWindowID,
+           survivingCGWindowIDs.contains(oldCGWindowID) {
+            return false
+        }
+        return isReplacedTabBounds(
+            oldBounds: oldBounds,
+            oldIsMinimized: oldIsMinimized,
+            newBounds: newBounds,
+            newIsMinimized: newIsMinimized,
+            allowDisplaySpanningReplacement: allowDisplaySpanningReplacement,
+            screenBounds: screenBounds
+        )
+    }
+
+    /// ウィンドウアクティブ化時の実行計画を純粋ロジックで決定する
+    /// - Parameters:
+    ///   - hasTargetAX: 対象ウィンドウのキャッシュ済み AXUIElement が存在するか
+    ///   - isPresentInCurrentSpace: 対象ウィンドウが直近の現在スペーススキャンに存在したか
+    ///   - menuNavigationSucceeded: 「ウィンドウ」メニュー項目の押下に成功したか
+    /// - Returns: 競合しないアクティブ化手順を表す `ActivationPlan`
+    nonisolated static func makeActivationPlan(
+        hasTargetAX: Bool,
+        isPresentInCurrentSpace: Bool,
+        menuNavigationSucceeded: Bool
+    ) -> ActivationPlan {
+        let needsMenuNavigation = !hasTargetAX || !isPresentInCurrentSpace
+        if !needsMenuNavigation {
+            return ActivationPlan(
+                shouldActivateApplicationImmediately: true,
+                shouldRaiseTargetAXImmediately: true,
+                usesSteppedSpaceFollowUp: false
+            )
+        }
+        if menuNavigationSucceeded {
+            // メニュー押下が成功した場合は即時の app.activate() 並走による別ウィンドウ誤前面化を抑止し、フォローアップで確定する
+            return ActivationPlan(
+                shouldActivateApplicationImmediately: false,
+                shouldRaiseTargetAXImmediately: false,
+                usesSteppedSpaceFollowUp: true
+            )
+        }
+        return ActivationPlan(
+            shouldActivateApplicationImmediately: true,
+            shouldRaiseTargetAXImmediately: hasTargetAX,
+            usesSteppedSpaceFollowUp: true
+        )
+    }
+
+    /// メニュー項目キャッシュが有効期限（TTL）内であるかを判定する
+    /// - Parameters:
+    ///   - fetchedAt: キャッシュを取得した日時
+    ///   - now: 判定基準となる現在日時
+    ///   - ttl: 有効期間（秒）
+    /// - Returns: 経過時間が `0...ttl` の範囲内であれば true
+    nonisolated static func isMenuCacheFresh(
+        fetchedAt: Date,
+        now: Date = Date(),
+        ttl: TimeInterval = windowMenuCacheTTL
+    ) -> Bool {
+        let elapsed = now.timeIntervalSince(fetchedAt)
+        return elapsed >= 0 && elapsed <= ttl
+    }
+
+    /// 指定された PID の現在生存中の CGWindowID 集合を取得する
+    /// - Parameter pid: 対象アプリケーションのプロセス ID
+    /// - Returns: システム上に存在する CGWindowID の集合
+    private nonisolated static func fetchSurvivingCGWindowIDs(for pid: Int32) -> Set<UInt32> {
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let rawList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        var ids = Set<UInt32>()
+        for dict in rawList {
+            guard (dict[kCGWindowOwnerPID as String] as? Int32) == pid,
+                  let windowID = dict[kCGWindowNumber as String] as? UInt32 else {
+                continue
+            }
+            ids.insert(windowID)
+        }
+        return ids
+    }
+
     /// 今回スキャンから消えたキャッシュ要素が、タブ切り替え等により同一座標の新ウィンドウへ置き換わった旧タブかを判定する
     /// - Parameters:
     ///   - oldBounds: 今回スキャンから消えたキャッシュ要素の矩形
@@ -1462,7 +1629,7 @@ public final class WindowService: WindowServicing {
         let now = Date()
         for pid in targetPIDs {
             if let existing = cachedWindowMenuByPID[pid],
-               now.timeIntervalSince(existing.fetchedAt) <= Self.windowMenuCacheTTL {
+               Self.isMenuCacheFresh(fetchedAt: existing.fetchedAt, now: now) {
                 continue
             }
             let items = Self.fetchWindowMenuItems(for: pid)
@@ -1496,43 +1663,98 @@ public final class WindowService: WindowServicing {
         return enriched
     }
 
+    /// 「ウィンドウ」メニュー項目を押下し、キャッシュ参照が失効して失敗した場合は最新メニューを再取得して 1 回リトライする
+    /// - Parameters:
+    ///   - pid: 対象アプリケーションのプロセス ID
+    ///   - windowTitle: 照合するウィンドウタイトル
+    ///   - preferUnchecked: チェックマーク無しの項目を優先するか
+    /// - Returns: メニュー項目の押下に成功した場合は true
+    private func performMenuNavigationWithRetry(
+        pid: Int32,
+        windowTitle: String,
+        preferUnchecked: Bool
+    ) -> Bool {
+        if let cachedElement = resolveWindowMenuItemElement(
+            pid: pid,
+            windowTitle: windowTitle,
+            preferUnchecked: preferUnchecked,
+            forceRefresh: false
+        ) {
+            Self.applyMessagingTimeout(to: cachedElement)
+            if AXUIElementPerformAction(cachedElement, kAXPressAction as CFString) == .success {
+                return true
+            }
+        }
+
+        // 押下に失敗した場合はキャッシュを破棄して最新メニューを再取得し 1 回だけ再試行する
+        cachedWindowMenuByPID.removeValue(forKey: pid)
+        guard let freshElement = resolveWindowMenuItemElement(
+            pid: pid,
+            windowTitle: windowTitle,
+            preferUnchecked: preferUnchecked,
+            forceRefresh: true
+        ) else {
+            return false
+        }
+        Self.applyMessagingTimeout(to: freshElement)
+        return AXUIElementPerformAction(freshElement, kAXPressAction as CFString) == .success
+    }
+
     /// 指定された PID とウィンドウタイトルに対応する「ウィンドウ」メニュー項目の AXUIElement を解決する
     /// - Parameters:
     ///   - pid: 対象アプリケーションのプロセス ID
     ///   - windowTitle: 照合するウィンドウタイトル
+    ///   - preferUnchecked: チェックマーク無しの項目を優先するか
+    ///   - forceRefresh: キャッシュを無視して強制再取得するか
     /// - Returns: 一致したメニュー項目の AXUIElement（存在しない場合は nil）
-    private func resolveWindowMenuItemElement(pid: Int32, windowTitle: String) -> AXUIElement? {
-        if let cached = cachedWindowMenuByPID[pid],
-           let matched = Self.findMatchingMenuItem(in: cached.items, title: windowTitle) {
+    private func resolveWindowMenuItemElement(
+        pid: Int32,
+        windowTitle: String,
+        preferUnchecked: Bool = false,
+        forceRefresh: Bool = false
+    ) -> AXUIElement? {
+        let now = Date()
+        if !forceRefresh,
+           let cached = cachedWindowMenuByPID[pid],
+           Self.isMenuCacheFresh(fetchedAt: cached.fetchedAt, now: now),
+           let matched = Self.findMatchingMenuItem(
+               in: cached.items,
+               title: windowTitle,
+               preferUnchecked: preferUnchecked
+           ) {
             return matched.axElement.value
         }
 
-        // キャッシュに存在しない場合は最新メニューを再取得して照合する
+        // キャッシュが存在しないか TTL 超過時は最新メニューを再取得して照合する
         let freshItems = Self.fetchWindowMenuItems(for: pid)
         cachedWindowMenuByPID[pid] = CachedWindowMenuState(items: freshItems, fetchedAt: Date())
-        return Self.findMatchingMenuItem(in: freshItems, title: windowTitle)?.axElement.value
+        return Self.findMatchingMenuItem(
+            in: freshItems,
+            title: windowTitle,
+            preferUnchecked: preferUnchecked
+        )?.axElement.value
     }
 
-    /// スキャン済みメニュー項目一覧から指定タイトルに一致する項目を探す（完全一致優先・省略表現補助対応）
+    /// スキャン済みメニュー項目一覧から指定タイトルに一致する項目を探す（完全一致優先・省略表現・未チェック優先対応）
     /// - Parameters:
     ///   - items: 抽出済みのメニュー項目一覧
     ///   - title: 照合対象のウィンドウタイトル
+    ///   - preferUnchecked: チェックマーク無しの項目を優先するか
     /// - Returns: 一致したメニュー項目（見つからない場合は nil）
     private nonisolated static func findMatchingMenuItem(
         in items: [ScannedWindowMenuItem],
-        title: String
+        title: String,
+        preferUnchecked: Bool = false
     ) -> ScannedWindowMenuItem? {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        if let exact = items.first(where: {
-            $0.snapshot.title.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed
-        }) {
-            return exact
+        let snapshots = items.map(\.snapshot)
+        guard let idx = WindowMenuCandidatePairing.matchingMenuItemIndex(
+            for: title,
+            in: snapshots,
+            preferUnchecked: preferUnchecked
+        ), items.indices.contains(idx) else {
+            return nil
         }
-        return items.first(where: {
-            WindowMenuCandidatePairing.titlesMatch($0.snapshot.title, trimmed)
-        })
+        return items[idx]
     }
 
     /// 指定 PID のアプリケーションから AXMenuBar 経由で「ウィンドウ」メニュー内の実ウィンドウ項目群を収集する

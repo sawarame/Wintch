@@ -278,6 +278,115 @@ struct WindowMenuPairingTests {
         #expect(result.last?.title == "Second Window")
     }
 
+    /// Z オーダー上位に Chrome のオムニボックス予測変換相当のオフスクリーン横長補助 CGWindow（1344x378）があっても、
+    /// 本物の別スペースウィンドウ（1920x992 / 1200x800）が優先ペアリングされ、補助窓にタイトルが奪われないことを検証する
+    @Test("Zオーダー上位のオフスクリーン横長補助CGWindowより本物の実ウィンドウを優先ペアリングする")
+    func prioritizesRealWindowOverOffscreenAuxiliaryStripInZOrder() {
+        let candidates = [
+            // Zオーダー上位に存在する Chrome アドレスバー予測変換相当のオフスクリーン補助窓
+            makeCandidate(
+                id: "cg-omnibox",
+                pid: 1871,
+                title: nil,
+                hasAXInfo: false,
+                width: 1344,
+                height: 378,
+                zOrder: 5
+            ),
+            // Zオーダー下位に存在する本物の別スペース Chrome ウィンドウ
+            makeCandidate(
+                id: "cg-chrome-real",
+                pid: 1871,
+                title: nil,
+                hasAXInfo: false,
+                width: 1920,
+                height: 992,
+                zOrder: 30
+            )
+        ]
+
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "Chrome ウェブストア デベロッパー ダッシュボード",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 0
+            )
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 1)
+        #expect(result[0].id == "cg-chrome-real")
+        #expect(result[0].title == "Chrome ウェブストア デベロッパー ダッシュボード")
+
+        // 他に通常サイズ候補が存在しない場合は単独の細長候補も維持されること
+        let onlySlimResult = WindowMenuCandidatePairing.applyMenuTitles(
+            to: [candidates[0]],
+            menuItems: menuItems
+        )
+        #expect(onlySlimResult.count == 1)
+        #expect(onlySlimResult[0].id == "cg-omnibox")
+    }
+
+    /// 元のタイトル自体に「…」や「...」が含まれていてメニュー上でさらに中央省略された場合でも照合できることを検証する
+    @Test("元タイトルに省略記号が含まれた多重省略タイトルも正しく一致判定する")
+    func matchesTitlesContainingMultipleEllipses() {
+        let fullJapanese = "長い記事のタイトル…前編 - Google 検索結果の一覧ページ"
+        let menuJapanese = "長い記事のタイトル…前編 - Goo…の一覧ページ"
+        #expect(WindowMenuCandidatePairing.titlesMatch(fullJapanese, menuJapanese))
+
+        let fullAscii = "Issue...Details - Very Long Repository Title - GitHub"
+        let menuAscii = "Issue...Details - Very...ory Title - GitHub"
+        #expect(WindowMenuCandidatePairing.titlesMatch(fullAscii, menuAscii))
+
+        // 無関係なタイトルは誤一致しないこと
+        #expect(!WindowMenuCandidatePairing.titlesMatch("完全に別のページ…前編", menuJapanese))
+    }
+
+    /// 同一タイトルのウィンドウが複数ある場合、別スペース遷移（preferUnchecked == true）では
+    /// チェックマーク無しの項目が優先され、見つからない場合のみチェック済み項目へフォールバックすることを検証する
+    @Test("matchingMenuItemIndex は別スペース遷移時に同名タイトルの未チェック項目を優先選択する")
+    func matchingMenuItemIndexPrefersUncheckedWhenRequested() {
+        let items = [
+            WindowMenuItemSnapshot(title: "新しいタブ", identifier: "makeKeyAndOrderFront:", mark: "✓", index: 0),
+            WindowMenuItemSnapshot(title: "新しいタブ", identifier: "makeKeyAndOrderFront:", mark: nil, index: 1),
+            WindowMenuItemSnapshot(title: "設定のみ開いているタブ", identifier: "makeKeyAndOrderFront:", mark: "✓", index: 2)
+        ]
+
+        // preferUnchecked == true なら index 0（✓付き）ではなく index 1（未チェック）を選ぶ
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "新しいタブ",
+                in: items,
+                preferUnchecked: true
+            ) == 1
+        )
+        // preferUnchecked == false なら先頭の index 0 を選ぶ
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "新しいタブ",
+                in: items,
+                preferUnchecked: false
+            ) == 0
+        )
+        // 未チェック側に一致がない場合はチェック済み項目へフォールバックする
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "設定のみ開いているタブ",
+                in: items,
+                preferUnchecked: true
+            ) == 2
+        )
+        // 空タイトルは nil
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "   ",
+                in: items,
+                preferUnchecked: true
+            ) == nil
+        )
+    }
+
     /// テスト用 RawWindowCandidate 生成ヘルパー
     /// - Parameters:
     ///   - id: ウィンドウ識別子
