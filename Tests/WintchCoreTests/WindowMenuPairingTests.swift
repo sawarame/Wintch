@@ -278,6 +278,237 @@ struct WindowMenuPairingTests {
         #expect(result.last?.title == "Second Window")
     }
 
+    /// Z オーダー上位に Chrome のオムニボックス予測変換相当のオフスクリーン横長補助 CGWindow（1344x378）があっても、
+    /// 本物の別スペースウィンドウ（1920x992 / 1200x800）が優先ペアリングされ、補助窓にタイトルが奪われないことを検証する
+    @Test("Zオーダー上位のオフスクリーン横長補助CGWindowより本物の実ウィンドウを優先ペアリングする")
+    func prioritizesRealWindowOverOffscreenAuxiliaryStripInZOrder() {
+        let candidates = [
+            // Zオーダー上位に存在する Chrome アドレスバー予測変換相当のオフスクリーン補助窓
+            makeCandidate(
+                id: "cg-omnibox",
+                pid: 1871,
+                title: nil,
+                hasAXInfo: false,
+                width: 1344,
+                height: 378,
+                zOrder: 5
+            ),
+            // Zオーダー下位に存在する本物の別スペース Chrome ウィンドウ
+            makeCandidate(
+                id: "cg-chrome-real",
+                pid: 1871,
+                title: nil,
+                hasAXInfo: false,
+                width: 1920,
+                height: 992,
+                zOrder: 30
+            )
+        ]
+
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "Chrome ウェブストア デベロッパー ダッシュボード",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 0
+            )
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 1)
+        #expect(result[0].id == "cg-chrome-real")
+        #expect(result[0].title == "Chrome ウェブストア デベロッパー ダッシュボード")
+
+        // 他に通常サイズ候補が存在しない場合は単独の細長候補も維持されること
+        let onlySlimResult = WindowMenuCandidatePairing.applyMenuTitles(
+            to: [candidates[0]],
+            menuItems: menuItems
+        )
+        #expect(onlySlimResult.count == 1)
+        #expect(onlySlimResult[0].id == "cg-omnibox")
+    }
+
+    /// 元のタイトル自体に「…」や「...」が含まれていてメニュー上でさらに中央省略された場合でも照合できることを検証する
+    @Test("元タイトルに省略記号が含まれた多重省略タイトルも正しく一致判定する")
+    func matchesTitlesContainingMultipleEllipses() {
+        let fullJapanese = "長い記事のタイトル…前編 - Google 検索結果の一覧ページ"
+        let menuJapanese = "長い記事のタイトル…前編 - Goo…の一覧ページ"
+        #expect(WindowMenuCandidatePairing.titlesMatch(fullJapanese, menuJapanese))
+
+        let fullAscii = "Issue...Details - Very Long Repository Title - GitHub"
+        let menuAscii = "Issue...Details - Very...ory Title - GitHub"
+        #expect(WindowMenuCandidatePairing.titlesMatch(fullAscii, menuAscii))
+
+        // 無関係なタイトルは誤一致しないこと
+        #expect(!WindowMenuCandidatePairing.titlesMatch("完全に別のページ…前編", menuJapanese))
+    }
+
+    /// 同一タイトルのウィンドウが複数ある場合、別スペース遷移（preferUnchecked == true）では
+    /// チェックマーク無しの項目が優先され、見つからない場合のみチェック済み項目へフォールバックすることを検証する
+    @Test("matchingMenuItemIndex は別スペース遷移時に同名タイトルの未チェック項目を優先選択する")
+    func matchingMenuItemIndexPrefersUncheckedWhenRequested() {
+        let items = [
+            WindowMenuItemSnapshot(title: "新しいタブ", identifier: "makeKeyAndOrderFront:", mark: "✓", index: 0),
+            WindowMenuItemSnapshot(title: "新しいタブ", identifier: "makeKeyAndOrderFront:", mark: nil, index: 1),
+            WindowMenuItemSnapshot(title: "設定のみ開いているタブ", identifier: "makeKeyAndOrderFront:", mark: "✓", index: 2)
+        ]
+
+        // preferUnchecked == true なら index 0（✓付き）ではなく index 1（未チェック）を選ぶ
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "新しいタブ",
+                in: items,
+                preferUnchecked: true
+            ) == 1
+        )
+        // preferUnchecked == false なら先頭の index 0 を選ぶ
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "新しいタブ",
+                in: items,
+                preferUnchecked: false
+            ) == 0
+        )
+        // 未チェック側に一致がない場合はチェック済み項目へフォールバックする
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "設定のみ開いているタブ",
+                in: items,
+                preferUnchecked: true
+            ) == 2
+        )
+        // 空タイトルは nil
+        #expect(
+            WindowMenuCandidatePairing.matchingMenuItemIndex(
+                for: "   ",
+                in: items,
+                preferUnchecked: true
+            ) == nil
+        )
+    }
+
+    /// Z オーダー上位に無名の空き殻 CGWindow（1920x1042, cgWindowName: ""）が存在しても、
+    /// 実タイトル付きの cgWindowName を持つ本物の別スペースウィンドウを優先し、タイトルと実ウィンドウを正しく結び付けることを検証する
+    @Test("無名の空き殻CGWindowよりcgWindowName付きの別スペースウィンドウを優先しタイトル一致でペアリングする")
+    func prioritizesNamedCGWindowsOverBlankFullscreenShellAndMatchesByName() {
+        let candidates = [
+            // Z オーダー最上位の真っ白な空き殻 CGWindow（cgWindowName が空）
+            makeCandidate(
+                id: "cg-377",
+                pid: 1871,
+                title: nil,
+                cgWindowName: "",
+                hasAXInfo: false,
+                width: 1920,
+                height: 1042,
+                zOrder: 16
+            ),
+            // Z オーダー下位の本物 2 枚目（メニューとは逆順）
+            makeCandidate(
+                id: "cg-409",
+                pid: 1871,
+                title: nil,
+                cgWindowName: "新しいタブ",
+                hasAXInfo: false,
+                width: 1920,
+                height: 958,
+                zOrder: 87
+            ),
+            // Z オーダー最下位の本物 1 枚目
+            makeCandidate(
+                id: "cg-111",
+                pid: 1871,
+                title: nil,
+                cgWindowName: "tipsを表示する · Issue #17 · sawarame/Nickmark",
+                hasAXInfo: false,
+                width: 1920,
+                height: 992,
+                zOrder: 93
+            )
+        ]
+
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "tipsを表示する · Issue #17 · sawarame/Nickmark",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 65
+            ),
+            WindowMenuItemSnapshot(
+                title: "新しいタブ",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 66
+            )
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 2)
+        #expect(result.contains { $0.id == "cg-111" && $0.title == "tipsを表示する · Issue #17 · sawarame/Nickmark" })
+        #expect(result.contains { $0.id == "cg-409" && $0.title == "新しいタブ" })
+        #expect(!result.contains { $0.id == "cg-377" })
+    }
+
+    /// タイトルが空の AX 候補が存在する場合に、cgWindowName や未消費メニュー項目からタイトルを補完し、
+    /// 余剰の無名空き殻 CGWindow へメニュー枠が流出しないことを検証する
+    @Test("タイトル空のAX候補にもメニューやcgWindowNameからタイトルを補完し空き殻CGWindowを除外する")
+    func enrichesEmptyTitleAXCandidateFromMenuOrCGName() {
+        let candidates = [
+            makeCandidate(
+                id: "ax-1871-111",
+                pid: 1871,
+                title: "",
+                cgWindowName: "tipsを表示する · Issue #17 · sawarame/Nickmark",
+                hasAXInfo: true,
+                width: 1920,
+                height: 992,
+                zOrder: 93
+            ),
+            makeCandidate(
+                id: "cg-377",
+                pid: 1871,
+                title: nil,
+                cgWindowName: "",
+                hasAXInfo: false,
+                width: 1920,
+                height: 1042,
+                zOrder: 16
+            ),
+            makeCandidate(
+                id: "cg-409",
+                pid: 1871,
+                title: nil,
+                cgWindowName: "新しいタブ",
+                hasAXInfo: false,
+                width: 1920,
+                height: 958,
+                zOrder: 87
+            )
+        ]
+
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "tipsを表示する · Issue #17 · sawarame/Nickmark",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 65
+            ),
+            WindowMenuItemSnapshot(
+                title: "新しいタブ",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 66
+            )
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 2)
+        #expect(result[0].id == "ax-1871-111")
+        #expect(result[0].title == "tipsを表示する · Issue #17 · sawarame/Nickmark")
+        #expect(result[1].id == "cg-409")
+        #expect(result[1].title == "新しいタブ")
+    }
+
     /// テスト用 RawWindowCandidate 生成ヘルパー
     /// - Parameters:
     ///   - id: ウィンドウ識別子
@@ -293,6 +524,7 @@ struct WindowMenuPairingTests {
         id: String,
         pid: Int32,
         title: String?,
+        cgWindowName: String? = nil,
         hasAXInfo: Bool,
         subrole: String? = "AXStandardWindow",
         width: Double,
@@ -306,6 +538,7 @@ struct WindowMenuPairingTests {
             bundleIdentifier: "com.example.app",
             applicationName: "ExampleApp",
             title: title,
+            cgWindowName: cgWindowName,
             layer: 0,
             bounds: WindowBounds(x: 0, y: 0, width: width, height: height),
             alpha: 1.0,

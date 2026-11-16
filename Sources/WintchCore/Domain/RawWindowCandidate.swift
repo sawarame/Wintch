@@ -45,6 +45,9 @@ public struct RawWindowCandidate: Equatable, Sendable {
     /// アクセシビリティ API 等から取得またはキャッシュされたウィンドウタイトル
     public let title: String?
 
+    /// CoreGraphics が返すウィンドウ名メタデータ（画面収録権限あり環境等で取得可能な場合の補助識別子）
+    public let cgWindowName: String?
+
     /// ウィンドウのレイヤー番号（通常ウィンドウは 0）
     public let layer: Int
 
@@ -89,6 +92,7 @@ public struct RawWindowCandidate: Equatable, Sendable {
     ///   - bundleIdentifier: 所有アプリの Bundle ID
     ///   - applicationName: アプリ表示名
     ///   - title: ウィンドウタイトル
+    ///   - cgWindowName: CoreGraphics が返すウィンドウ名メタデータ
     ///   - layer: ウィンドウレイヤー番号
     ///   - bounds: ウィンドウ座標・サイズ
     ///   - alpha: 不透明度
@@ -108,6 +112,7 @@ public struct RawWindowCandidate: Equatable, Sendable {
         bundleIdentifier: String? = nil,
         applicationName: String,
         title: String? = nil,
+        cgWindowName: String? = nil,
         layer: Int = 0,
         bounds: WindowBounds = WindowBounds(width: 800, height: 600),
         alpha: Double = 1.0,
@@ -127,6 +132,7 @@ public struct RawWindowCandidate: Equatable, Sendable {
         self.bundleIdentifier = bundleIdentifier
         self.applicationName = applicationName
         self.title = title
+        self.cgWindowName = cgWindowName
         self.layer = layer
         self.bounds = bounds
         self.alpha = alpha
