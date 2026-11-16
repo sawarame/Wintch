@@ -5,10 +5,19 @@ public struct PermissionGuideView: View {
     /// 誘導画面の状態管理 ViewModel
     private let viewModel: PermissionGuideViewModel
 
+    /// 手順案内文に表示するアプリ識別情報
+    private let appIdentity: AppIdentity
+
     /// 権限誘導ビューを初期化する
-    /// - Parameter viewModel: 権限誘導 ViewModel
-    public init(viewModel: PermissionGuideViewModel) {
+    /// - Parameters:
+    ///   - viewModel: 権限誘導 ViewModel
+    ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
+    public init(
+        viewModel: PermissionGuideViewModel,
+        appIdentity: AppIdentity = .current
+    ) {
         self.viewModel = viewModel
+        self.appIdentity = appIdentity
     }
 
     /// ビューの本体構築
@@ -30,7 +39,7 @@ public struct PermissionGuideView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Label("1. 下の「システム設定を開く」をクリックします", systemImage: "1.circle.fill")
-                Label("2. 一覧の「Wintch」のスイッチをオンにします", systemImage: "2.circle.fill")
+                Label(appIdentity.accessibilitySwitchInstruction, systemImage: "2.circle.fill")
                 Label("3. 許可を検知すると自動的に利用可能になります", systemImage: "3.circle.fill")
             }
             .font(.callout)
