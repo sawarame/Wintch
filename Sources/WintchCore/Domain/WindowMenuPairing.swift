@@ -157,6 +157,42 @@ public enum WindowMenuCandidatePairing {
             axCandidates: axCandidates
         )
 
+        // タイトルが空の標準 AX 候補がある場合、空き殻 cg-* へタイトルが流出しないようメニューまたは cgWindowName から補完する
+        let pairableCGNames = cgCandidates
+            .filter { WindowFilter.isValid($0) }
+            .compactMap { trimmedNonEmpty($0.cgWindowName) }
+        for idx in axCandidates.indices {
+            let candidate = axCandidates[idx]
+            guard isMenuTrackedAXWindow(candidate),
+                  trimmedNonEmpty(candidate.title) == nil else {
+                continue
+            }
+            if let cgName = trimmedNonEmpty(candidate.cgWindowName) {
+                if let exactIdx = unmatchedMenuItems.firstIndex(where: {
+                    trimmedNonEmpty($0.title) == cgName
+                }) {
+                    let matchedItem = unmatchedMenuItems.remove(at: exactIdx)
+                    axCandidates[idx] = replacingTitle(of: candidate, with: matchedItem.title)
+                    continue
+                }
+                if let fuzzyIdx = unmatchedMenuItems.firstIndex(where: {
+                    titlesMatch(cgName, $0.title)
+                }) {
+                    let matchedItem = unmatchedMenuItems.remove(at: fuzzyIdx)
+                    axCandidates[idx] = replacingTitle(of: candidate, with: matchedItem.title)
+                    continue
+                }
+                axCandidates[idx] = replacingTitle(of: candidate, with: cgName)
+                continue
+            }
+            if let fallbackIdx = unmatchedMenuItems.firstIndex(where: { item in
+                !pairableCGNames.contains(where: { titlesMatch($0, item.title) })
+            }) ?? unmatchedMenuItems.indices.first {
+                let matchedItem = unmatchedMenuItems.remove(at: fallbackIdx)
+                axCandidates[idx] = replacingTitle(of: candidate, with: matchedItem.title)
+            }
+        }
+
         // チェックマーク付きの項目（アプリ内の直近アクティブウィンドウ）を優先し、残りはメニュー順を保持する
         unmatchedMenuItems.sort { lhs, rhs in
             if lhs.isChecked != rhs.isChecked {
@@ -171,21 +207,16 @@ public enum WindowMenuCandidatePairing {
         let remainingMenuCapacity = max(0, menuItems.count - coveredAXWindowCount)
 
         // WindowFilter の通常判定を通過できる実質的な CGWindow 補完候補のみをペアリング対象にする
-        // （極小 1x1 やツールバー帯に貴重なメニュータイトルが奪われるのを防ぐ）
+        // （極小 1x1 やツールバー帯・無名空き殻窓に貴重なメニュータイトルが奪われるのを防ぐ）
         let pairableCGIndices = cgCandidates.indices.filter { WindowFilter.isValid(cgCandidates[$0]) }
         let sortedPairableIndices = pairableCGIndices.sorted { lhsIdx, rhsIdx in
             cgCandidatePriority(cgCandidates[lhsIdx]) < cgCandidatePriority(cgCandidates[rhsIdx])
         }
 
         let pairCount = min(unmatchedMenuItems.count, sortedPairableIndices.count, remainingMenuCapacity)
-        var pairedCGCandidates: [RawWindowCandidate] = []
-        pairedCGCandidates.reserveCapacity(pairCount)
-
-        for i in 0..<pairCount {
-            let source = cgCandidates[sortedPairableIndices[i]]
-            let assignedTitle = unmatchedMenuItems[i].title
-            pairedCGCandidates.append(replacingTitle(of: source, with: assignedTitle))
-        }
+        let selectedCGs = sortedPairableIndices.prefix(pairCount).map { cgCandidates[$0] }
+        let selectedMenus = Array(unmatchedMenuItems.prefix(pairCount))
+        let pairedCGCandidates = pairCGsWithMenuItems(selectedCGs, menuItems: selectedMenus)
 
         // Window メニューで全実ウィンドウを把握できるアプリにおいて、
         // ペア数を超過して残った cg-* 候補は裏方の不可視/ゴーストウィンドウであるため除外する
@@ -253,11 +284,72 @@ public enum WindowMenuCandidatePairing {
     /// CGWindow 候補同士のペアリング優先順位タプルを構築する（小さいほど優先）
     /// - Parameter candidate: 比較対象の CGWindow 補完候補
     /// - Returns: 比較可能な優先順位タプル
-    private static func cgCandidatePriority(_ candidate: RawWindowCandidate) -> (Int, Int, Int, Int) {
+    private static func cgCandidatePriority(_ candidate: RawWindowCandidate) -> (Int, Int, Int, Int, Int) {
         let onScreenPriority = (candidate.isOnScreen == true) ? 0 : 1
+        let hasCGNamePriority = (trimmedNonEmpty(candidate.cgWindowName) != nil) ? 0 : 1
         let layerPriority = (candidate.layer == 0) ? 0 : 1
         let auxiliaryShapePenalty = isAuxiliaryPopupShape(candidate) ? 1 : 0
-        return (onScreenPriority, layerPriority, auxiliaryShapePenalty, candidate.zOrderIndex)
+        return (onScreenPriority, hasCGNamePriority, layerPriority, auxiliaryShapePenalty, candidate.zOrderIndex)
+    }
+
+    /// 選出済み CGWindow 候補群とメニュー項目群を、cgWindowName 一致を優先して 1 対 1 でペアリングする
+    /// - Parameters:
+    ///   - cgCandidates: ペアリング対象に選出された CGWindow 候補配列
+    ///   - menuItems: 割り当て対象のメニュー項目配列（同件数）
+    /// - Returns: タイトル割り当て済みの候補配列
+    private static func pairCGsWithMenuItems(
+        _ cgCandidates: [RawWindowCandidate],
+        menuItems: [WindowMenuItemSnapshot]
+    ) -> [RawWindowCandidate] {
+        var assignedTitles = Array<String?>(repeating: nil, count: cgCandidates.count)
+        var remainingMenuIndices = Array(menuItems.indices)
+
+        // 1. cgWindowName とメニュータイトルの完全一致を優先して結び付ける
+        for cgIdx in cgCandidates.indices {
+            guard let cgName = trimmedNonEmpty(cgCandidates[cgIdx].cgWindowName) else { continue }
+            if let pos = remainingMenuIndices.firstIndex(where: {
+                trimmedNonEmpty(menuItems[$0].title) == cgName
+            }) {
+                let menuIdx = remainingMenuIndices.remove(at: pos)
+                assignedTitles[cgIdx] = menuItems[menuIdx].title
+            }
+        }
+
+        // 2. cgWindowName とメニュータイトルの省略一致を次に結び付ける
+        for cgIdx in cgCandidates.indices where assignedTitles[cgIdx] == nil {
+            guard let cgName = trimmedNonEmpty(cgCandidates[cgIdx].cgWindowName) else { continue }
+            if let pos = remainingMenuIndices.firstIndex(where: {
+                titlesMatch(cgName, menuItems[$0].title)
+            }) {
+                let menuIdx = remainingMenuIndices.remove(at: pos)
+                assignedTitles[cgIdx] = menuItems[menuIdx].title
+            }
+        }
+
+        // 3. 残りは優先順位順に割り当てる
+        var remainingCursor = 0
+        return cgCandidates.indices.map { cgIdx in
+            let title: String
+            if let matchedTitle = assignedTitles[cgIdx] {
+                title = matchedTitle
+            } else {
+                let menuIdx = remainingMenuIndices[remainingCursor]
+                remainingCursor += 1
+                title = menuItems[menuIdx].title
+            }
+            return replacingTitle(of: cgCandidates[cgIdx], with: title)
+        }
+    }
+
+    /// 前後空白除去後に空でない文字列を返す
+    /// - Parameter value: 対象のオプショナル文字列
+    /// - Returns: 非空のトリム済み文字列（空または nil の場合は nil）
+    private static func trimmedNonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     /// オフスクリーンかつ横長扁平な補助ポップアップ風（予測変換ドロップダウン等）の CGWindow 形状かを判定する
@@ -323,6 +415,7 @@ public enum WindowMenuCandidatePairing {
             bundleIdentifier: candidate.bundleIdentifier,
             applicationName: candidate.applicationName,
             title: title,
+            cgWindowName: candidate.cgWindowName,
             layer: candidate.layer,
             bounds: candidate.bounds,
             alpha: candidate.alpha,

@@ -15,10 +15,13 @@
 - **契約**:
   - `WindowFilter.isValid` を通過した `cg-*` 候補同士を以下の辞書順優先度で並べる（小さいほど優先）：
     1. `onScreenPriority`: 画面表示中（`isOnScreen == true`）が `0`、それ以外が `1`
-    2. `layerPriority`: 通常レイヤー（`layer == 0`）が `0`、それ以外が `1`
-    3. `auxiliaryShapePenalty`: 通常ウィンドウ規模の候補が `0`、オフスクリーンかつ横長扁平な補助ポップアップ形状（例: `isOnScreen != true` かつ `bounds.height < 420 && (bounds.width / bounds.height) > 3.0`）は `1`
-    4. `zOrderIndex`: 同一優先度群内では従来通りシステム Z オーダー昇順
+    2. `cgWindowNamePriority`: OS メタデータ由来の非空 `cgWindowName` を持つ候補が `0`、持たない（`nil`/空）候補が `1`
+    3. `layerPriority`: 通常レイヤー（`layer == 0`）が `0`、それ以外が `1`
+    4. `auxiliaryShapePenalty`: 通常ウィンドウ規模の候補が `0`、オフスクリーンかつ横長扁平な補助ポップアップ形状（例: `isOnScreen != true` かつ `bounds.height < 420 && (bounds.width / bounds.height) > 3.0`）は `1`
+    5. `zOrderIndex`: 同一優先度群内では従来通りシステム Z オーダー昇順
+  - さらに `applyMenuTitles` では、(a) タイトルが空（`nil`/空白）の有効 AX 候補があれば `cgWindowName` 一致または未消費メニュー項目からタイトルを補完し、(b) `cg-*` ペアリング時は `cgWindowName` とメニュータイトルが一致するペアを最優先で結び付ける。
   - **非破壊保証**:
+    - `cgWindowName` が取得できない環境（画面収録権限未許可時など）では全候補の `cgWindowNamePriority` が同値 `1` となるため、既存の優先順位ロジックがそのまま維持される。
     - ほかに本物の通常サイズ CGWindow 候補が存在しない場合は、補助形状の候補でも従来通り通過する。
     - 複数の標準サイズ CGWindow 候補（`1728x1117`, `1200x800` 等）同士の順序は `zOrderIndex` 昇順のまま変化しない。
 

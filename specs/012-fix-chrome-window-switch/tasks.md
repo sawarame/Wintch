@@ -116,6 +116,18 @@ description: "Task list for 012-fix-chrome-window-switch"
 
 ---
 
+## Phase 7: 追加対応（実機スクリーンショット再現分の解消）
+
+**Purpose**: 実機再現で確認された (1) 無名空き殻 CGWindow（`1920x1042` 等）の優先採用と空タイトル AX ウィンドウの連鎖、および (2) 非アクティブ Chrome に対するメニュー `kAXPressAction` 無反応を解消する
+
+- [X] T016 [P] [US2] `Tests/WintchCoreTests/WindowMenuPairingTests.swift` および `Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift` に、(a) 無名の空き殻 CGWindow（`cgWindowName: ""`, `zOrder` 上位）より実タイトル付き `cgWindowName` を持つ別スペースウィンドウが最優先ペアリングされ、`cgWindowName` 一致ペアが優先結合されるテスト、(b) 空タイトル AX 候補へのメニュータイトル補完テスト、および (c) `selectBestCGWindowMatch` がタイトル一致する CGWindow を優先照合するテストを追加する
+- [X] T017 [US2] `Sources/WintchCore/Domain/RawWindowCandidate.swift` に後方互換デフォルト値付き `cgWindowName: String? = nil` を追加し、`Sources/WintchCore/Domain/WindowMenuPairing.swift` の `applyMenuTitles` / `cgCandidatePriority` / `replacingTitle` を更新して、非空 `cgWindowName` の優先、タイトル一致ペア優先結合、および空タイトル AX 候補へのメニュー補完を実装する（T016 に依存）
+- [X] T018 [US1] `Sources/WintchCore/Services/WindowService.swift` の `CGWindowMeta`・`fetchCGWindowInfos`・`selectBestCGWindowMatch`・`fetchRawWindowCandidates`・`applyAXWindowSnapshots` を更新し、`kCGWindowName` の読み取り、`axTitle` と `cgWindowName` の一致優先照合、既存非空タイトルの `nil`/空上書き保護、および重複済み旧 `cgWindowID` フォールバック抑止を実装する（T017 に依存）
+- [X] T019 [US1] `Sources/WintchCore/Services/WindowService.swift` の `activateWindow(_:)` フォローアップシーケンスを更新し、メニュー遷移後にアプリが非アクティブのままなら `app.activate(options: [])` でアクティブ化した後、アクティブコンテキスト下で対象ウィンドウが現在スペースに未到達であれば最新メニューから `kAXPressAction` を再実行（未達時は親 `AXMenuBarItem` 展開経由の押下フォールバック）して別スペースの Chrome ウィンドウへ確実に遷移するよう改善する（T018 に依存）
+- [X] T020 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` および `./scripts/build-app.sh` を実行し、全ユニットテスト合格と `.build/Wintch_dev.app` の再ビルド完了を確認する（T019 に依存）
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

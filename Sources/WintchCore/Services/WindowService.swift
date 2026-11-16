@@ -312,15 +312,27 @@ public final class WindowService: WindowServicing {
 
                 // 座標が取得できない不可視・非ウィンドウ要素はダミーサイズで補完せず除外する
                 guard let rect = cached.bounds ?? matchedCG?.info.bounds else { continue }
+                let resolvedCGID: UInt32?
+                if let matchedID = matchedCG?.info.windowID {
+                    resolvedCGID = matchedID
+                } else if let oldID = cached.cgWindowID,
+                          !matchedCGWindowIDs.contains(oldID),
+                          pidCGEntries.contains(where: { $0.info.windowID == oldID }) {
+                    matchedCGWindowIDs.insert(oldID)
+                    resolvedCGID = oldID
+                } else {
+                    resolvedCGID = nil
+                }
 
                 candidates.append(
                     RawWindowCandidate(
                         id: cached.id,
-                        cgWindowID: matchedCG?.info.windowID ?? cached.cgWindowID,
+                        cgWindowID: resolvedCGID,
                         pid: pid,
                         bundleIdentifier: app.bundleIdentifier,
                         applicationName: appName,
                         title: cached.title,
+                        cgWindowName: matchedCG?.info.name,
                         layer: matchedCG?.info.layer ?? 0,
                         bounds: WindowBounds(
                             x: Double(rect.origin.x),
@@ -360,6 +372,7 @@ public final class WindowService: WindowServicing {
                     bundleIdentifier: app.bundleIdentifier,
                     applicationName: app.localizedName ?? "不明なアプリ",
                     title: nil,
+                    cgWindowName: cgInfo.name,
                     layer: cgInfo.layer,
                     bounds: WindowBounds(
                         x: Double(cgInfo.bounds.origin.x),
@@ -435,16 +448,16 @@ public final class WindowService: WindowServicing {
             return
         }
 
-        // 別スペースへのアニメーション切り替え完了を段階的に確認しつつ、対象ウィンドウの出現とフォーカスを確定する
+        // 別スペースへのアニメーション切り替え完了を段階的に確認しつつ、非アクティブ時のメニュー無視対策・フォーカス確定を行う
         let targetPID = entry.pid
         let targetTitle = entry.windowTitle
         let targetID = entry.id
         let needsUnminimize = entry.isMinimized
         pendingActivationFollowUpTask = Task { @MainActor [weak self] in
-            let stepDelaysMs: [UInt64] = [60, 80, 140, 170]
+            let stepDelaysMs: [UInt64] = [50, 110, 160, 180]
             var didActivateAndRaise = false
 
-            for delayMs in stepDelaysMs {
+            for (stepIndex, delayMs) in stepDelaysMs.enumerated() {
                 try? await Task.sleep(for: .milliseconds(delayMs))
                 guard !Task.isCancelled, let self else { return }
 
@@ -461,6 +474,30 @@ public final class WindowService: WindowServicing {
                     self.updateMRUTimestamp(pid: targetPID, windowID: resolved.id, date: Date())
                     didActivateAndRaise = true
                     break
+                }
+
+                // 対象ウィンドウが未到達の場合、アプリをアクティブ化した上で最新メニューから再押下（必要時は展開押下）する
+                guard needsMenuNavigation, !targetTitle.isEmpty else { continue }
+                if stepIndex == 0 {
+                    if let runningApp = NSRunningApplication(processIdentifier: targetPID), !runningApp.isActive {
+                        runningApp.activate(options: [])
+                    }
+                } else if stepIndex == 1 {
+                    if let runningApp = NSRunningApplication(processIdentifier: targetPID), !runningApp.isActive {
+                        runningApp.activate(options: [])
+                    }
+                    _ = self.performMenuNavigationWithRetry(
+                        pid: targetPID,
+                        windowTitle: targetTitle,
+                        preferUnchecked: true,
+                        forceFresh: true
+                    )
+                } else if stepIndex == 2 {
+                    _ = await self.performMenuNavigationViaMenuOpen(
+                        pid: targetPID,
+                        windowTitle: targetTitle,
+                        preferUnchecked: true
+                    )
                 }
             }
 
@@ -570,6 +607,34 @@ public final class WindowService: WindowServicing {
         let bounds: CGRect
         let alpha: Double
         let isOnscreen: Bool
+        let name: String?
+
+        /// CGWindow メタデータを初期化する
+        /// - Parameters:
+        ///   - windowID: CoreGraphics ウィンドウ ID
+        ///   - pid: 所有プロセス ID
+        ///   - layer: レイヤー番号
+        ///   - bounds: ウィンドウ矩形
+        ///   - alpha: 不透明度
+        ///   - isOnscreen: 画面表示中フラグ
+        ///   - name: CGWindow 名メタデータ（取得可能な場合）
+        init(
+            windowID: UInt32,
+            pid: Int32,
+            layer: Int,
+            bounds: CGRect,
+            alpha: Double,
+            isOnscreen: Bool,
+            name: String? = nil
+        ) {
+            self.windowID = windowID
+            self.pid = pid
+            self.layer = layer
+            self.bounds = bounds
+            self.alpha = alpha
+            self.isOnscreen = isOnscreen
+            self.name = name
+        }
     }
 
     /// 全操作スペースの CGWindow メタデータを Z オーダー順で取得する
@@ -590,13 +655,15 @@ public final class WindowService: WindowServicing {
             }
             let alpha = (dict[kCGWindowAlpha as String] as? Double) ?? 1.0
             let isOnscreen = (dict[kCGWindowIsOnscreen as String] as? Bool) ?? false
+            let name = dict[kCGWindowName as String] as? String
             return CGWindowMeta(
                 windowID: windowID,
                 pid: pid,
                 layer: layer,
                 bounds: bounds,
                 alpha: alpha,
-                isOnscreen: isOnscreen
+                isOnscreen: isOnscreen,
+                name: name
             )
         }
     }
@@ -771,7 +838,13 @@ public final class WindowService: WindowServicing {
         for (index, snapshot) in snapshots.enumerated() {
             if let matchIdx = existing.firstIndex(where: { CFEqual($0.axElement, snapshot.axElement.value) }) {
                 existing[matchIdx].role = snapshot.role
-                existing[matchIdx].title = snapshot.title
+                // 一時的な AX 読み取り失敗（nil）や遷移中の空タイトルで既知の非空タイトルを消去しない
+                if let newTitle = snapshot.title,
+                   !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    existing[matchIdx].title = newTitle
+                } else if existing[matchIdx].title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+                    existing[matchIdx].title = snapshot.title
+                }
                 existing[matchIdx].subrole = snapshot.subrole
                 existing[matchIdx].bounds = snapshot.bounds
                 existing[matchIdx].isMinimized = snapshot.isMinimized
@@ -942,6 +1015,7 @@ public final class WindowService: WindowServicing {
         }
         return Self.selectBestCGWindowMatch(
             axBounds: axBounds,
+            axTitle: cached.title,
             isMinimized: cached.isMinimized,
             preferOnscreen: cached.isPresentInLatestAXScan && !cached.isMinimized,
             preferredCGWindowID: cached.cgWindowID,
@@ -953,6 +1027,7 @@ public final class WindowService: WindowServicing {
     /// AX 矩形に対して最も適合する CGWindow を純粋比較で選出する
     /// - Parameters:
     ///   - axBounds: AXUIElement のウィンドウ矩形
+    ///   - axTitle: AXUIElement から取得したウィンドウタイトル（任意）
     ///   - isMinimized: AX 上の最小化状態
     ///   - preferOnscreen: 現在スペース上で捕捉済みであり画面表示中 CGWindow を優先するか
     ///   - preferredCGWindowID: 前回照合されていた CGWindow ID（任意）
@@ -961,6 +1036,7 @@ public final class WindowService: WindowServicing {
     /// - Returns: 最も一致する CGWindow とその Z オーダー順（見つからない場合は nil）
     nonisolated static func selectBestCGWindowMatch(
         axBounds: CGRect,
+        axTitle: String? = nil,
         isMinimized: Bool,
         preferOnscreen: Bool,
         preferredCGWindowID: UInt32?,
@@ -972,7 +1048,7 @@ public final class WindowService: WindowServicing {
                 && allowedCGWindowLayers.contains($0.info.layer)
         }
 
-        // 1. 許容誤差 40pt 以内で、最小距離 + 4pt 以内の候補から可視状態・連続性・Z オーダーを含めて最良を選出する
+        // 1. 許容誤差 40pt 以内で、最小距離 + 4pt 以内の候補から可視状態・タイトル一致・連続性・Z オーダーを含めて最良を選出する
         let distances = available.compactMap { entry -> (entry: (zOrder: Int, info: CGWindowMeta), dist: Double)? in
             let dist = boundsDistance(axBounds, entry.info.bounds)
             guard dist <= 40.0 else { return nil }
@@ -985,6 +1061,7 @@ public final class WindowService: WindowServicing {
                 let lhsRank = matchPriorityTuple(
                     for: lhs.entry,
                     dist: lhs.dist,
+                    axTitle: axTitle,
                     isMinimized: isMinimized,
                     preferOnscreen: preferOnscreen,
                     preferredCGWindowID: preferredCGWindowID
@@ -992,6 +1069,7 @@ public final class WindowService: WindowServicing {
                 let rhsRank = matchPriorityTuple(
                     for: rhs.entry,
                     dist: rhs.dist,
+                    axTitle: axTitle,
                     isMinimized: isMinimized,
                     preferOnscreen: preferOnscreen,
                     preferredCGWindowID: preferredCGWindowID
@@ -1026,6 +1104,11 @@ public final class WindowService: WindowServicing {
             if lhsOnscreenRank != rhsOnscreenRank {
                 return lhsOnscreenRank < rhsOnscreenRank
             }
+            let lhsTitleRank = doesCGWindowNameMatchTitle(lhs.0.info.name, axTitle: axTitle) ? 1 : 0
+            let rhsTitleRank = doesCGWindowNameMatchTitle(rhs.0.info.name, axTitle: axTitle) ? 1 : 0
+            if lhsTitleRank != rhsTitleRank {
+                return lhsTitleRank < rhsTitleRank
+            }
             return lhs.1 < rhs.1
         }
 
@@ -1036,6 +1119,7 @@ public final class WindowService: WindowServicing {
     /// - Parameters:
     ///   - entry: 比較対象の CGWindow エントリ
     ///   - dist: AX 矩形とのマンハッタン距離
+    ///   - axTitle: AXUIElement のウィンドウタイトル（任意）
     ///   - isMinimized: AX 上の最小化状態
     ///   - preferOnscreen: 画面表示中 CGWindow を優先するか
     ///   - preferredCGWindowID: 前回照合されていた CGWindow ID
@@ -1043,10 +1127,11 @@ public final class WindowService: WindowServicing {
     private nonisolated static func matchPriorityTuple(
         for entry: (zOrder: Int, info: CGWindowMeta),
         dist: Double,
+        axTitle: String?,
         isMinimized: Bool,
         preferOnscreen: Bool,
         preferredCGWindowID: UInt32?
-    ) -> (Int, Int, Int, Double, Int) {
+    ) -> (Int, Int, Int, Int, Double, Int) {
         let layerPriority = entry.info.layer == 0 ? 0 : 1
         let visibilityPriority: Int
         if preferOnscreen && !isMinimized {
@@ -1056,8 +1141,23 @@ public final class WindowService: WindowServicing {
         } else {
             visibilityPriority = !entry.info.isOnscreen ? 0 : 1
         }
+        let titleMatchPriority = doesCGWindowNameMatchTitle(entry.info.name, axTitle: axTitle) ? 0 : 1
         let continuityPriority = (preferredCGWindowID != nil && entry.info.windowID == preferredCGWindowID) ? 0 : 1
-        return (layerPriority, visibilityPriority, continuityPriority, dist, entry.zOrder)
+        return (layerPriority, visibilityPriority, titleMatchPriority, continuityPriority, dist, entry.zOrder)
+    }
+
+    /// CGWindow の名前メタデータが AX タイトルと一致するか判定する
+    /// - Parameters:
+    ///   - cgName: CGWindow の名前メタデータ
+    ///   - axTitle: AXUIElement のタイトル
+    /// - Returns: 双方が非空かつ一致（省略一致含む）する場合に true
+    private nonisolated static func doesCGWindowNameMatchTitle(_ cgName: String?, axTitle: String?) -> Bool {
+        guard let cgName = cgName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let axTitle = axTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cgName.isEmpty, !axTitle.isEmpty else {
+            return false
+        }
+        return WindowMenuCandidatePairing.titlesMatch(axTitle, cgName)
     }
 
     /// 2つの矩形間のマンハッタン距離を計算する
@@ -1668,25 +1768,28 @@ public final class WindowService: WindowServicing {
     ///   - pid: 対象アプリケーションのプロセス ID
     ///   - windowTitle: 照合するウィンドウタイトル
     ///   - preferUnchecked: チェックマーク無しの項目を優先するか
+    ///   - forceFresh: 初回からキャッシュを無視して最新メニューを取得するか
     /// - Returns: メニュー項目の押下に成功した場合は true
     private func performMenuNavigationWithRetry(
         pid: Int32,
         windowTitle: String,
-        preferUnchecked: Bool
+        preferUnchecked: Bool,
+        forceFresh: Bool = false
     ) -> Bool {
-        if let cachedElement = resolveWindowMenuItemElement(
-            pid: pid,
-            windowTitle: windowTitle,
-            preferUnchecked: preferUnchecked,
-            forceRefresh: false
-        ) {
+        if !forceFresh,
+           let cachedElement = resolveWindowMenuItemElement(
+               pid: pid,
+               windowTitle: windowTitle,
+               preferUnchecked: preferUnchecked,
+               forceRefresh: false
+           ) {
             Self.applyMessagingTimeout(to: cachedElement)
             if AXUIElementPerformAction(cachedElement, kAXPressAction as CFString) == .success {
                 return true
             }
         }
 
-        // 押下に失敗した場合はキャッシュを破棄して最新メニューを再取得し 1 回だけ再試行する
+        // キャッシュ無効または押下失敗時は最新メニューを再取得して押下を試行する
         cachedWindowMenuByPID.removeValue(forKey: pid)
         guard let freshElement = resolveWindowMenuItemElement(
             pid: pid,
@@ -1698,6 +1801,53 @@ public final class WindowService: WindowServicing {
         }
         Self.applyMessagingTimeout(to: freshElement)
         return AXUIElementPerformAction(freshElement, kAXPressAction as CFString) == .success
+    }
+
+    /// 非アクティブ時や直接押下が無視されるアプリ向けに「ウィンドウ」メニューバー項目を展開してから対象項目を押下する
+    /// - Parameters:
+    ///   - pid: 対象アプリケーションのプロセス ID
+    ///   - windowTitle: 照合するウィンドウタイトル
+    ///   - preferUnchecked: チェックマーク無しの項目を優先するか
+    /// - Returns: 対象メニュー項目の押下に成功した場合は true
+    private func performMenuNavigationViaMenuOpen(
+        pid: Int32,
+        windowTitle: String,
+        preferUnchecked: Bool
+    ) async -> Bool {
+        guard let barItem = Self.findWindowMenuBarItem(for: pid) else {
+            return false
+        }
+        Self.applyMessagingTimeout(to: barItem)
+        guard AXUIElementPerformAction(barItem, kAXPressAction as CFString) == .success else {
+            return false
+        }
+
+        // メニュー項目の生成・検証が完了するまで短時間待機してから最新項目を押下する
+        try? await Task.sleep(for: .milliseconds(30))
+        guard !Task.isCancelled else {
+            AXUIElementPerformAction(barItem, kAXCancelAction as CFString)
+            return false
+        }
+
+        let freshItems = Self.fetchWindowMenuItems(fromMenuBarItem: barItem)
+        cachedWindowMenuByPID[pid] = CachedWindowMenuState(items: freshItems, fetchedAt: Date())
+        guard let matched = Self.findMatchingMenuItem(
+            in: freshItems,
+            title: windowTitle,
+            preferUnchecked: preferUnchecked
+        ) else {
+            AXUIElementPerformAction(barItem, kAXCancelAction as CFString)
+            return false
+        }
+
+        let targetElement = matched.axElement.value
+        Self.applyMessagingTimeout(to: targetElement)
+        let status = AXUIElementPerformAction(targetElement, kAXPressAction as CFString)
+        if status != .success {
+            AXUIElementPerformAction(barItem, kAXCancelAction as CFString)
+            return false
+        }
+        return true
     }
 
     /// 指定された PID とウィンドウタイトルに対応する「ウィンドウ」メニュー項目の AXUIElement を解決する
@@ -1757,10 +1907,10 @@ public final class WindowService: WindowServicing {
         return items[idx]
     }
 
-    /// 指定 PID のアプリケーションから AXMenuBar 経由で「ウィンドウ」メニュー内の実ウィンドウ項目群を収集する
+    /// 指定 PID のアプリケーションから AXMenuBar 上の「ウィンドウ」メニューバー項目を探索する
     /// - Parameter pid: 対象アプリケーションのプロセス ID
-    /// - Returns: 抽出されたウィンドウ項目と AXUIElement の配列
-    private nonisolated static func fetchWindowMenuItems(for pid: Int32) -> [ScannedWindowMenuItem] {
+    /// - Returns: 「ウィンドウ」メニューバー項目の AXUIElement（見つからない場合は nil）
+    private nonisolated static func findWindowMenuBarItem(for pid: Int32) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(pid)
         applyMessagingTimeout(to: appElement)
 
@@ -1768,69 +1918,83 @@ public final class WindowService: WindowServicing {
         guard AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
               let menuBarVal = menuBarRef,
               CFGetTypeID(menuBarVal) == AXUIElementGetTypeID() else {
-            return []
+            return nil
         }
 
         let menuBar = menuBarVal as! AXUIElement
         applyMessagingTimeout(to: menuBar)
-        guard let barItems = copyAXChildren(menuBar) else { return [] }
+        guard let barItems = copyAXChildren(menuBar) else { return nil }
 
-        // メニューバーから「ウィンドウ / Window」項目を探し、その直下メニュー的子要素を走査する
         for barItem in barItems {
             applyMessagingTimeout(to: barItem)
-            guard let barTitle = copyStringAttribute(barItem, attribute: kAXTitleAttribute as CFString),
-                  WindowMenuExtractor.isWindowMenuBarTitle(barTitle) else {
-                continue
-            }
-
-            guard let subMenus = copyAXChildren(barItem),
-                  let windowMenu = subMenus.first else {
-                return []
-            }
-            applyMessagingTimeout(to: windowMenu)
-            guard let rawChildren = copyAXChildren(windowMenu) else {
-                return []
-            }
-
-            var snapshots: [WindowMenuItemSnapshot] = []
-            snapshots.reserveCapacity(rawChildren.count)
-            for (idx, item) in rawChildren.enumerated() {
-                applyMessagingTimeout(to: item)
-                let title = copyStringAttribute(item, attribute: kAXTitleAttribute as CFString) ?? ""
-                let identifier = copyStringAttribute(item, attribute: kAXIdentifierAttribute as CFString)
-                let mark = copyStringAttribute(item, attribute: kAXMenuItemMarkCharAttribute as CFString)
-                let cmdChar = copyStringAttribute(item, attribute: kAXMenuItemCmdCharAttribute as CFString)
-                let cmdVirtualKey = copyStringAttribute(item, attribute: kAXMenuItemCmdVirtualKeyAttribute as CFString)
-                let hasCmdChar = !(cmdChar ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let hasCmdVKey = !(cmdVirtualKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                let subChildren = copyAXChildren(item)
-                let hasSubmenu = !(subChildren?.isEmpty ?? true)
-                let isEnabled = copyBoolAttribute(item, attribute: kAXEnabledAttribute as CFString) ?? true
-
-                snapshots.append(
-                    WindowMenuItemSnapshot(
-                        title: title,
-                        identifier: identifier,
-                        mark: mark,
-                        hasCommandKey: hasCmdChar || hasCmdVKey,
-                        hasSubmenu: hasSubmenu,
-                        isEnabled: isEnabled,
-                        index: idx
-                    )
-                )
-            }
-
-            let extracted = WindowMenuExtractor.extractWindowListItems(from: snapshots)
-            return extracted.compactMap { snapshot in
-                guard snapshot.index >= 0, snapshot.index < rawChildren.count else { return nil }
-                return ScannedWindowMenuItem(
-                    snapshot: snapshot,
-                    axElement: SendableAXElement(value: rawChildren[snapshot.index])
-                )
+            if let barTitle = copyStringAttribute(barItem, attribute: kAXTitleAttribute as CFString),
+               WindowMenuExtractor.isWindowMenuBarTitle(barTitle) {
+                return barItem
             }
         }
+        return nil
+    }
 
-        return []
+    /// 指定 PID のアプリケーションから AXMenuBar 経由で「ウィンドウ」メニュー内の実ウィンドウ項目群を収集する
+    /// - Parameter pid: 対象アプリケーションのプロセス ID
+    /// - Returns: 抽出されたウィンドウ項目と AXUIElement の配列
+    private nonisolated static func fetchWindowMenuItems(for pid: Int32) -> [ScannedWindowMenuItem] {
+        guard let barItem = findWindowMenuBarItem(for: pid) else {
+            return []
+        }
+        return fetchWindowMenuItems(fromMenuBarItem: barItem)
+    }
+
+    /// 「ウィンドウ」メニューバー項目の配下メニューから実ウィンドウ項目群を収集する
+    /// - Parameter barItem: 「ウィンドウ」メニューバー項目の AXUIElement
+    /// - Returns: 抽出されたウィンドウ項目と AXUIElement の配列
+    private nonisolated static func fetchWindowMenuItems(fromMenuBarItem barItem: AXUIElement) -> [ScannedWindowMenuItem] {
+        applyMessagingTimeout(to: barItem)
+        guard let subMenus = copyAXChildren(barItem),
+              let windowMenu = subMenus.first else {
+            return []
+        }
+        applyMessagingTimeout(to: windowMenu)
+        guard let rawChildren = copyAXChildren(windowMenu) else {
+            return []
+        }
+
+        var snapshots: [WindowMenuItemSnapshot] = []
+        snapshots.reserveCapacity(rawChildren.count)
+        for (idx, item) in rawChildren.enumerated() {
+            applyMessagingTimeout(to: item)
+            let title = copyStringAttribute(item, attribute: kAXTitleAttribute as CFString) ?? ""
+            let identifier = copyStringAttribute(item, attribute: kAXIdentifierAttribute as CFString)
+            let mark = copyStringAttribute(item, attribute: kAXMenuItemMarkCharAttribute as CFString)
+            let cmdChar = copyStringAttribute(item, attribute: kAXMenuItemCmdCharAttribute as CFString)
+            let cmdVirtualKey = copyStringAttribute(item, attribute: kAXMenuItemCmdVirtualKeyAttribute as CFString)
+            let hasCmdChar = !(cmdChar ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasCmdVKey = !(cmdVirtualKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let subChildren = copyAXChildren(item)
+            let hasSubmenu = !(subChildren?.isEmpty ?? true)
+            let isEnabled = copyBoolAttribute(item, attribute: kAXEnabledAttribute as CFString) ?? true
+
+            snapshots.append(
+                WindowMenuItemSnapshot(
+                    title: title,
+                    identifier: identifier,
+                    mark: mark,
+                    hasCommandKey: hasCmdChar || hasCmdVKey,
+                    hasSubmenu: hasSubmenu,
+                    isEnabled: isEnabled,
+                    index: idx
+                )
+            )
+        }
+
+        let extracted = WindowMenuExtractor.extractWindowListItems(from: snapshots)
+        return extracted.compactMap { snapshot in
+            guard snapshot.index >= 0, snapshot.index < rawChildren.count else { return nil }
+            return ScannedWindowMenuItem(
+                snapshot: snapshot,
+                axElement: SendableAXElement(value: rawChildren[snapshot.index])
+            )
+        }
     }
 
     /// 指定 AXUIElement の kAXChildrenAttribute 配列を読み取る

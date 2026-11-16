@@ -352,4 +352,59 @@ struct WindowCaptureAndMatchingTests {
         #expect(WindowService.isMenuCacheFresh(fetchedAt: baseDate, now: baseDate.addingTimeInterval(2.01), ttl: 2.0) == false)
         #expect(WindowService.isMenuCacheFresh(fetchedAt: baseDate, now: baseDate.addingTimeInterval(-0.5), ttl: 2.0) == false)
     }
+
+    /// 同一矩形の複数オフスクリーン CGWindow が存在する場合、axTitle と一致する name を持つ CGWindow を優先照合することを検証する
+    @Test("selectBestCGWindowMatch は同条件の複数CGWindow間でaxTitleと一致するnameを優先する")
+    func selectBestCGWindowMatchPrefersMatchingCGWindowName() {
+        let rect = CGRect(x: 0, y: 88, width: 1920, height: 992)
+        let entries: [(zOrder: Int, info: WindowService.CGWindowMeta)] = [
+            (
+                zOrder: 0,
+                info: WindowService.CGWindowMeta(
+                    windowID: 377,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: rect,
+                    alpha: 1.0,
+                    isOnscreen: false,
+                    name: ""
+                )
+            ),
+            (
+                zOrder: 1,
+                info: WindowService.CGWindowMeta(
+                    windowID: 409,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: rect,
+                    alpha: 1.0,
+                    isOnscreen: false,
+                    name: "新しいタブ"
+                )
+            ),
+            (
+                zOrder: 2,
+                info: WindowService.CGWindowMeta(
+                    windowID: 111,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: rect,
+                    alpha: 1.0,
+                    isOnscreen: false,
+                    name: "tipsを表示する · Issue #17 · sawarame/Nickmark"
+                )
+            )
+        ]
+
+        let matched = WindowService.selectBestCGWindowMatch(
+            axBounds: rect,
+            axTitle: "tipsを表示する · Issue #17 · sawarame/Nickmark",
+            isMinimized: false,
+            preferOnscreen: false,
+            preferredCGWindowID: nil,
+            in: entries,
+            excluding: []
+        )
+        #expect(matched?.info.windowID == 111)
+    }
 }
