@@ -358,8 +358,15 @@ public final class AppCoordinator {
         let hostingView = NSHostingView(
             rootView: PermissionGuideView(viewModel: permissionGuideViewModel, appIdentity: appIdentity)
         )
+        // SwiftUI の複数行テキスト折り返しを含む必要サイズを計測し、固定高さによる途中切れを防ぐ
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingSize = hostingView.fittingSize
+        let contentSize = NSSize(
+            width: max(fittingSize.width, PermissionGuideView.preferredWidth),
+            height: max(fittingSize.height, PermissionGuideView.minimumHeight)
+        )
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 280),
+            contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -367,6 +374,7 @@ public final class AppCoordinator {
         window.title = appIdentity.permissionGuideWindowTitle
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
+        window.setContentSize(contentSize)
         permissionWindow = window
         return window
     }
