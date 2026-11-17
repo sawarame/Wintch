@@ -1,4 +1,6 @@
+import AppKit
 import ApplicationServices
+import Carbon
 import CoreGraphics
 import Foundation
 import os
@@ -119,6 +121,12 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         var isSuspendedForRecording: Bool = false
         /// 非同期ディスパッチ待ちの通常モード起動トリガーが存在するかどうか
         var pendingNormalTrigger: Bool = false
+        /// 通常スイッチャー表示時に一時アプリアクティブ化が必要かどうか
+        var requiresAppActivationOnPresentation: Bool = false
+        /// 現在の通常スイッチャー表示セッションで既に修飾キー解放イベントを送出済みか
+        var hasDispatchedNormalRelease: Bool = false
+        /// CGEventTap と Carbon 代替経路間の二重発火防止トラッカー
+        var triggerDeduplicator = HotKeyTriggerDeduplicator()
     }
 
     /// バックグラウンド監視スレッドおよびイベントタップのランタイム参照
@@ -131,8 +139,22 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         var pendingCooldownWorkItem: DispatchWorkItem?
     }
 
+    /// Carbon RegisterEventHotKey・ローカル NSEvent モニタ・解放ウォッチドッグのランタイム参照
+    private struct FallbackRuntime: Sendable {
+        var eventHandlerRef: UncheckedSendable<EventHandlerRef>?
+        var registeredHotKeys: [UInt32: UncheckedSendable<EventHotKeyRef>] = [:]
+        var localEventMonitor: UncheckedSendable<Any>?
+        var modifierWatchdogTask: Task<Void, Never>?
+    }
+
     /// 専用 RunLoop でのタップ生存・権限定期ヘルスチェック間隔（秒）
     private nonisolated static let healthCheckIntervalSeconds: TimeInterval = 0.2
+
+    /// Carbon ホットキー識別署名 ("WNTC")
+    private nonisolated static let carbonHotKeySignature: OSType = 0x574E_5443
+
+    /// 修飾キー解放ウォッチドッグのポーリング間隔（ミリ秒）
+    private nonisolated static let modifierWatchdogIntervalMilliseconds: Int = 20
 
     /// CGEventTap の C コールバック関数（バックグラウンド RunLoop スレッドで非分離実行するため static nonisolated で定義）
     private nonisolated static let eventTapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
@@ -141,6 +163,41 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
         let monitor = Unmanaged<HotKeyMonitorService>.fromOpaque(refcon).takeUnretainedValue()
         return monitor.handleCGEvent(proxy: proxy, type: type, event: event)
+    }
+
+    /// Carbon RegisterEventHotKey の C イベントハンドラ（メインスレッド上で非分離呼び出しされる）
+    private nonisolated static let carbonHotKeyHandler: EventHandlerUPP = { _, eventRef, userData in
+        guard let eventRef, let userData else {
+            return OSStatus(eventNotHandledErr)
+        }
+        var hotKeyID = EventHotKeyID()
+        let status = GetEventParameter(
+            eventRef,
+            EventParamName(kEventParamDirectObject),
+            EventParamType(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &hotKeyID
+        )
+        guard status == noErr, hotKeyID.signature == HotKeyMonitorService.carbonHotKeySignature else {
+            return OSStatus(eventNotHandledErr)
+        }
+
+        let monitor = Unmanaged<HotKeyMonitorService>.fromOpaque(userData).takeUnretainedValue()
+        let capturedID = hotKeyID.id
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                monitor.handleCarbonHotKeyPressed(id: capturedID)
+            }
+        } else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    monitor.handleCarbonHotKeyPressed(id: capturedID)
+                }
+            }
+        }
+        return noErr
     }
 
     /// サービス用ロガー
@@ -155,13 +212,34 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// 権限剥奪やシステム無効化等によりグローバル監視が意図せず中断された際の通知ハンドラ
     public var onMonitoringInterrupted: (() -> Void)?
 
+    /// 直近の起動トリガーにより通常スイッチャー表示時の一時アプリアクティブ化が必要かどうか
+    public var requiresAppActivationOnPresentation: Bool {
+        sharedState.withLock { $0.requiresAppActivationOnPresentation }
+    }
+
     /// 現在のスイッチャー監視モード
     public var activeMode: HotKeyMonitorMode {
         get { sharedState.withLock { $0.activeMode } }
         set {
-            sharedState.withLock { state in
+            let shouldEnableFallbackSession = sharedState.withLock { state -> Bool in
                 state.activeMode = newValue
                 state.pendingNormalTrigger = false
+                state.hasDispatchedNormalRelease = false
+                switch newValue {
+                case .inactive:
+                    state.requiresAppActivationOnPresentation = false
+                    return false
+                case .normal:
+                    return state.requiresAppActivationOnPresentation
+                case .launcher:
+                    return false
+                }
+            }
+
+            if shouldEnableFallbackSession {
+                startFallbackNormalSessionHelpers()
+            } else {
+                stopFallbackNormalSessionHelpers()
             }
         }
     }
@@ -170,15 +248,12 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     public var isSwitcherActive: Bool {
         get { sharedState.withLock { $0.activeMode != .inactive } }
         set {
-            sharedState.withLock { state in
-                if newValue {
-                    if state.activeMode == .inactive {
-                        state.activeMode = .normal
-                    }
-                } else {
-                    state.activeMode = .inactive
+            if newValue {
+                if activeMode == .inactive {
+                    activeMode = .normal
                 }
-                state.pendingNormalTrigger = false
+            } else {
+                activeMode = .inactive
             }
         }
     }
@@ -186,7 +261,16 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// 設定画面でショートカット記録中のためグローバル監視を一時停止するか
     public var isSuspendedForRecording: Bool {
         get { sharedState.withLock { $0.isSuspendedForRecording } }
-        set { sharedState.withLock { $0.isSuspendedForRecording = newValue } }
+        set {
+            let didChange = sharedState.withLock { state -> Bool in
+                guard state.isSuspendedForRecording != newValue else { return false }
+                state.isSuspendedForRecording = newValue
+                return true
+            }
+            if didChange && runtimeLock.withLock({ $0.isMonitoring }) {
+                syncCarbonHotKeys()
+            }
+        }
     }
 
     /// 非同期イベントタップコールバックと同期的に共有するロック付き状態
@@ -195,15 +279,19 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     /// バックグラウンド監視スレッドとイベントタップのライフサイクルを保護するロック
     private nonisolated let runtimeLock = OSAllocatedUnfairLock(initialState: TapRuntime())
 
+    /// Carbon ホットキーおよびフォールバックセッション補助機能のライフサイクルを保護するロック
+    private nonisolated let fallbackRuntimeLock = OSAllocatedUnfairLock(initialState: FallbackRuntime())
+
     /// タイムアウト無効化からの復帰回数・クールダウンを管理するロック付きトラッカー
     private nonisolated let recoveryTracker = OSAllocatedUnfairLock(initialState: TapTimeoutRecoveryTracker())
 
     /// HotKeyMonitorService を初期化する
     public init() {}
 
-    /// インスタンス破棄時にバックグラウンドのイベントタップと監視スレッドを確実に停止する
+    /// インスタンス破棄時にバックグラウンドのイベントタップと監視スレッド、Carbon ホットキーを確実に停止する
     deinit {
         cleanupTapRuntime()
+        cleanupFallbackRuntimeSafely()
     }
 
     /// 通常スイッチャーの監視対象ショートカット設定を更新する
@@ -212,6 +300,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         sharedState.withLock { state in
             state.shortcut = preference
         }
+        if runtimeLock.withLock({ $0.isMonitoring }) {
+            syncCarbonHotKeys()
+        }
     }
 
     /// ランチャーモードの監視対象ショートカット設定を更新する
@@ -219,6 +310,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     public func updateLauncherShortcut(_ preference: LauncherShortcutPreference) {
         sharedState.withLock { state in
             state.launcherShortcut = preference
+        }
+        if runtimeLock.withLock({ $0.isMonitoring }) {
+            syncCarbonHotKeys()
         }
     }
 
@@ -313,12 +407,15 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             return false
         }
         Self.logger.notice("CGEventTap グローバルキーボード監視を開始しました")
+        installCarbonHotKeyHandlerIfNeeded()
+        syncCarbonHotKeys()
         return true
     }
 
     /// グローバルイベント監視を停止し、専用スレッドとリソースを解放する
     public func stopMonitoring() {
         cleanupTapRuntime()
+        cleanupFallbackRuntimeOnMainActor()
         resetSharedMonitoringState()
     }
 
@@ -351,6 +448,9 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         sharedState.withLock { state in
             state.activeMode = .inactive
             state.pendingNormalTrigger = false
+            state.requiresAppActivationOnPresentation = false
+            state.hasDispatchedNormalRelease = false
+            state.triggerDeduplicator.reset()
         }
     }
 
@@ -373,33 +473,18 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
             return Unmanaged.passUnretained(event)
         }
 
-        let snapshot = sharedState.withLock { $0 }
-
         // 設定画面のショートカット記録待機中はすべてのキー入力を通過させる
-        if snapshot.isSuspendedForRecording {
+        if sharedState.withLock({ $0.isSuspendedForRecording }) {
             return Unmanaged.passUnretained(event)
         }
 
-        let flags = event.flags
-        let currentModifiers = extractShortcutModifiers(from: flags)
+        let currentModifiers = extractShortcutModifiers(from: event.flags)
 
         if type == .flagsChanged {
-            // 通常モード表示中（または起動ディスパッチ待ち中）に必須修飾キーが離されたら確定イベントを送信する
-            let shouldDispatchRelease = sharedState.withLock { state -> Bool in
-                let isReleased = !state.shortcut.modifiers.isSubset(of: currentModifiers)
-                guard isReleased else { return false }
-                if state.activeMode == .normal {
-                    return true
-                }
-                if state.pendingNormalTrigger {
-                    state.pendingNormalTrigger = false
-                    return true
-                }
-                return false
-            }
-            if shouldDispatchRelease {
-                dispatchEvent(.modifierReleased)
-            }
+            attemptDispatchNormalModifierRelease(
+                currentModifiers: currentModifiers,
+                dispatchSynchronouslyOnMain: false
+            )
             return Unmanaged.passUnretained(event)
         }
 
@@ -408,22 +493,13 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         }
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        let decision = Self.resolveKeyDown(
-            mode: snapshot.activeMode,
+        let shouldConsume = processKeyDown(
             keyCode: keyCode,
             modifiers: currentModifiers,
-            shortcut: snapshot.shortcut,
-            launcherShortcut: snapshot.launcherShortcut
+            source: .cgEventTap,
+            dispatchSynchronouslyOnMain: false
         )
-        if let hotKeyEvent = decision.event {
-            if case .triggerPressed = hotKeyEvent, snapshot.activeMode == .inactive {
-                sharedState.withLock { state in
-                    state.pendingNormalTrigger = true
-                }
-            }
-            dispatchEvent(hotKeyEvent)
-        }
-        return decision.shouldConsume ? nil : Unmanaged.passUnretained(event)
+        return shouldConsume ? nil : Unmanaged.passUnretained(event)
     }
 
     /// 専用 RunLoop 上で現在のイベントタップと権限の健全性を検証し、異常時は即座に破棄する
@@ -464,6 +540,7 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     private nonisolated func terminateMonitoringFromSystem(reason: String) {
         let didCleanup = cleanupTapRuntime()
         guard didCleanup else { return }
+        cleanupFallbackRuntimeSafely()
         resetSharedMonitoringState()
         Self.logger.warning("キーボード入力保護のため CGEventTap 監視を自動停止しました: \(reason, privacy: .public)")
         DispatchQueue.main.async { [weak self] in
@@ -740,9 +817,388 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
     private nonisolated func dispatchEvent(_ event: HotKeyEvent) {
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
-                self?.onEvent?(event)
+                self?.emitEventOnMainActor(event)
             }
         }
+    }
+
+    /// MainActor 上でイベントハンドラを呼び出し、非表示のまま終了した場合は保留状態を初期化する
+    /// - Parameter event: 配送する HotKeyEvent
+    private func emitEventOnMainActor(_ event: HotKeyEvent) {
+        onEvent?(event)
+        if activeMode == .inactive {
+            sharedState.withLock { state in
+                state.pendingNormalTrigger = false
+                state.requiresAppActivationOnPresentation = false
+                state.hasDispatchedNormalRelease = false
+            }
+        }
+    }
+
+    /// keyDown イベントを共通ロジックで判定・重複排除し、必要に応じてイベントを配送する
+    /// - Parameters:
+    ///   - keyCode: 仮想キーコード
+    ///   - modifiers: 押下中の修飾キー集合
+    ///   - source: 検知元の入力経路
+    ///   - dispatchSynchronouslyOnMain: すでに MainActor 上で同期配送する場合は true
+    /// - Returns: イベントを消費して伝播を止める場合は true
+    private nonisolated func processKeyDown(
+        keyCode: UInt16,
+        modifiers: ShortcutModifiers,
+        source: HotKeyTriggerSource,
+        dispatchSynchronouslyOnMain: Bool
+    ) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        let resolved: (eventToDispatch: HotKeyEvent?, shouldConsume: Bool) = sharedState.withLock { state in
+            guard !state.isSuspendedForRecording else {
+                return (nil, false)
+            }
+            let decision = Self.resolveKeyDown(
+                mode: state.activeMode,
+                keyCode: keyCode,
+                modifiers: modifiers,
+                shortcut: state.shortcut,
+                launcherShortcut: state.launcherShortcut
+            )
+            guard let hotKeyEvent = decision.event else {
+                return (nil, decision.shouldConsume)
+            }
+            if let triggerKind = HotKeyTriggerKind.from(event: hotKeyEvent) {
+                guard state.triggerDeduplicator.shouldAccept(source: source, kind: triggerKind, at: now) else {
+                    // 異種経路から直近に同トリガーを受理済みのため二重発火のみ抑止し、消費状態は維持する
+                    return (nil, decision.shouldConsume)
+                }
+                if case .triggerPressed = hotKeyEvent, state.activeMode == .inactive {
+                    state.pendingNormalTrigger = true
+                    state.hasDispatchedNormalRelease = false
+                    state.requiresAppActivationOnPresentation = false
+                }
+            }
+            return (hotKeyEvent, decision.shouldConsume)
+        }
+
+        if let hotKeyEvent = resolved.eventToDispatch {
+            if dispatchSynchronouslyOnMain {
+                MainActor.assumeIsolated {
+                    self.emitEventOnMainActor(hotKeyEvent)
+                }
+            } else {
+                dispatchEvent(hotKeyEvent)
+            }
+        }
+        return resolved.shouldConsume
+    }
+
+    /// 通常スイッチャー維持に必要な修飾キー解放を重複なく1回だけ通知する
+    /// - Parameters:
+    ///   - currentModifiers: 現在押されている修飾キー集合
+    ///   - dispatchSynchronouslyOnMain: すでに MainActor 上で同期配送する場合は true
+    private nonisolated func attemptDispatchNormalModifierRelease(
+        currentModifiers: ShortcutModifiers,
+        dispatchSynchronouslyOnMain: Bool
+    ) {
+        let shouldDispatchRelease = sharedState.withLock { state -> Bool in
+            let isReleased = !state.shortcut.modifiers.isSubset(of: currentModifiers)
+            guard isReleased, !state.hasDispatchedNormalRelease else { return false }
+            if state.activeMode == .normal {
+                state.hasDispatchedNormalRelease = true
+                return true
+            }
+            if state.pendingNormalTrigger {
+                state.pendingNormalTrigger = false
+                state.hasDispatchedNormalRelease = true
+                return true
+            }
+            return false
+        }
+
+        guard shouldDispatchRelease else { return }
+        if dispatchSynchronouslyOnMain {
+            MainActor.assumeIsolated {
+                self.emitEventOnMainActor(.modifierReleased)
+            }
+        } else {
+            dispatchEvent(.modifierReleased)
+        }
+    }
+
+    // MARK: - Carbon 代替起動経路およびフォールバックセッション補助
+
+    /// Carbon ApplicationEventTarget へホットキー押下ハンドラを登録する
+    private func installCarbonHotKeyHandlerIfNeeded() {
+        let alreadyInstalled = fallbackRuntimeLock.withLock { $0.eventHandlerRef != nil }
+        guard !alreadyInstalled else { return }
+
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        var handlerRef: EventHandlerRef?
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            Self.carbonHotKeyHandler,
+            1,
+            &eventType,
+            selfPtr,
+            &handlerRef
+        )
+        if status == noErr, let handlerRef {
+            let boxedHandler = UncheckedSendable(value: handlerRef)
+            fallbackRuntimeLock.withLock { $0.eventHandlerRef = boxedHandler }
+        } else {
+            Self.logger.warning("Carbon イベントハンドラの登録に失敗しました (status=\(status))")
+        }
+    }
+
+    /// 現在のショートカット設定および記録サスペンド状態に合わせて Carbon ホットキーを同期登録する
+    private func syncCarbonHotKeys() {
+        unregisterAllCarbonHotKeys()
+
+        let snapshot = sharedState.withLock { state in
+            (state.shortcut, state.launcherShortcut, state.isSuspendedForRecording)
+        }
+        let specs = CarbonHotKeyRegistrationPlan.build(
+            shortcut: snapshot.0,
+            launcherShortcut: snapshot.1,
+            isSuspendedForRecording: snapshot.2
+        )
+        guard !specs.isEmpty else { return }
+
+        var newRegistrations: [UInt32: UncheckedSendable<EventHotKeyRef>] = [:]
+        for spec in specs {
+            let hotKeyID = EventHotKeyID(signature: Self.carbonHotKeySignature, id: spec.id)
+            var hotKeyRef: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                spec.keyCode,
+                spec.carbonModifiers,
+                hotKeyID,
+                GetApplicationEventTarget(),
+                0,
+                &hotKeyRef
+            )
+            if status == noErr, let hotKeyRef {
+                newRegistrations[spec.id] = UncheckedSendable(value: hotKeyRef)
+            } else {
+                // Command + Tab 等の OS 予約キー衝突時でも監視全体は継続させる
+                Self.logger.warning(
+                    "Carbon ホットキー登録がスキップされました (id=\(spec.id), keyCode=\(spec.keyCode), status=\(status))"
+                )
+            }
+        }
+        let boxedRegistrations = newRegistrations
+        fallbackRuntimeLock.withLock { $0.registeredHotKeys = boxedRegistrations }
+    }
+
+    /// 登録済みの全 Carbon ホットキーを解除する
+    private func unregisterAllCarbonHotKeys() {
+        let refs = fallbackRuntimeLock.withLock { state -> [UncheckedSendable<EventHotKeyRef>] in
+            let current = Array(state.registeredHotKeys.values)
+            state.registeredHotKeys.removeAll()
+            return current
+        }
+        for boxedRef in refs {
+            UnregisterEventHotKey(boxedRef.value)
+        }
+    }
+
+    /// MainActor 上で Carbon ホットキーおよびフォールバックセッション補助機能をすべて解放する
+    private func cleanupFallbackRuntimeOnMainActor() {
+        stopFallbackNormalSessionHelpers()
+        unregisterAllCarbonHotKeys()
+        if let boxedHandler = fallbackRuntimeLock.withLock({ state -> UncheckedSendable<EventHandlerRef>? in
+            let ref = state.eventHandlerRef
+            state.eventHandlerRef = nil
+            return ref
+        }) {
+            RemoveEventHandler(boxedHandler.value)
+        }
+    }
+
+    /// deinit またはバックグラウンドスレッドからフォールバックランタイムを安全に破棄する
+    private nonisolated func cleanupFallbackRuntimeSafely() {
+        let extracted = fallbackRuntimeLock.withLock { state -> FallbackRuntime in
+            let snapshot = state
+            state = FallbackRuntime()
+            return snapshot
+        }
+        extracted.modifierWatchdogTask?.cancel()
+
+        let hasHandles = extracted.localEventMonitor != nil
+            || !extracted.registeredHotKeys.isEmpty
+            || extracted.eventHandlerRef != nil
+        guard hasHandles else { return }
+
+        let disposeHandles: @MainActor @Sendable () -> Void = {
+            if let monitor = extracted.localEventMonitor?.value {
+                NSEvent.removeMonitor(monitor)
+            }
+            for boxedRef in extracted.registeredHotKeys.values {
+                UnregisterEventHotKey(boxedRef.value)
+            }
+            if let handlerRef = extracted.eventHandlerRef?.value {
+                RemoveEventHandler(handlerRef)
+            }
+        }
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                disposeHandles()
+            }
+        } else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    disposeHandles()
+                }
+            }
+        }
+    }
+
+    /// Carbon RegisterEventHotKey から通知されたホットキー押下を重複排除のうえ処理する
+    /// - Parameter id: 発火した登録識別 ID
+    private func handleCarbonHotKeyPressed(id: UInt32) {
+        guard runtimeLock.withLock({ $0.isMonitoring }) else { return }
+
+        let kind: HotKeyTriggerKind
+        switch id {
+        case CarbonHotKeyRegistrationPlan.normalForwardID:
+            kind = .normalForward
+        case CarbonHotKeyRegistrationPlan.normalReverseID:
+            kind = .normalReverse
+        case CarbonHotKeyRegistrationPlan.launcherID:
+            kind = .launcher
+        default:
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let eventToEmit: HotKeyEvent? = sharedState.withLock { state in
+            guard !state.isSuspendedForRecording else { return nil }
+            guard state.triggerDeduplicator.shouldAccept(source: .carbonHotKey, kind: kind, at: now) else {
+                return nil
+            }
+
+            switch (state.activeMode, kind) {
+            case (.inactive, .normalForward), (.inactive, .normalReverse):
+                state.pendingNormalTrigger = true
+                state.hasDispatchedNormalRelease = false
+                state.requiresAppActivationOnPresentation = true
+                return kind.hotKeyEvent
+            case (.normal, .normalForward), (.normal, .normalReverse),
+                 (.launcher, .normalForward), (.launcher, .normalReverse):
+                return kind.hotKeyEvent
+            case (.inactive, .launcher), (.launcher, .launcher):
+                return .launcherTriggerPressed
+            case (.normal, .launcher):
+                return nil
+            }
+        }
+
+        if let eventToEmit {
+            emitEventOnMainActor(eventToEmit)
+        }
+    }
+
+    /// フォールバック起動された通常スイッチャー表示中のローカルイベント監視と修飾キー解放ウォッチドッグを開始する
+    private func startFallbackNormalSessionHelpers() {
+        stopFallbackNormalSessionHelpers()
+
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self else { return event }
+            return self.handleLocalFallbackEvent(event)
+        }
+
+        let presentationStartTime = ProcessInfo.processInfo.systemUptime
+        let watchdogTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(Self.modifierWatchdogIntervalMilliseconds))
+                guard !Task.isCancelled, let self else { break }
+
+                let snapshot = self.sharedState.withLock { $0 }
+                guard snapshot.activeMode == .normal,
+                      !snapshot.hasDispatchedNormalRelease,
+                      snapshot.requiresAppActivationOnPresentation else {
+                    break
+                }
+
+                let secureInputActive = IsSecureEventInputEnabled()
+                let isAppActive = NSApplication.shared.isActive
+                let elapsed = ProcessInfo.processInfo.systemUptime - presentationStartTime
+                let observedModifiers: ShortcutModifiers = secureInputActive
+                    ? self.extractShortcutModifiers(from: NSEvent.modifierFlags)
+                    : self.extractShortcutModifiers(from: CGEventSource.flagsState(.combinedSessionState))
+
+                if HotKeySecureInputGuard.shouldTreatModifiersAsReleased(
+                    requiredModifiers: snapshot.shortcut.modifiers,
+                    observedModifiers: observedModifiers,
+                    isSecureInputEnabled: secureInputActive,
+                    isAppActive: isAppActive,
+                    elapsedSincePresentation: elapsed
+                ) {
+                    let shouldEmit = self.sharedState.withLock { state -> Bool in
+                        guard state.activeMode == .normal, !state.hasDispatchedNormalRelease else { return false }
+                        state.hasDispatchedNormalRelease = true
+                        state.pendingNormalTrigger = false
+                        return true
+                    }
+                    if shouldEmit {
+                        self.emitEventOnMainActor(.modifierReleased)
+                    }
+                    break
+                }
+            }
+        }
+
+        let boxedMonitor = monitor.map { UncheckedSendable(value: $0) }
+        fallbackRuntimeLock.withLock { state in
+            state.localEventMonitor = boxedMonitor
+            state.modifierWatchdogTask = watchdogTask
+        }
+    }
+
+    /// フォールバック通常セッション用のローカルイベント監視と修飾キー解放ウォッチドッグを停止する
+    private func stopFallbackNormalSessionHelpers() {
+        let extracted = fallbackRuntimeLock.withLock { state -> (monitor: UncheckedSendable<Any>?, task: Task<Void, Never>?) in
+            let currentMonitor = state.localEventMonitor
+            let currentTask = state.modifierWatchdogTask
+            state.localEventMonitor = nil
+            state.modifierWatchdogTask = nil
+            return (currentMonitor, currentTask)
+        }
+        extracted.task?.cancel()
+        if let monitor = extracted.monitor?.value {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    /// 一時アクティブ化された通常スイッチャー宛てのローカルキーイベントを処理する
+    /// - Parameter event: 受信した NSEvent
+    /// - Returns: 消費して警告音等を抑止する場合は nil、通過させる場合は元のイベント
+    private func handleLocalFallbackEvent(_ event: NSEvent) -> NSEvent? {
+        if sharedState.withLock({ $0.isSuspendedForRecording }) {
+            return event
+        }
+
+        let currentModifiers = extractShortcutModifiers(from: event.modifierFlags)
+
+        if event.type == .flagsChanged {
+            attemptDispatchNormalModifierRelease(
+                currentModifiers: currentModifiers,
+                dispatchSynchronouslyOnMain: true
+            )
+            return event
+        }
+
+        guard event.type == .keyDown else {
+            return event
+        }
+
+        let shouldConsume = processKeyDown(
+            keyCode: event.keyCode,
+            modifiers: currentModifiers,
+            source: .cgEventTap,
+            dispatchSynchronouslyOnMain: true
+        )
+        return shouldConsume ? nil : event
     }
 
     /// CGEventFlags から比較用の 4 修飾キー集合を抽出する
@@ -754,6 +1210,18 @@ public final class HotKeyMonitorService: HotKeyMonitoring {
         if flags.contains(.maskAlternate) { result.insert(.option) }
         if flags.contains(.maskShift) { result.insert(.shift) }
         if flags.contains(.maskCommand) { result.insert(.command) }
+        return result
+    }
+
+    /// NSEvent.ModifierFlags から比較用の 4 修飾キー集合を抽出する
+    /// - Parameter flags: 現在の NSEvent.ModifierFlags
+    /// - Returns: 抽出された ShortcutModifiers
+    private nonisolated func extractShortcutModifiers(from flags: NSEvent.ModifierFlags) -> ShortcutModifiers {
+        var result: ShortcutModifiers = []
+        if flags.contains(.control) { result.insert(.control) }
+        if flags.contains(.option) { result.insert(.option) }
+        if flags.contains(.shift) { result.insert(.shift) }
+        if flags.contains(.command) { result.insert(.command) }
         return result
     }
 }

@@ -1575,4 +1575,62 @@ struct SwitcherViewModelTests {
         #expect(installedAppService.launchedApps.isEmpty)
         #expect(windowService.closedWindows.isEmpty)
     }
+
+    /// セキュア入力等のフォールバック起動時のみ通常スイッチャーで一時アクティブ化フラグが有効化され、終了時にリセットされることを検証する
+    @Test("通常スイッチャーの一時アクティブ化フラグが監視サービス要求に連動し終了時にリセットされる")
+    @MainActor
+    func normalModeTemporaryActivationFlagTracksHotKeyMonitorRequirement() {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "win-1",
+                pid: 101,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "Sign In"
+            ),
+            RawWindowCandidate(
+                id: "win-2",
+                pid: 102,
+                bundleIdentifier: "com.apple.TextEdit",
+                applicationName: "TextEdit",
+                title: "Notes.txt"
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider
+        )
+
+        // 通常経路（requiresAppActivationOnPresentation == false）では非アクティブ表示のまま維持する
+        hotKeyMonitor.requiresAppActivationOnPresentation = false
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.shouldActivateAppForCurrentSession == false)
+        viewModel.handleHotKeyEvent(.escapePressed)
+        #expect(viewModel.shouldActivateAppForCurrentSession == false)
+
+        // フォールバック経路（requiresAppActivationOnPresentation == true）では一時アクティブ化を要求する
+        hotKeyMonitor.requiresAppActivationOnPresentation = true
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.shouldActivateAppForCurrentSession == true)
+
+        // 確定（修飾キー解放）およびキャンセルのいずれでも終了後にフラグがリセットされる
+        viewModel.handleHotKeyEvent(.modifierReleased)
+        #expect(viewModel.isPresented == false)
+        #expect(viewModel.shouldActivateAppForCurrentSession == false)
+
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.shouldActivateAppForCurrentSession == true)
+        viewModel.handleHotKeyEvent(.escapePressed)
+        #expect(viewModel.isPresented == false)
+        #expect(viewModel.shouldActivateAppForCurrentSession == false)
+    }
 }

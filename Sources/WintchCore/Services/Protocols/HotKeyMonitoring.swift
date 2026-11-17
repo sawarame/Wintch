@@ -56,6 +56,9 @@ public protocol HotKeyMonitoring: AnyObject {
     /// 設定画面でショートカットレコーダーが入力待機中の間 true にし、グローバル横取りを一時停止する
     var isSuspendedForRecording: Bool { get set }
 
+    /// 直近の起動トリガーにより通常スイッチャー表示時の一時アプリアクティブ化が必要かどうか
+    var requiresAppActivationOnPresentation: Bool { get }
+
     /// 通常スイッチャーの監視対象ショートカット設定を更新する
     /// - Parameter preference: 新しいショートカット設定
     func updateShortcut(_ preference: ShortcutPreference)

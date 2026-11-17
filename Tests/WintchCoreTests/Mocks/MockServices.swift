@@ -102,6 +102,8 @@ final class MockHotKeyMonitor: HotKeyMonitoring {
     }
     /// ショートカット記録中のサスペンド状態
     var isSuspendedForRecording: Bool = false
+    /// 通常スイッチャー表示時の一時アクティブ化要求フラグ
+    var requiresAppActivationOnPresentation: Bool = false
     /// 更新された通常ショートカット設定履歴
     var updatedShortcuts: [ShortcutPreference] = []
     /// 更新されたランチャーショートカット設定履歴
