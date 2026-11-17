@@ -112,9 +112,6 @@ public final class SwitcherViewModel {
     /// 自動 Space 移動等のクローズ操作完了後にパネルのフォーカス復元が必要な際に呼ばれる通知ハンドラ
     public var onPanelFocusRestoreNeeded: ((SwitcherMode) -> Void)?
 
-    /// キャプチャ表示型パネル上から画面収録権限の設定画面を開くよう要求された際に呼ばれる通知ハンドラ
-    public var onOpenScreenRecordingSettingsRequested: (() -> Void)?
-
     /// 起動時に取得した全有効ウィンドウ一覧（MRU ソート済み）
     private var allEntries: [WindowEntry] = []
 
@@ -232,13 +229,6 @@ public final class SwitcherViewModel {
     public func thumbnail(for entry: WindowEntry) -> NSImage? {
         guard let cgWindowID = entry.cgWindowID else { return nil }
         return capturedThumbnails[cgWindowID]
-    }
-
-    /// キャプチャパネル上の案内バナーから画面収録権限のシステム設定を開き、パネルを安全に閉じる
-    public func openScreenRecordingSettings() {
-        cancel(reason: .cancelled)
-        screenRecordingPermissionService?.openSystemSettings()
-        onOpenScreenRecordingSettingsRequested?()
     }
 
     /// サービス層から通知されたキーイベントを処理する
