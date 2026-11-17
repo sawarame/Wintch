@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Testing
 @testable import WintchCore
 
@@ -254,5 +256,43 @@ struct AppCoordinatorTests {
         coordinator.openPermissionGuide()
         #expect(presenter.presentedWindows.count == 2)
         #expect(presenter.presentedWindows[1] === guideWindow)
+    }
+
+    /// 権限誘導ウィンドウのコンテンツ領域が PermissionGuideView の必要サイズ以上に設定され、テキストが途切れないことを検証する
+    @Test("権限誘導ウィンドウはビューの必要高さ以上に確保され固定 280pt で切り詰められない")
+    @MainActor
+    func permissionGuideWindowMatchesRequiredFittingSize() {
+        let permissionService = MockAccessibilityPermissionService()
+        permissionService.stubbedStatus = .denied
+        let presenter = MockWindowFrontPresenter()
+
+        let coordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: permissionService,
+            preferencesStore: MockPreferencesStore(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            windowFrontPresenter: presenter
+        )
+
+        coordinator.openPermissionGuide()
+        #expect(presenter.presentedWindows.count == 1)
+
+        let guideWindow = presenter.presentedWindows[0]
+        let expectedHostingView = NSHostingView(
+            rootView: PermissionGuideView(
+                viewModel: coordinator.permissionGuideViewModel,
+                appIdentity: coordinator.appIdentity
+            )
+        )
+        expectedHostingView.layoutSubtreeIfNeeded()
+        let requiredSize = expectedHostingView.fittingSize
+
+        let contentSize = guideWindow.contentView?.frame.size ?? .zero
+        #expect(contentSize.width >= PermissionGuideView.preferredWidth)
+        #expect(contentSize.height >= requiredSize.height)
+        #expect(contentSize.height > PermissionGuideView.minimumHeight)
     }
 }

@@ -25,7 +25,7 @@
 
 **Purpose**: `PermissionGuideView` と `AppCoordinator` の双方で共有する権限誘導ダイアログの幅・最小高さ定数を整備する
 
-- [ ] T002 `PermissionGuideView` に基準横幅（`preferredWidth: CGFloat = 460`）および最小高さ（`minimumHeight: CGFloat = 280`）の公開定数を追加する（`Sources/WintchCore/Views/PermissionGuideView.swift`）
+- [x] T002 `PermissionGuideView` に基準横幅（`preferredWidth: CGFloat = 460`）および最小高さ（`minimumHeight: CGFloat = 280`）の公開定数を追加する（`Sources/WintchCore/Views/PermissionGuideView.swift`）
 
 **Checkpoint**: ビューとウィンドウ生成処理が同一の基準寸法定数を参照できる状態
 
@@ -39,13 +39,13 @@
 
 ### Tests for User Story 1
 
-- [ ] T003 [P] [US1] `PermissionGuideView` の `NSHostingView.fittingSize` が幅 `460pt`・高さ `280pt` 超で計算され、垂直圧縮されないことを検証するテストを追加する（`Tests/WintchCoreTests/PermissionGuideViewModelTests.swift`）
-- [ ] T004 [P] [US1] `AppCoordinator.openPermissionGuide()` が生成する権限誘導ウィンドウのコンテンツ領域サイズが `NSHostingView.fittingSize` 以上であることを検証するテストを追加する（`Tests/WintchCoreTests/AppCoordinatorTests.swift`）
+- [x] T003 [P] [US1] `PermissionGuideView` の `NSHostingView.fittingSize` が幅 `460pt`・高さ `280pt` 超で計算され、垂直圧縮されないことを検証するテストを追加する（`Tests/WintchCoreTests/PermissionGuideViewModelTests.swift`）
+- [x] T004 [P] [US1] `AppCoordinator.openPermissionGuide()` が生成する権限誘導ウィンドウのコンテンツ領域サイズが `NSHostingView.fittingSize` 以上であることを検証するテストを追加する（`Tests/WintchCoreTests/AppCoordinatorTests.swift`）
 
 ### Implementation for User Story 1
 
-- [ ] T005 [US1] `PermissionGuideView` 内の見出し・サブタイトル・手順ラベル・補足説明 `Text` に `.fixedSize(horizontal: false, vertical: true)` を適用し、垂直方向の圧縮による省略（`...`）を防止する（`Sources/WintchCore/Views/PermissionGuideView.swift`）
-- [ ] T006 [US1] `AppCoordinator.ensurePermissionWindow()` で `NSHostingView.fittingSize`（`layoutSubtreeIfNeeded()` 後）に基づき `NSWindow` の `contentRect` および `setContentSize(_:)` を設定するよう修正する（`Sources/WintchCore/App/AppCoordinator.swift`）
+- [x] T005 [US1] `PermissionGuideView` 内の見出し・サブタイトル・手順ラベル・補足説明 `Text` に `.fixedSize(horizontal: false, vertical: true)` を適用し、垂直方向の圧縮による省略（`...`）を防止する（`Sources/WintchCore/Views/PermissionGuideView.swift`）
+- [x] T006 [US1] `AppCoordinator.ensurePermissionWindow()` で `NSHostingView.fittingSize`（`layoutSubtreeIfNeeded()` 後）に基づき `NSWindow` の `contentRect` および `setContentSize(_:)` を設定するよう修正する（`Sources/WintchCore/App/AppCoordinator.swift`）
 
 **Checkpoint**: 補足説明文およびすべてのテキストが垂直圧縮されず、権限誘導ウィンドウに十分な高さが割り当てられている状態
 
@@ -59,8 +59,8 @@
 
 ### Tests for User Story 2
 
-- [ ] T007 [P] [US2] 配布版（`Wintch`）および開発版（`Wintch_dev`）双方の `AppIdentity` 条件で `PermissionGuideView` の必要サイズが有効値かつ切り詰めなし（`height > 280`・`width == 460`）となることを検証するテストを追加する（`Tests/WintchCoreTests/PermissionGuideViewModelTests.swift`）
-- [ ] T008 [P] [US2] `AppCoordinator` の権限誘導ウィンドウ再利用および既存最前面表示契約が維持されることを確認する（`Tests/WintchCoreTests/AppCoordinatorTests.swift`）
+- [x] T007 [P] [US2] 配布版（`Wintch`）および開発版（`Wintch_dev`）双方の `AppIdentity` 条件で `PermissionGuideView` の必要サイズが有効値かつ切り詰めなし（`height > 280`・`width == 460`）となることを検証するテストを追加する（`Tests/WintchCoreTests/PermissionGuideViewModelTests.swift`）
+- [x] T008 [P] [US2] `AppCoordinator` の権限誘導ウィンドウ再利用および既存最前面表示契約が維持されることを確認する（`Tests/WintchCoreTests/AppCoordinatorTests.swift`）
 
 ---
 
@@ -68,9 +68,9 @@
 
 **Purpose**: 日本語ドキュメントコメント規約の遵守確認、全テスト実行、および `.app` バンドルビルド確認を行う
 
-- [ ] T009 新規・変更コードすべての日本語ドキュメントコメント（`///`）およびインラインコメント規約を確認する（`Sources/WintchCore/Views/PermissionGuideView.swift`, `Sources/WintchCore/App/AppCoordinator.swift`）
-- [ ] T010 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` で全ユニットテストを実行し全件通過を確認する
-- [ ] T011 `./scripts/build-app.sh` で `.app` バンドルをビルドし、警告・エラーがないことを確認する
+- [x] T009 新規・変更コードすべての日本語ドキュメントコメント（`///`）およびインラインコメント規約を確認する（`Sources/WintchCore/Views/PermissionGuideView.swift`, `Sources/WintchCore/App/AppCoordinator.swift`）
+- [x] T010 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` で全ユニットテストを実行し全件通過を確認する
+- [x] T011 `./scripts/build-app.sh` で `.app` バンドルをビルドし、警告・エラーがないことを確認する
 
 ---
 

@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Testing
 @testable import WintchCore
 
@@ -36,5 +38,34 @@ struct PermissionGuideViewModelTests {
 
         #expect(viewModel.status == .granted)
         #expect(grantedCount == 1)
+    }
+
+    /// 権限誘導ビューが配布版・開発版いずれの識別情報でも複数行説明を圧縮せず必要高さを確保することを検証する
+    @Test("PermissionGuideView の必要サイズが固定 280pt を超えて複数行テキストを収容できる")
+    @MainActor
+    func permissionGuideViewFitsAllWrappedTextWithoutTruncation() {
+        let permissionService = MockAccessibilityPermissionService()
+        permissionService.stubbedStatus = .denied
+        let viewModel = PermissionGuideViewModel(permissionService: permissionService)
+
+        let identities = [
+            AppIdentity(
+                infoDictionary: ["CFBundleDisplayName": "Wintch", "CFBundleIdentifier": "dev.wintch.Wintch"]
+            ),
+            AppIdentity(
+                infoDictionary: ["CFBundleDisplayName": "Wintch_dev", "CFBundleIdentifier": "dev.wintch.Wintch.dev"]
+            )
+        ]
+
+        for identity in identities {
+            let hostingView = NSHostingView(
+                rootView: PermissionGuideView(viewModel: viewModel, appIdentity: identity)
+            )
+            hostingView.layoutSubtreeIfNeeded()
+            let fittingSize = hostingView.fittingSize
+
+            #expect(fittingSize.width == PermissionGuideView.preferredWidth)
+            #expect(fittingSize.height > PermissionGuideView.minimumHeight)
+        }
     }
 }
