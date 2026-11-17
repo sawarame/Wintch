@@ -107,35 +107,47 @@ public struct SwitcherListView: View {
         .padding(.horizontal, 14)
     }
 
+    /// 表示対象のウィンドウ候補およびアプリ起動候補を統合した単一リスト行配列
+    private var listRows: [SwitcherListRow] {
+        SwitcherListRow.buildRows(
+            windowResults: viewModel.displayedResults,
+            appResults: viewModel.displayedAppResults,
+            isShowingLaunchCandidates: viewModel.isShowingLaunchCandidates,
+            launchSectionHeaderTitle: viewModel.launchSectionHeaderTitle
+        )
+    }
+
     /// ウィンドウ候補および（ランチャー検索時の）アプリ起動候補を統合表示する縦型スクロールリスト
     private var resultListView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(spacing: 4) {
-                    ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
-                        SwitcherRowView(
-                            result: result,
-                            icon: viewModel.icon(for: result.entry.pid),
-                            isSelected: index == viewModel.selectedIndex
-                        )
-                        .id(rowScrollID(forWindowID: result.id))
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.selectAndActivate(at: index)
-                        }
-                    }
+                    // ForEach 要素の id と ScrollViewReader の scrollTo 対象 ID を一致させるため単一モデルで描画する
+                    ForEach(listRows) { row in
+                        switch row {
+                        case let .window(index, result):
+                            SwitcherRowView(
+                                result: result,
+                                icon: viewModel.icon(for: result.entry.pid),
+                                isSelected: index == viewModel.selectedIndex
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                viewModel.selectAndActivate(at: index)
+                            }
 
-                    if viewModel.isShowingLaunchCandidates {
-                        appLaunchSectionHeader
+                        case let .launchSectionHeader(title, hasPrecedingWindows):
+                            appLaunchSectionHeader(
+                                title: title,
+                                hasPrecedingWindows: hasPrecedingWindows
+                            )
 
-                        ForEach(Array(viewModel.displayedAppResults.enumerated()), id: \.element.id) { appIndex, result in
-                            let unifiedIndex = viewModel.displayedResults.count + appIndex
+                        case let .appLaunch(unifiedIndex, result):
                             AppLaunchRowView(
                                 result: result,
                                 icon: viewModel.icon(forAppURL: result.app.bundleURL),
                                 isSelected: unifiedIndex == viewModel.selectedIndex
                             )
-                            .id(rowScrollID(forAppID: result.id))
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 viewModel.selectAndActivate(at: unifiedIndex)
@@ -147,19 +159,30 @@ public struct SwitcherListView: View {
             }
             .frame(maxHeight: 420)
             .fixedSize(horizontal: false, vertical: true)
+            .onAppear {
+                scrollToSelectedRow(using: proxy, animated: false)
+            }
             .onChange(of: viewModel.selectedIndex) { _, newIndex in
-                guard let targetID = scrollTargetID(for: newIndex) else { return }
-                withAnimation(.easeOut(duration: 0.08)) {
-                    proxy.scrollTo(targetID, anchor: .center)
-                }
+                scrollToRow(at: newIndex, using: proxy, animated: true)
+            }
+            .onChange(of: viewModel.searchQuery) { _, _ in
+                // 手動スクロール後に selectedIndex が 0 のまま検索更新された場合も、上部余白ごと先頭候補が見える位置へ戻す
+                scrollToSelectedRow(using: proxy, animated: false)
+            }
+            .onChange(of: viewModel.mode) { _, newMode in
+                guard newMode != .inactive else { return }
+                scrollToSelectedRow(using: proxy, animated: false)
             }
         }
     }
 
     /// アプリ起動候補セクションの区切り線と見出し
-    private var appLaunchSectionHeader: some View {
+    /// - Parameters:
+    ///   - title: セクション見出し文言
+    ///   - hasPrecedingWindows: 上部にウィンドウ候補が 1 件以上存在するか
+    private func appLaunchSectionHeader(title: String, hasPrecedingWindows: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !viewModel.displayedResults.isEmpty {
+            if hasPrecedingWindows {
                 Divider()
                     .overlay(.white.opacity(0.14))
                     .padding(.vertical, 4)
@@ -169,42 +192,55 @@ public struct SwitcherListView: View {
                 Image(systemName: "arrow.up.forward.app")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(viewModel.launchSectionHeaderTitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 4)
-            .padding(.top, viewModel.displayedResults.isEmpty ? 2 : 4)
+            .padding(.top, hasPrecedingWindows ? 4 : 2)
             .padding(.bottom, 2)
         }
     }
 
-    /// ウィンドウ行の ScrollViewReader 用識別子を返す
-    /// - Parameter id: ウィンドウ検索結果の一意識別子
-    /// - Returns: 衝突を防ぐ接頭辞付き識別子文字列
-    private func rowScrollID(forWindowID id: String) -> String {
-        "window-\(id)"
+    /// 現在選択中の行へスクロール位置を追従させる
+    /// - Parameters:
+    ///   - proxy: 制御対象の `ScrollViewProxy`
+    ///   - animated: 短いアニメーションを適用する場合は `true`
+    private func scrollToSelectedRow(using proxy: ScrollViewProxy, animated: Bool) {
+        scrollToRow(at: viewModel.selectedIndex, using: proxy, animated: animated)
     }
 
-    /// アプリ起動候補行の ScrollViewReader 用識別子を返す
-    /// - Parameter id: アプリ検索結果の一意識別子
-    /// - Returns: 衝突を防ぐ接頭辞付き識別子文字列
-    private func rowScrollID(forAppID id: String) -> String {
-        "app-\(id)"
+    /// 指定インデックスに対応する行へスクロール位置を追従させる
+    /// - Parameters:
+    ///   - index: 選択中の統一インデックス
+    ///   - proxy: 制御対象の `ScrollViewProxy`
+    ///   - animated: 短いアニメーションを適用する場合は `true`
+    private func scrollToRow(
+        at index: Int,
+        using proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        guard let targetID = scrollTargetID(for: index) else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.08)) {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(targetID, anchor: .center)
+        }
     }
 
     /// 統一選択インデックスに対応する ScrollViewReader 用の識別子を返す
     /// - Parameter index: 統一インデックス
     /// - Returns: 該当行が存在する場合は識別子、範囲外なら nil
     private func scrollTargetID(for index: Int) -> String? {
-        if viewModel.displayedResults.indices.contains(index) {
-            return rowScrollID(forWindowID: viewModel.displayedResults[index].id)
-        }
-        guard viewModel.isShowingLaunchCandidates else { return nil }
-        let appIndex = index - viewModel.displayedResults.count
-        guard viewModel.displayedAppResults.indices.contains(appIndex) else { return nil }
-        return rowScrollID(forAppID: viewModel.displayedAppResults[appIndex].id)
+        SwitcherListRow.scrollTargetID(
+            for: index,
+            windowResults: viewModel.displayedResults,
+            appResults: viewModel.displayedAppResults,
+            isShowingLaunchCandidates: viewModel.isShowingLaunchCandidates
+        )
     }
 }
 
