@@ -1099,23 +1099,55 @@ public final class WindowService: WindowServicing {
             }
             return (entry, intersectionArea)
         }.max { lhs, rhs in
-            let lhsOnscreenRank = (preferOnscreen && lhs.0.info.isOnscreen) ? 1 : 0
-            let rhsOnscreenRank = (preferOnscreen && rhs.0.info.isOnscreen) ? 1 : 0
-            if lhsOnscreenRank != rhsOnscreenRank {
-                return lhsOnscreenRank < rhsOnscreenRank
-            }
-            let lhsTitleRank = doesCGWindowNameMatchTitle(lhs.0.info.name, axTitle: axTitle) ? 1 : 0
-            let rhsTitleRank = doesCGWindowNameMatchTitle(rhs.0.info.name, axTitle: axTitle) ? 1 : 0
-            if lhsTitleRank != rhsTitleRank {
-                return lhsTitleRank < rhsTitleRank
-            }
-            return lhs.1 < rhs.1
+            let lhsRank = (
+                (preferOnscreen && lhs.0.info.isOnscreen) ? 1 : 0,
+                doesCGWindowNameMatchTitle(lhs.0.info.name, axTitle: axTitle) ? 1 : 0,
+                (preferredCGWindowID != nil && lhs.0.info.windowID == preferredCGWindowID) ? 1 : 0,
+                hasNonEmptyCGWindowName(lhs.0.info.name) ? 1 : 0,
+                lhs.1
+            )
+            let rhsRank = (
+                (preferOnscreen && rhs.0.info.isOnscreen) ? 1 : 0,
+                doesCGWindowNameMatchTitle(rhs.0.info.name, axTitle: axTitle) ? 1 : 0,
+                (preferredCGWindowID != nil && rhs.0.info.windowID == preferredCGWindowID) ? 1 : 0,
+                hasNonEmptyCGWindowName(rhs.0.info.name) ? 1 : 0,
+                rhs.1
+            )
+            return lhsRank < rhsRank
         }
 
         return containmentMatch?.0
     }
 
-    /// 候補 CGWindow の優先順位比較用タプルを構築する（小さいほど優先）
+    /// 近接一致の優先順位比較用値型（各フィールドが小さいほど優先）
+    private struct ProximityMatchRank: Comparable {
+        let layerPriority: Int
+        let visibilityPriority: Int
+        let titleMatchPriority: Int
+        let continuityPriority: Int
+        let nonEmptyNamePriority: Int
+        let dist: Double
+        let zOrder: Int
+
+        /// 優先順位を比較する（小さいほど優先）
+        /// - Parameters:
+        ///   - lhs: 比較元のランク
+        ///   - rhs: 比較先のランク
+        /// - Returns: lhs を優先すべき場合は true
+        static func < (lhs: ProximityMatchRank, rhs: ProximityMatchRank) -> Bool {
+            let lhsPrimary = (lhs.layerPriority, lhs.visibilityPriority, lhs.titleMatchPriority, lhs.continuityPriority, lhs.nonEmptyNamePriority)
+            let rhsPrimary = (rhs.layerPriority, rhs.visibilityPriority, rhs.titleMatchPriority, rhs.continuityPriority, rhs.nonEmptyNamePriority)
+            if lhsPrimary != rhsPrimary {
+                return lhsPrimary < rhsPrimary
+            }
+            if lhs.dist != rhs.dist {
+                return lhs.dist < rhs.dist
+            }
+            return lhs.zOrder < rhs.zOrder
+        }
+    }
+
+    /// 候補 CGWindow の優先順位比較用ランクを構築する（小さいほど優先）
     /// - Parameters:
     ///   - entry: 比較対象の CGWindow エントリ
     ///   - dist: AX 矩形とのマンハッタン距離
@@ -1123,7 +1155,7 @@ public final class WindowService: WindowServicing {
     ///   - isMinimized: AX 上の最小化状態
     ///   - preferOnscreen: 画面表示中 CGWindow を優先するか
     ///   - preferredCGWindowID: 前回照合されていた CGWindow ID
-    /// - Returns: 辞書順比較可能な優先度タプル
+    /// - Returns: 辞書順比較可能な優先度ランク
     private nonisolated static func matchPriorityTuple(
         for entry: (zOrder: Int, info: CGWindowMeta),
         dist: Double,
@@ -1131,7 +1163,7 @@ public final class WindowService: WindowServicing {
         isMinimized: Bool,
         preferOnscreen: Bool,
         preferredCGWindowID: UInt32?
-    ) -> (Int, Int, Int, Int, Double, Int) {
+    ) -> ProximityMatchRank {
         let layerPriority = entry.info.layer == 0 ? 0 : 1
         let visibilityPriority: Int
         if preferOnscreen && !isMinimized {
@@ -1143,7 +1175,26 @@ public final class WindowService: WindowServicing {
         }
         let titleMatchPriority = doesCGWindowNameMatchTitle(entry.info.name, axTitle: axTitle) ? 0 : 1
         let continuityPriority = (preferredCGWindowID != nil && entry.info.windowID == preferredCGWindowID) ? 0 : 1
-        return (layerPriority, visibilityPriority, titleMatchPriority, continuityPriority, dist, entry.zOrder)
+        let nonEmptyNamePriority = hasNonEmptyCGWindowName(entry.info.name) ? 0 : 1
+        return ProximityMatchRank(
+            layerPriority: layerPriority,
+            visibilityPriority: visibilityPriority,
+            titleMatchPriority: titleMatchPriority,
+            continuityPriority: continuityPriority,
+            nonEmptyNamePriority: nonEmptyNamePriority,
+            dist: dist,
+            zOrder: entry.zOrder
+        )
+    }
+
+    /// CGWindow の名前メタデータが空白以外の文字を含む非空文字列かを判定する
+    /// - Parameter cgName: CGWindow の名前メタデータ
+    /// - Returns: 非空の実名が付与されている場合は true
+    private nonisolated static func hasNonEmptyCGWindowName(_ cgName: String?) -> Bool {
+        guard let trimmed = cgName?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return !trimmed.isEmpty
     }
 
     /// CGWindow の名前メタデータが AX タイトルと一致するか判定する

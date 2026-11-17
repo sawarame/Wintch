@@ -22,7 +22,7 @@ description: "Task list for preventing disappearing window thumbnails in capture
 
 **Purpose**: 既存テストのベースライン確認と契約変更箇所の把握
 
-- [ ] T001 既存のテストスイートを実行しベースラインが通過することを確認する (`Tests/WintchCoreTests/`)
+- [x] T001 既存のテストスイートを実行しベースラインが通過することを確認する (`Tests/WintchCoreTests/`)
 
 ---
 
@@ -32,8 +32,8 @@ description: "Task list for preventing disappearing window thumbnails in capture
 
 **⚠️ CRITICAL**: 以降のユーザーストーリー実装前に完了すること
 
-- [ ] T002 `WindowCaptureServicing` プロトコルに `pruneCache(keeping activeCGWindowIDs: Set<UInt32>)` を追加する (`Sources/WintchCore/Services/Protocols/WindowCaptureServicing.swift`)
-- [ ] T003 `MockWindowCaptureService` に `pruneCache(keeping:)` 実装と呼び出し記録プロパティ（`prunedKeepingWindowIDsHistory`）を追加する (`Tests/WintchCoreTests/Mocks/MockServices.swift`)
+- [x] T002 `WindowCaptureServicing` プロトコルに `pruneCache(keeping activeCGWindowIDs: Set<UInt32>)` を追加する (`Sources/WintchCore/Services/Protocols/WindowCaptureServicing.swift`)
+- [x] T003 `MockWindowCaptureService` に `pruneCache(keeping:)` 実装と呼び出し記録プロパティ（`prunedKeepingWindowIDsHistory`）を追加する (`Tests/WintchCoreTests/Mocks/MockServices.swift`)
 
 **Checkpoint**: プロトコルおよびモック基盤の準備完了
 
@@ -47,13 +47,13 @@ description: "Task list for preventing disappearing window thumbnails in capture
 
 ### Tests for User Story 1
 
-- [ ] T004 [P] [US1] `WindowCaptureService` の `pruneCache(keeping:)` が閉じ済み ID のみ削除し生存 ID の LRU 順を維持すること、およびデフォルト上限 100 件・カスタム上限（`maxCacheCount >= 1`、制約: `thumbnailCache.count <= maxCacheCount`）での LRU 追い出しを検証するテストを追加する (`Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift`)
-- [ ] T005 [P] [US1] `SwitcherViewModel` で `.capture` 起動時に `pruneCache(keeping:)` が現在生存ウィンドウ ID 集合のみで呼ばれること、および初期サムネイル読み込みが `sorted.reversed()` 順で行われ直近利用ウィンドウが追い出されないことを検証するテストを追加する (`Tests/WintchCoreTests/SwitcherViewModelTests.swift`)
+- [x] T004 [P] [US1] `WindowCaptureService` の `pruneCache(keeping:)` が閉じ済み ID のみ削除し生存 ID の LRU 順を維持すること、およびデフォルト上限 100 件・カスタム上限（`maxCacheCount >= 1`、制約: `thumbnailCache.count <= maxCacheCount`）での LRU 追い出しを検証するテストを追加する (`Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift`)
+- [x] T005 [P] [US1] `SwitcherViewModel` で `.capture` 起動時に `pruneCache(keeping:)` が現在生存ウィンドウ ID 集合のみで呼ばれること、および初期サムネイル読み込みが `sorted.reversed()` 順で行われ直近利用ウィンドウが追い出されないことを検証するテストを追加する (`Tests/WintchCoreTests/SwitcherViewModelTests.swift`)
 
 ### Implementation for User Story 1
 
-- [ ] T006 [US1] `WindowCaptureService` に `defaultMaxCacheCount = 100`・注入可能な `init(..., maxCacheCount: Int = defaultMaxCacheCount)`（`max(maxCacheCount, 1)` 正規化）・`pruneCache(keeping:)`（`thumbnailCache` / `cacheOrder` から非含有 ID を除去し `invalidatedWindowIDsDuringCapture` へ登録）を実装する (`Sources/WintchCore/Services/WindowCaptureService.swift`)
-- [ ] T007 [US1] `SwitcherViewModel.present(targetMode:)` の `shouldUseCapture && granted` 分岐内で `windowCaptureService.pruneCache(keeping: Set(sorted.compactMap(\.cgWindowID)))` を呼び出し、キャッシュ参照ループを `for entry in sorted.reversed()` へ修正する (`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`)
+- [x] T006 [US1] `WindowCaptureService` に `defaultMaxCacheCount = 100`・注入可能な `init(..., maxCacheCount: Int = defaultMaxCacheCount)`（`max(maxCacheCount, 1)` 正規化）・`pruneCache(keeping:)`（`thumbnailCache` / `cacheOrder` から非含有 ID を除去し `invalidatedWindowIDsDuringCapture` へ登録）を実装する (`Sources/WintchCore/Services/WindowCaptureService.swift`)
+- [x] T007 [US1] `SwitcherViewModel.present(targetMode:)` の `shouldUseCapture && granted` 分岐内で `windowCaptureService.pruneCache(keeping: Set(sorted.compactMap(\.cgWindowID)))` を呼び出し、キャッシュ参照ループを `for entry in sorted.reversed()` へ修正する (`Sources/WintchCore/ViewModels/SwitcherViewModel.swift`)
 
 **Checkpoint**: User Story 1 が単独で機能・テスト通過することを確認
 
@@ -67,11 +67,11 @@ description: "Task list for preventing disappearing window thumbnails in capture
 
 ### Tests for User Story 2
 
-- [ ] T008 [P] [US2] `selectBestCGWindowMatch` がタイトル一時不一致時の近接比較および `containmentMatch` 包含比較の双方で `preferredCGWindowID` 連続性と非空 `cgWindowName`（空き殻 CGWindow 劣後）を優先することを検証するテストを追加する (`Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift`)
+- [x] T008 [P] [US2] `selectBestCGWindowMatch` がタイトル一時不一致時の近接比較および `containmentMatch` 包含比較の双方で `preferredCGWindowID` 連続性と非空 `cgWindowName`（空き殻 CGWindow 劣後）を優先することを検証するテストを追加する (`Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift`)
 
 ### Implementation for User Story 2
 
-- [ ] T009 [US2] `WindowService.matchPriorityTuple` に `nonEmptyNamePriority` を `continuityPriority` の直後へ追加し、`containmentMatch` 比較へ `onscreenRank` → `titleRank` → `continuityRank` → `nonEmptyNameRank` → `intersectionArea` の優先順を実装する (`Sources/WintchCore/Services/WindowService.swift`)
+- [x] T009 [US2] `WindowService.matchPriorityTuple` に `nonEmptyNamePriority` を `continuityPriority` の直後へ追加し、`containmentMatch` 比較へ `onscreenRank` → `titleRank` → `continuityRank` → `nonEmptyNameRank` → `intersectionArea` の優先順を実装する (`Sources/WintchCore/Services/WindowService.swift`)
 
 **Checkpoint**: User Story 1 および User Story 2 がともに独立してテスト通過することを確認
 
@@ -85,12 +85,12 @@ description: "Task list for preventing disappearing window thumbnails in capture
 
 ### Tests for User Story 3
 
-- [ ] T010 [P] [US3] `WindowCaptureService.isValidCapturedImageSize(_:)`（または同等の画像サイズ検証ヘルパー）が `0x0` 等の無効サイズを拒否し有効サイズのみ許可することを検証するテストを追加する (`Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift`)
-- [ ] T011 [P] [US3] `.list` モード・`.launcher` モード・画面収録権限未許可時に `pruneCache(keeping:)` を含むキャプチャサービスメソッドが一切呼ばれず、再取得失敗時にも既存サムネイルが保持されることを検証するテストを追加する (`Tests/WintchCoreTests/SwitcherViewModelTests.swift`)
+- [x] T010 [P] [US3] `WindowCaptureService.isValidCapturedImageSize(_:)`（または同等の画像サイズ検証ヘルパー）が `0x0` 等の無効サイズを拒否し有効サイズのみ許可することを検証するテストを追加する (`Tests/WintchCoreTests/WindowCaptureAndMatchingTests.swift`)
+- [x] T011 [P] [US3] `.list` モード・`.launcher` モード・画面収録権限未許可時に `pruneCache(keeping:)` を含むキャプチャサービスメソッドが一切呼ばれず、再取得失敗時にも既存サムネイルが保持されることを検証するテストを追加する (`Tests/WintchCoreTests/SwitcherViewModelTests.swift`)
 
 ### Implementation for User Story 3
 
-- [ ] T012 [US3] `WindowCaptureService.captureSingleWindow` に `CGImage` サイズ検証（`width > 0 && height > 0`）を追加し、無効画像時は `.failed` として既存キャッシュを上書きしないよう実装する (`Sources/WintchCore/Services/WindowCaptureService.swift`)
+- [x] T012 [US3] `WindowCaptureService.captureSingleWindow` に `CGImage` サイズ検証（`width > 0 && height > 0`）を追加し、無効画像時は `.failed` として既存キャッシュを上書きしないよう実装する (`Sources/WintchCore/Services/WindowCaptureService.swift`)
 
 **Checkpoint**: すべてのユーザーストーリーが独立して動作・テスト通過することを確認
 
@@ -100,8 +100,8 @@ description: "Task list for preventing disappearing window thumbnails in capture
 
 **Purpose**: 日本語ドキュメントコメント規約確認、全テスト通過、および `.app` バンドルビルド確認
 
-- [ ] T013 [P] 変更ファイルのすべての新規・修正クラス／メソッド／関数に日本語ドキュメントコメントと日本語インラインコメントが揃っていることを確認する (`Sources/WintchCore/`)
-- [ ] T014 全ユニットテスト（`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`）およびアプリビルド（`./scripts/build-app.sh`）を実行して成功を確認する
+- [x] T013 [P] 変更ファイルのすべての新規・修正クラス／メソッド／関数に日本語ドキュメントコメントと日本語インラインコメントが揃っていることを確認する (`Sources/WintchCore/`)
+- [x] T014 全ユニットテスト（`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`）およびアプリビルド（`./scripts/build-app.sh`）を実行して成功を確認する
 
 ---
 

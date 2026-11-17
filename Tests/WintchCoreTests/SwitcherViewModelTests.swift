@@ -1633,4 +1633,159 @@ struct SwitcherViewModelTests {
         #expect(viewModel.isPresented == false)
         #expect(viewModel.shouldActivateAppForCurrentSession == false)
     }
+
+    /// スイッチャー外で多数のウィンドウが開閉された後でも、起動時に閉じ済みキャッシュが整理され、
+    /// MRU 最古→最新の逆順参照によって直近アクティブウィンドウのキャッシュが追い出されないことを検証する
+    @Test("大量開閉後の生存ウィンドウ保持とMRU逆順読み込みによる直近キャッシュ保護が動作する")
+    @MainActor
+    func captureSwitcherPrunesClosedWindowsAndPreservesRecentThumbnailsInMRUOrder() {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+
+        // 1. MockWindowCaptureService で pruneCache 対象・参照順（MRU 最古→最新）を検証する
+        let mockCapture = MockWindowCaptureService()
+        let staleIDs: [UInt32] = Array(1000..<1120)
+        for staleID in staleIDs {
+            mockCapture.cachedThumbnails[staleID] = NSImage(size: NSSize(width: 40, height: 30))
+        }
+        let imgRecent = NSImage(size: NSSize(width: 80, height: 60))
+        let imgMiddle = NSImage(size: NSSize(width: 80, height: 60))
+        let imgOld = NSImage(size: NSSize(width: 80, height: 60))
+        mockCapture.cachedThumbnails[1] = imgRecent
+        mockCapture.cachedThumbnails[2] = imgMiddle
+        mockCapture.cachedThumbnails[3] = imgOld
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w-recent", cgWindowID: 1, pid: 10, applicationName: "App1", title: "Recent", lastActivatedAt: now),
+            RawWindowCandidate(id: "w-middle", cgWindowID: 2, pid: 20, applicationName: "App2", title: "Middle", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w-old", cgWindowID: 3, pid: 30, applicationName: "App3", title: "Old", lastActivatedAt: now.addingTimeInterval(-20))
+        ]
+
+        let mockVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: mockCapture,
+            normalDisplayStyle: .capture
+        )
+        mockVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+
+        // 閉じ済み 120 件が整理され、生存 3 件がすべて維持され、参照順が MRU 最古→最新 [3, 2, 1] となる
+        #expect(mockCapture.prunedKeepingWindowIDsHistory == [Set([1, 2, 3])])
+        #expect(mockCapture.cachedThumbnails.count == 3)
+        #expect(mockCapture.cachedThumbnailLookupOrder == [3, 2, 1])
+        #expect(mockVM.thumbnail(for: mockVM.entries[0]) === imgRecent)
+        #expect(mockVM.thumbnail(for: mockVM.entries[1]) === imgMiddle)
+        #expect(mockVM.thumbnail(for: mockVM.entries[2]) === imgOld)
+        mockVM.cancel()
+
+        // 2. 実 WindowCaptureService(maxCacheCount: 3) でも直近アクティブウィンドウが末尾保護され追い出されないことを検証する
+        let realCapture = WindowCaptureService(
+            screenRecordingPermissionService: screenRecordingService,
+            maxCacheCount: 3
+        )
+        // 先に 1(最新), 2(中間), 3(最古) が逆の順で入っていても、present() により正しい MRU 順に整列される
+        realCapture.storeInCache(imgRecent, for: 1)
+        realCapture.storeInCache(imgMiddle, for: 2)
+        realCapture.storeInCache(imgOld, for: 3)
+        #expect(realCapture.cacheOrder == [1, 2, 3])
+
+        let realVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: realCapture,
+            normalDisplayStyle: .capture
+        )
+        realVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        // present() の逆順読み込みにより cacheOrder が [3, 2, 1]（最古が先頭、最直近が末尾）へ補正される
+        #expect(realCapture.cacheOrder == [3, 2, 1])
+        realVM.cancel()
+
+        // 新規ウィンドウ 4 が追加されて上限 3 を超えても、追い出されるのは最古の 3 であり直近の 1 は保持される
+        let imgNew = NSImage(size: NSSize(width: 80, height: 60))
+        realCapture.storeInCache(imgNew, for: 4)
+        #expect(realCapture.cacheOrder == [2, 1, 4])
+        #expect(realCapture.cachedThumbnail(for: 3) == nil)
+        #expect(realCapture.cachedThumbnail(for: 1) === imgRecent)
+    }
+
+    /// リスト型・検索ランチャー・権限未許可時は pruneCache を含めキャプチャサービスを呼ばず、
+    /// 再取得失敗時にも既存サムネイルが消去されず維持されることを検証する
+    @Test("非オプトイン時はpruneCacheも呼ばず再取得失敗時も既存サムネイルを維持する")
+    @MainActor
+    func nonOptInModesDoNotPruneAndFailedRefreshPreservesExistingThumbnail() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let existingImage = NSImage(size: NSSize(width: 120, height: 80))
+        captureService.cachedThumbnails[501] = existingImage
+        captureService.cachedThumbnails[999] = NSImage(size: NSSize(width: 40, height: 40))
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 501, pid: 10, applicationName: "App1", title: "Win1", isOnScreen: true, lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 502, pid: 20, applicationName: "App2", title: "Win2", isOnScreen: true, lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+
+        // 1. リスト型では pruneCache も含めキャプチャサービスを一切呼ばない
+        let listVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .list
+        )
+        listVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(captureService.prunedKeepingWindowIDsHistory.isEmpty)
+        #expect(captureService.cachedThumbnailLookupOrder.isEmpty)
+        listVM.cancel()
+
+        // 2. キャプチャ設定中でもランチャー起動時および権限未許可時は pruneCache を呼ばない
+        let captureVM = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture
+        )
+        captureVM.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(captureService.prunedKeepingWindowIDsHistory.isEmpty)
+        captureVM.cancel()
+
+        screenRecordingService.stubbedStatus = .denied
+        captureVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(captureService.prunedKeepingWindowIDsHistory.isEmpty)
+        captureVM.cancel()
+
+        // 3. 権限ありで再キャプチャに失敗（何も通知されない）場合も、既存の 501 サムネイルは維持される
+        screenRecordingService.stubbedStatus = .granted
+        captureService.captureHandler = { _, _ in
+            // 取得失敗を模擬して onCaptured を呼ばず終了する
+        }
+        captureVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        await Task.yield()
+        await Task.yield()
+        #expect(captureService.prunedKeepingWindowIDsHistory == [Set([501, 502])])
+        #expect(captureVM.thumbnail(for: captureVM.entries[0]) === existingImage)
+        #expect(captureVM.thumbnail(for: captureVM.entries[1]) == nil)
+    }
 }

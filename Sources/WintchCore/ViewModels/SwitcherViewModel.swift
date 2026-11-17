@@ -491,7 +491,11 @@ public final class SwitcherViewModel {
             // キャプチャ表示型では起動直後にキャッシュ済みサムネイルのみ即時反映し、表示遅延を起こさない
             var initialThumbnails: [UInt32: NSImage] = [:]
             if granted, let windowCaptureService {
-                for entry in sorted {
+                // 閉じ済みウィンドウのキャッシュを先に破棄し、MRU 最古→最新の順で参照して
+                // 直近アクティブウィンドウが LRU 追い出し優先位置へ押し出されないようにする
+                let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
+                windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+                for entry in sorted.reversed() {
                     if let windowID = entry.cgWindowID,
                        let cached = windowCaptureService.cachedThumbnail(for: windowID) {
                         initialThumbnails[windowID] = cached
