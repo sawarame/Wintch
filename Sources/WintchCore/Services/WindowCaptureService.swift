@@ -30,8 +30,8 @@ public final class WindowCaptureService: WindowCaptureServicing {
         var timeoutTask: Task<Void, Never>?
     }
 
-    /// メモリ内サムネイルキャッシュの最大保持件数（FR-012）
-    private static let maxCacheCount = 50
+    /// メモリ内サムネイルキャッシュのデフォルト最大保持件数（FR-003）
+    public static let defaultMaxCacheCount = 100
 
     /// 非同期キャプチャの最大同時実行数
     private static let maxConcurrentCaptures = 4
@@ -42,6 +42,9 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// 画面収録権限状態を共有するためのサービス（省略時は内部状態と CGPreflight のみ使用）
     private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
 
+    /// メモリ内サムネイルキャッシュの最大保持件数
+    private let maxCacheCount: Int
+
     /// 実行中プロセス内で ScreenCaptureKit による権限拒否エラーを検知したかどうか
     private var isAccessDeniedInSession = false
 
@@ -49,7 +52,7 @@ public final class WindowCaptureService: WindowCaptureServicing {
     private var thumbnailCache: [UInt32: NSImage] = [:]
 
     /// LRU 順序管理配列（末尾ほど最近利用されたエントリ）
-    private var cacheOrder: [UInt32] = []
+    private(set) var cacheOrder: [UInt32] = []
 
     /// キャッシュ全消去の世代カウンタ（非同期取得中のクリア後に古い結果が再混入するのを防ぐ）
     private var cacheEpoch: Int = 0
@@ -58,9 +61,15 @@ public final class WindowCaptureService: WindowCaptureServicing {
     private var invalidatedWindowIDsDuringCapture: Set<UInt32> = []
 
     /// サービスを初期化する
-    /// - Parameter screenRecordingPermissionService: 画面収録権限状態を共有するサービス
-    public init(screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil) {
+    /// - Parameters:
+    ///   - screenRecordingPermissionService: 画面収録権限状態を共有するサービス
+    ///   - maxCacheCount: メモリ内サムネイルキャッシュの最大保持件数（1 未満は 1 に正規化）
+    public init(
+        screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil,
+        maxCacheCount: Int = defaultMaxCacheCount
+    ) {
         self.screenRecordingPermissionService = screenRecordingPermissionService
+        self.maxCacheCount = max(maxCacheCount, 1)
     }
 
     /// メモリ上のキャッシュから指定ウィンドウのサムネイルを同期取得する
@@ -164,6 +173,18 @@ public final class WindowCaptureService: WindowCaptureServicing {
         cacheOrder.removeAll { $0 == cgWindowID }
     }
 
+    /// 現在開いている有効ウィンドウ ID 集合に含まれない閉じ済みウィンドウのキャッシュを破棄する
+    /// - Parameter activeCGWindowIDs: 現在生存しているウィンドウの CoreGraphics ウィンドウ ID 集合
+    public func pruneCache(keeping activeCGWindowIDs: Set<UInt32>) {
+        let staleIDs = thumbnailCache.keys.filter { !activeCGWindowIDs.contains($0) }
+        guard !staleIDs.isEmpty else { return }
+        for windowID in staleIDs {
+            thumbnailCache.removeValue(forKey: windowID)
+            invalidatedWindowIDsDuringCapture.insert(windowID)
+        }
+        cacheOrder.removeAll { !activeCGWindowIDs.contains($0) }
+    }
+
     /// 保持している全サムネイルキャッシュをメモリから破棄する
     public func clearCache() {
         cacheEpoch += 1
@@ -226,6 +247,9 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     contentFilter: filter,
                     configuration: config
                 )
+                guard Self.isValidCapturedImageSize(CGSize(width: image.width, height: image.height)) else {
+                    return SingleCaptureResult.failed
+                }
                 return SingleCaptureResult.captured(windowID, image)
             } catch {
                 return Self.isPermissionDeniedError(error) ? .permissionDenied : .failed
@@ -260,6 +284,13 @@ public final class WindowCaptureService: WindowCaptureServicing {
         guard nsError.domain == SCStreamError.errorDomain else { return false }
         return nsError.code == SCStreamError.userDeclined.rawValue
             || nsError.code == SCStreamError.missingEntitlements.rawValue
+    }
+
+    /// キャプチャ結果画像のピクセルサイズが有効（幅・高さともに 1px 以上）かを判定する
+    /// - Parameter size: 検証対象の画像ピクセルサイズ
+    /// - Returns: 有効なサイズであれば true
+    nonisolated static func isValidCapturedImageSize(_ size: CGSize) -> Bool {
+        size.width > 0 && size.height > 0
     }
 
     /// キャンセル非対応になり得る非同期 I/O を指定秒数のタイムアウトおよび親キャンセルから隔離して実行する
@@ -353,11 +384,11 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// - Parameters:
     ///   - image: 格納するサムネイル画像
     ///   - cgWindowID: 対象の CoreGraphics ウィンドウ ID
-    private func storeInCache(_ image: NSImage, for cgWindowID: UInt32) {
+    func storeInCache(_ image: NSImage, for cgWindowID: UInt32) {
         thumbnailCache[cgWindowID] = image
         touchCacheOrder(for: cgWindowID)
 
-        while cacheOrder.count > Self.maxCacheCount {
+        while cacheOrder.count > maxCacheCount {
             let evictedID = cacheOrder.removeFirst()
             thumbnailCache.removeValue(forKey: evictedID)
         }

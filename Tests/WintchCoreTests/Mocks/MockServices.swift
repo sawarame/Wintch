@@ -310,6 +310,10 @@ final class MockWindowCaptureService: WindowCaptureServicing {
     var capturedRequestWindowIDs: [[UInt32]] = []
     /// invalidateThumbnail が呼ばれたウィンドウ ID 履歴
     var invalidatedWindowIDs: [UInt32] = []
+    /// pruneCache(keeping:) が呼ばれた際の保持対象ウィンドウ ID 集合履歴
+    var prunedKeepingWindowIDsHistory: [Set<UInt32>] = []
+    /// cachedThumbnail(for:) が呼ばれたウィンドウ ID の呼び出し順履歴
+    var cachedThumbnailLookupOrder: [UInt32] = []
     /// clearCache が呼ばれた回数
     var clearCacheCallCount = 0
 
@@ -317,7 +321,8 @@ final class MockWindowCaptureService: WindowCaptureServicing {
     /// - Parameter cgWindowID: CoreGraphics ウィンドウ ID
     /// - Returns: キャッシュにあれば画像、なければ nil
     func cachedThumbnail(for cgWindowID: UInt32) -> NSImage? {
-        cachedThumbnails[cgWindowID]
+        cachedThumbnailLookupOrder.append(cgWindowID)
+        return cachedThumbnails[cgWindowID]
     }
 
     /// 非同期キャプチャ取得を実行し、完了ごとにコールバックとキャッシュ更新を行う
@@ -352,6 +357,15 @@ final class MockWindowCaptureService: WindowCaptureServicing {
     func invalidateThumbnail(for cgWindowID: UInt32) {
         invalidatedWindowIDs.append(cgWindowID)
         cachedThumbnails.removeValue(forKey: cgWindowID)
+    }
+
+    /// 現在生存しているウィンドウ ID 集合に含まれないキャッシュを破棄する
+    /// - Parameter activeCGWindowIDs: 保持を継続するウィンドウ ID 集合
+    func pruneCache(keeping activeCGWindowIDs: Set<UInt32>) {
+        prunedKeepingWindowIDsHistory.append(activeCGWindowIDs)
+        for key in Array(cachedThumbnails.keys) where !activeCGWindowIDs.contains(key) {
+            cachedThumbnails.removeValue(forKey: key)
+        }
     }
 
     /// 全キャッシュを破棄する

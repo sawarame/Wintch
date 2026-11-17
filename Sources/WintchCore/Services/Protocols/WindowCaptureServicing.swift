@@ -24,6 +24,10 @@ public protocol WindowCaptureServicing: AnyObject {
     /// - Parameter cgWindowID: 削除対象の CoreGraphics ウィンドウ ID
     func invalidateThumbnail(for cgWindowID: UInt32)
 
+    /// 現在開いている有効ウィンドウ ID 集合に含まれない閉じ済みウィンドウのキャッシュを破棄する
+    /// - Parameter activeCGWindowIDs: 現在生存しているウィンドウの CoreGraphics ウィンドウ ID 集合
+    func pruneCache(keeping activeCGWindowIDs: Set<UInt32>)
+
     /// 保持している全サムネイルキャッシュをメモリから破棄する（リスト型への復帰時など）
     func clearCache()
 }

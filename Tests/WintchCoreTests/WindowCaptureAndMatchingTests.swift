@@ -407,4 +407,152 @@ struct WindowCaptureAndMatchingTests {
         )
         #expect(matched?.info.windowID == 111)
     }
+
+    /// pruneCache が閉じ済みウィンドウのキャッシュのみ破棄して生存ウィンドウの LRU 順を維持し、
+    /// デフォルト上限 100 件・カスタム上限での最古追い出しが正しく動作することを検証する
+    @Test("WindowCaptureService は生存ウィンドウ以外を自動整理し上限 100 件の LRU 順を正しく維持する")
+    @MainActor
+    func captureCachePrunesStaleWindowsAndEnforcesLRUWithCapacity100() {
+        #expect(WindowCaptureService.defaultMaxCacheCount == 100)
+
+        let defaultService = WindowCaptureService()
+        for id: UInt32 in 1...100 {
+            defaultService.storeInCache(NSImage(size: NSSize(width: 20, height: 20)), for: id)
+        }
+        // 100 件までは追い出しが発生しない
+        #expect(defaultService.cacheOrder.count == 100)
+        #expect(defaultService.cachedThumbnail(for: 1) != nil)
+
+        let smallService = WindowCaptureService(maxCacheCount: 3)
+        let img1 = NSImage(size: NSSize(width: 10, height: 10))
+        let img2 = NSImage(size: NSSize(width: 10, height: 10))
+        let img3 = NSImage(size: NSSize(width: 10, height: 10))
+        let img4 = NSImage(size: NSSize(width: 10, height: 10))
+
+        smallService.storeInCache(img1, for: 10)
+        smallService.storeInCache(img2, for: 20)
+        smallService.storeInCache(img3, for: 30)
+        #expect(smallService.cacheOrder == [10, 20, 30])
+
+        // 20 を閉じ済みとして整理すると、10 と 30 およびその相対順のみが維持される
+        smallService.pruneCache(keeping: [10, 30])
+        #expect(smallService.cacheOrder == [10, 30])
+        #expect(smallService.cachedThumbnail(for: 20) == nil)
+
+        // 10 を参照すると末尾（最新）へ移動するため、新規追加で追い出されるのは最古の 30 になる
+        #expect(smallService.cachedThumbnail(for: 10) === img1)
+        #expect(smallService.cacheOrder == [30, 10])
+
+        smallService.storeInCache(img2, for: 20)
+        smallService.storeInCache(img4, for: 40)
+        #expect(smallService.cacheOrder == [10, 20, 40])
+        #expect(smallService.cachedThumbnail(for: 30) == nil)
+        #expect(smallService.cachedThumbnail(for: 10) === img1)
+    }
+
+    /// タイトル変化やサイズ変化による包含フォールバック時にも、無名空き殻窓へ乗り換えず
+    /// preferredCGWindowID の連続性と非空 cgWindowName を優先して維持することを検証する
+    @Test("selectBestCGWindowMatch は包含フォールバックやタイトル不一致時も既存ID連続性と非空名を優先する")
+    func selectBestCGWindowMatchPreservesContinuityAndPrefersNamedWindow() {
+        let axRect = CGRect(x: 0, y: 88, width: 1920, height: 992)
+        // 空き殻窓 (377) の方が面積が大きく Z オーダー上位にある状況で、本物の窓 (111) とリサイズ包含照合する
+        let containmentEntries: [(zOrder: Int, info: WindowService.CGWindowMeta)] = [
+            (
+                zOrder: 0,
+                info: WindowService.CGWindowMeta(
+                    windowID: 377,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: CGRect(x: 0, y: 38, width: 1920, height: 1042),
+                    alpha: 1.0,
+                    isOnscreen: true,
+                    name: ""
+                )
+            ),
+            (
+                zOrder: 1,
+                info: WindowService.CGWindowMeta(
+                    windowID: 111,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: CGRect(x: 0, y: 120, width: 1860, height: 940),
+                    alpha: 1.0,
+                    isOnscreen: true,
+                    name: "新しいタブ"
+                )
+            )
+        ]
+
+        // 1. タイトルが変化して一時不一致になっても、preferredCGWindowID(111) と非空名を維持する
+        let matchedByContinuity = WindowService.selectBestCGWindowMatch(
+            axBounds: axRect,
+            axTitle: "遷移中タイトル",
+            isMinimized: false,
+            preferOnscreen: true,
+            preferredCGWindowID: 111,
+            in: containmentEntries,
+            excluding: []
+        )
+        #expect(matchedByContinuity?.info.windowID == 111)
+
+        // 2. preferredCGWindowID が未設定の場合も、無名空き殻窓ではなく非空タイトル窓を優先する
+        let matchedNamed = WindowService.selectBestCGWindowMatch(
+            axBounds: axRect,
+            axTitle: nil,
+            isMinimized: false,
+            preferOnscreen: true,
+            preferredCGWindowID: nil,
+            in: containmentEntries,
+            excluding: []
+        )
+        #expect(matchedNamed?.info.windowID == 111)
+
+        // 3. 近接マッチでタイトル未一致時も、無名空き殻窓ではなく非空タイトル窓を優先する
+        let sameRectEntries: [(zOrder: Int, info: WindowService.CGWindowMeta)] = [
+            (
+                zOrder: 0,
+                info: WindowService.CGWindowMeta(
+                    windowID: 500,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: axRect,
+                    alpha: 1.0,
+                    isOnscreen: false,
+                    name: ""
+                )
+            ),
+            (
+                zOrder: 1,
+                info: WindowService.CGWindowMeta(
+                    windowID: 501,
+                    pid: 1871,
+                    layer: 0,
+                    bounds: axRect,
+                    alpha: 1.0,
+                    isOnscreen: false,
+                    name: "Document"
+                )
+            )
+        ]
+        let matchedProximityNamed = WindowService.selectBestCGWindowMatch(
+            axBounds: axRect,
+            axTitle: nil,
+            isMinimized: false,
+            preferOnscreen: false,
+            preferredCGWindowID: nil,
+            in: sameRectEntries,
+            excluding: []
+        )
+        #expect(matchedProximityNamed?.info.windowID == 501)
+    }
+
+    /// 幅または高さが 0 以下の無効なキャプチャ画像サイズを拒否することを検証する
+    @Test("isValidCapturedImageSize は 1px 以上の画像サイズのみ許可する")
+    func validCapturedImageSizeRejectsEmptyDimensions() {
+        #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 0, height: 0)) == false)
+        #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 0, height: 120)) == false)
+        #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 200, height: 0)) == false)
+        #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 1, height: 1)) == true)
+        #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 432, height: 270)) == true)
+    }
 }
