@@ -252,7 +252,10 @@ public final class AppCoordinator {
             guard let self else { return }
             switch mode {
             case .normal, .launcher:
-                self.ensureSwitcherPanel().show(mode: mode)
+                self.ensureSwitcherPanel().show(
+                    mode: mode,
+                    activateApp: self.switcherViewModel.shouldActivateAppForCurrentSession
+                )
             case .inactive:
                 // ランチャーモードで Esc / トグル終了した場合のみ直前アプリへフォーカスを戻す
                 let shouldRestore = reason == .cancelled

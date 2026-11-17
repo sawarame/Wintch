@@ -20,6 +20,9 @@ public final class SwitcherPanel: NSPanel {
     /// 現在のパネル表示モード
     private var currentMode: SwitcherMode = .inactive
 
+    /// 現在の表示セッションで自アプリの一時アクティブ化を実施したかどうか
+    private var didActivateAppForCurrentSession: Bool = false
+
     /// パネルを初期化する
     /// - Parameter contentView: パネル内にホストする SwiftUI コンテンツビュー
     public init(contentView: SwitcherContentView) {
@@ -95,10 +98,14 @@ public final class SwitcherPanel: NSPanel {
     }
 
     /// 指定モードに応じて現在アクティブなディスプレイの中央にパネルを配置して前面表示する
-    /// - Parameter mode: 表示するスイッチャーモード（.normal または .launcher）
-    public func show(mode: SwitcherMode) {
+    /// - Parameters:
+    ///   - mode: 表示するスイッチャーモード（.normal または .launcher）
+    ///   - activateApp: 表示時に自アプリを一時アクティブ化するか（nil 時は .launcher のみ true）
+    public func show(mode: SwitcherMode, activateApp: Bool? = nil) {
         currentMode = mode
-        if mode == .launcher {
+        let shouldActivate = activateApp ?? (mode == .launcher)
+        didActivateAppForCurrentSession = shouldActivate
+        if shouldActivate {
             // キャンセル時に元アプリへフォーカスを戻せるよう直前アプリを記録する
             let frontmost = NSWorkspace.shared.frontmostApplication
             if frontmost?.bundleIdentifier != Bundle.main.bundleIdentifier {
@@ -138,8 +145,8 @@ public final class SwitcherPanel: NSPanel {
 
         // 表示中のウィンドウクローズ等で高さが変わった際に上端位置を維持するため両モードで上端座標を記録する
         anchoredTopY = frame.maxY
-        if mode == .launcher {
-            // 日本語 IME 変換ウィンドウおよび入力ソース切替を確実に機能させるため一時的にアクティブ化する
+        if shouldActivate {
+            // 日本語 IME 変換やセキュア入力解除のため一時的に自アプリをアクティブ化する
             NSApplication.shared.activate()
         }
 
@@ -185,6 +192,7 @@ public final class SwitcherPanel: NSPanel {
         let appToRestore = restorePreviousApp ? previousFrontmostApp : nil
         anchoredTopY = nil
         previousFrontmostApp = nil
+        didActivateAppForCurrentSession = false
         currentMode = .inactive
 
         orderOut(nil)
@@ -195,9 +203,9 @@ public final class SwitcherPanel: NSPanel {
     /// - Parameter mode: 復元対象の現在モード
     public func restoreFocusIfNeeded(mode: SwitcherMode) {
         guard isVisible, currentMode == mode, mode != .inactive else { return }
-        if mode == .launcher {
-            // ランチャーモードではキーボード入力を受け付けるためアプリ自体も最前面へ戻す
-            NSApp.activate(ignoringOtherApps: true)
+        if mode == .launcher || didActivateAppForCurrentSession {
+            // アクティブ表示セッション中はキーボード入力を受け付けるためアプリ自体も最前面へ戻す
+            NSApplication.shared.activate()
         }
         orderFrontRegardless()
         makeKey()

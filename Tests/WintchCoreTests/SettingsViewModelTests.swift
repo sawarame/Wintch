@@ -245,4 +245,32 @@ struct SettingsViewModelTests {
         defaults?.set("invalid-style", forKey: "dev.wintch.normalDisplayStyle")
         #expect(store.loadNormalDisplayStyle() == .list)
     }
+
+    /// ショートカット記録開始〜確定・キャンセルの前後で監視サスペンド状態と更新通知が正しく同期されることを検証する
+    @Test("ショートカット記録の開始と確定で監視サスペンド解除およびショートカット更新が行われる")
+    @MainActor
+    func recordingLifecycleSuspendsAndResumesHotKeyMonitor() {
+        let store = MockPreferencesStore()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let viewModel = SettingsViewModel(
+            preferencesStore: store,
+            hotKeyMonitor: hotKeyMonitor,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            permissionService: MockAccessibilityPermissionService()
+        )
+
+        #expect(hotKeyMonitor.isSuspendedForRecording == false)
+        viewModel.beginRecordingNormalShortcut()
+        #expect(hotKeyMonitor.isSuspendedForRecording == true)
+
+        let nextShortcut = ShortcutPreference(modifier: .control, trigger: .tab)
+        viewModel.recordNormalShortcut(nextShortcut)
+        #expect(hotKeyMonitor.isSuspendedForRecording == false)
+        #expect(hotKeyMonitor.updatedShortcuts.last == nextShortcut)
+
+        viewModel.beginRecordingLauncherShortcut()
+        #expect(hotKeyMonitor.isSuspendedForRecording == true)
+        viewModel.cancelRecordingLauncherShortcut()
+        #expect(hotKeyMonitor.isSuspendedForRecording == false)
+    }
 }

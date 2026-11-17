@@ -124,6 +124,9 @@ public final class SwitcherViewModel {
     /// 表示セッションを識別する世代カウンタ（非同期クローズ復帰時のセッション跨ぎ防止用）
     private var presentationGeneration: Int = 0
 
+    /// 現在の表示セッションで自アプリの一時アクティブ化を行うべきかどうか
+    public private(set) var shouldActivateAppForCurrentSession: Bool = false
+
     /// ウィンドウ取得・アクティブ化サービス
     private let windowService: any WindowServicing
     /// グローバルホットキー監視サービス
@@ -471,6 +474,7 @@ public final class SwitcherViewModel {
         displayedAppResults = []
         selectedIndex = initial ?? 0
         presentationGeneration += 1
+        shouldActivateAppForCurrentSession = targetMode == .launcher || hotKeyMonitor.requiresAppActivationOnPresentation
         mode = targetMode
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
 
@@ -525,6 +529,7 @@ public final class SwitcherViewModel {
         installedAppsRefreshTask = nil
         captureRefreshTask?.cancel()
         captureRefreshTask = nil
+        shouldActivateAppForCurrentSession = false
         mode = .inactive
         hotKeyMonitor.activeMode = .inactive
         allEntries = []
