@@ -18,8 +18,8 @@ struct AppWindowProfileTests {
         #expect(unknownProfile.hiddenBackingSignatures.isEmpty)
     }
 
-    /// 登録済みアプリ（システム設定・メモ）の個別プロファイルが正しく解決されることを検証する
-    @Test("システム設定およびメモアプリの個別プロファイルを正しく解決する")
+    /// 登録済みアプリ（システム設定・メモ・Google Chrome）の個別プロファイルが正しく解決されることを検証する
+    @Test("システム設定・メモ・Google Chromeの個別プロファイルを正しく解決する")
     func registeredProfilesResolveExpectedPolicies() {
         let settingsProfile = AppWindowProfileRegistry.profile(for: "com.apple.systempreferences")
         #expect(settingsProfile.bundleIdentifier == "com.apple.systempreferences")
@@ -33,6 +33,11 @@ struct AppWindowProfileTests {
                 HiddenBackingWindowSignature(width: 475, height: 600, requiresZeroOriginX: false)
             )
         )
+
+        let chromeProfile = AppWindowProfileRegistry.profile(for: "com.google.Chrome")
+        #expect(chromeProfile.bundleIdentifier == "com.google.Chrome")
+        #expect(chromeProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
+        #expect(chromeProfile.hiddenBackingSignatures.isEmpty)
     }
 
     /// 共通 500x500 シグネチャとメモ固有 475x600 シグネチャが安全ガード付きで一致判定されることを検証する

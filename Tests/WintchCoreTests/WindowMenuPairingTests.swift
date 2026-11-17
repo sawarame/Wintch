@@ -509,6 +509,93 @@ struct WindowMenuPairingTests {
         #expect(result[1].title == "新しいタブ")
     }
 
+    /// needsMenuEnrichment が有効な cg-* 候補およびタイトル空の標準 AX 候補（別スペースの「新しいタブ」等）を検知し、
+    /// かつメニュー項目が 0 件のアプリ（PWA 等）でも cgWindowName から空タイトル AX 候補が補完されることを検証する
+    @Test("needsMenuEnrichment が空タイトル標準AX候補を検知しメニュー0件時もcgWindowNameで補完する")
+    func needsMenuEnrichmentDetectsEmptyTitleAXAndFallbackEnrichesFromCGName() {
+        let emptyTitleAX = makeCandidate(
+            id: "ax-1109-newtab",
+            pid: 1109,
+            title: "",
+            cgWindowName: "新しいタブ",
+            hasAXInfo: true,
+            subrole: "AXStandardWindow",
+            width: 1920,
+            height: 958,
+            zOrder: 10
+        )
+        let titledAX = makeCandidate(
+            id: "ax-1109-titled",
+            pid: 1109,
+            title: "GitHub",
+            cgWindowName: "GitHub",
+            hasAXInfo: true,
+            subrole: "AXStandardWindow",
+            width: 1920,
+            height: 958,
+            zOrder: 11
+        )
+        let floatingEmptyAX = makeCandidate(
+            id: "ax-1109-float",
+            pid: 1109,
+            title: "",
+            cgWindowName: "Palette",
+            hasAXInfo: true,
+            subrole: "AXFloatingWindow",
+            width: 400,
+            height: 300,
+            zOrder: 12
+        )
+        let validCGCandidate = makeCandidate(
+            id: "cg-1109-offspace",
+            pid: 1109,
+            title: nil,
+            cgWindowName: "Docs",
+            hasAXInfo: false,
+            width: 1200,
+            height: 800,
+            zOrder: 20
+        )
+        let invalidStripCG = makeCandidate(
+            id: "cg-1109-strip",
+            pid: 1109,
+            title: nil,
+            cgWindowName: "",
+            hasAXInfo: false,
+            width: 1920,
+            height: 40,
+            zOrder: 1
+        )
+
+        #expect(WindowMenuCandidatePairing.needsMenuEnrichment(emptyTitleAX) == true)
+        #expect(WindowMenuCandidatePairing.needsMenuEnrichment(validCGCandidate) == true)
+        #expect(WindowMenuCandidatePairing.needsMenuEnrichment(titledAX) == false)
+        #expect(WindowMenuCandidatePairing.needsMenuEnrichment(floatingEmptyAX) == false)
+        #expect(WindowMenuCandidatePairing.needsMenuEnrichment(invalidStripCG) == false)
+
+        // メニュー項目が 0 件（PWA 等）でも、標準 AX 候補の空タイトルに cgWindowName が補完され、
+        // 無名の空き殻 cg-* 候補にはタイトルが付与されないこと
+        let blankShellCG = makeCandidate(
+            id: "cg-377",
+            pid: 1109,
+            title: nil,
+            cgWindowName: "",
+            hasAXInfo: false,
+            width: 1920,
+            height: 1042,
+            zOrder: 5
+        )
+        let fallbackResult = WindowMenuCandidatePairing.applyMenuTitles(
+            to: [emptyTitleAX, blankShellCG],
+            menuItems: []
+        )
+        #expect(fallbackResult.count == 2)
+        #expect(fallbackResult[0].id == "ax-1109-newtab")
+        #expect(fallbackResult[0].title == "新しいタブ")
+        #expect(fallbackResult[1].id == "cg-377")
+        #expect(fallbackResult[1].title == nil)
+    }
+
     /// テスト用 RawWindowCandidate 生成ヘルパー
     /// - Parameters:
     ///   - id: ウィンドウ識別子

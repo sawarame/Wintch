@@ -1788,4 +1788,72 @@ struct SwitcherViewModelTests {
         #expect(captureVM.thumbnail(for: captureVM.entries[0]) === existingImage)
         #expect(captureVM.thumbnail(for: captureVM.entries[1]) == nil)
     }
+
+    /// Google Chrome のタブ・ウィンドウをすべて閉じて画面外の無名空き殻 CGWindow のみが残っている状態では、
+    /// 通常スイッチャーおよび検索ランチャーの双方で Chrome の空ウィンドウが表示されず、ランチャーでは起動候補になることを検証する
+    @Test("Chromeの全ウィンドウ閉鎖後は空の表示が残らずランチャーではアプリ起動候補として扱われる")
+    @MainActor
+    func chromeWithAllWindowsClosedDoesNotShowEmptyGhostInSwitcherOrLauncher() {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                displayName: "Google Chrome",
+                bundleIdentifier: "com.google.Chrome",
+                bundleURL: URL(fileURLWithPath: "/Applications/Google Chrome.app")
+            )
+        ]
+
+        // Chrome のウィンドウ全閉後に残る無名空き殻 CGWindow と、別アプリの有効ウィンドウ 1 件
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "ax-vscode-1",
+                cgWindowID: 101,
+                pid: 1465,
+                bundleIdentifier: "com.microsoft.VSCode",
+                applicationName: "Code",
+                title: "README.md — Wintch",
+                isOnScreen: true
+            ),
+            RawWindowCandidate(
+                id: "cg-377",
+                cgWindowID: 377,
+                pid: 1109,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                cgWindowName: "",
+                bounds: WindowBounds(x: 0, y: 38, width: 1920, height: 1042),
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService,
+            normalDisplayStyle: .capture
+        )
+
+        // 1. 通常スイッチャー起動時：Chrome の空表示は含まれず VS Code の 1 件のみ
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.entries.map(\.id) == ["ax-vscode-1"])
+        viewModel.cancel()
+
+        // 2. 検索ランチャー起動時：ウィンドウ一覧に Chrome はなく、検索するとアプリ起動候補に Google Chrome が現れる
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.entries.map(\.id) == ["ax-vscode-1"])
+        viewModel.updateSearchQuery("chrome")
+        #expect(viewModel.entries.isEmpty)
+        #expect(viewModel.displayedAppResults.map(\.app.bundleIdentifier) == ["com.google.Chrome"])
+        viewModel.cancel()
+    }
 }

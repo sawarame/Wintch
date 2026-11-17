@@ -409,14 +409,19 @@ public final class WindowService: WindowServicing {
 
         // キャッシュ上の AXUIElement と現在スペース在籍状況を確認し、MRU 時刻を更新する
         var targetAX: AXUIElement?
-        var isPresentInCurrentSpace = false
+        var isPresentInLatestAXScan = false
         if var list = cachedWindowsByPID[entry.pid],
            let idx = list.firstIndex(where: { $0.id == entry.id }) {
             list[idx].lastActivatedAt = now
             targetAX = list[idx].axElement
-            isPresentInCurrentSpace = list[idx].isPresentInLatestAXScan
+            isPresentInLatestAXScan = list[idx].isPresentInLatestAXScan
             cachedWindowsByPID[entry.pid] = list
         }
+        let isPresentInCurrentSpace = Self.isWindowInCurrentSpace(
+            isPresentInLatestAXScan: isPresentInLatestAXScan,
+            isOnScreen: entry.isOnScreen,
+            isMinimized: entry.isMinimized
+        )
 
         // AX 未取得（別スペースの cg-* 候補）または現在スペース不在時は「ウィンドウ」メニュー項目からの直接切り替えを実行する
         let needsMenuNavigation = (targetAX == nil) || !isPresentInCurrentSpace
@@ -829,6 +834,7 @@ public final class WindowService: WindowServicing {
         guard !snapshots.isEmpty else {
             if !existing.isEmpty {
                 cachedWindowsByPID[pid] = existing
+                cachedWindowMenuByPID.removeValue(forKey: pid)
             }
             return
         }
@@ -873,6 +879,9 @@ public final class WindowService: WindowServicing {
 
         // 同一スペースの AX 通知由来で姿を消した旧タブ候補がある場合のみ、独立 CGWindow の生存確認を伴って整理する
         let hasDisappearedCandidates = existing.contains { !$0.isPresentInLatestAXScan && $0.role == "AXWindow" }
+        if hasDisappearedCandidates {
+            cachedWindowMenuByPID.removeValue(forKey: pid)
+        }
         let screenBounds = currentDisplayBounds()
         let activeWindowEntries = existing.filter {
             $0.isPresentInLatestAXScan && $0.role == "AXWindow" && $0.subrole != nil
@@ -971,25 +980,23 @@ public final class WindowService: WindowServicing {
     private func cleanupClosedWindows(cgEntriesByPID: [Int32: [(zOrder: Int, info: CGWindowMeta)]]) {
         for (pid, list) in cachedWindowsByPID {
             let pidCGEntries = cgEntriesByPID[pid] ?? []
+            let survivingCGWindowIDs = Set(pidCGEntries.map { $0.info.windowID })
             let hasSubstantialCGWindow = pidCGEntries.contains { entry in
                 Self.allowedCGWindowLayers.contains(entry.info.layer)
                     && entry.info.bounds.width >= 200
                     && entry.info.bounds.height >= 165
             }
             let filtered = list.filter { cached in
-                // AX 属性にアクセスできれば生存している（または別スペースにある）
                 Self.applyMessagingTimeout(to: cached.axElement)
                 var roleRef: CFTypeRef?
                 let err = AXUIElementCopyAttributeValue(cached.axElement, kAXRoleAttribute as CFString, &roleRef)
-                if err == .success {
-                    return true
-                }
-                guard err == .cannotComplete else { return false }
-                // AX が一時的に応答できない場合は、対応 CGWindow または通常サイズのウィンドウが残っている時だけ保持する
-                if let knownID = cached.cgWindowID {
-                    return pidCGEntries.contains { $0.info.windowID == knownID }
-                }
-                return hasSubstantialCGWindow
+                return Self.shouldRetainCachedAXWindow(
+                    isPresentInLatestAXScan: cached.isPresentInLatestAXScan,
+                    knownCGWindowID: cached.cgWindowID,
+                    axRoleCheckResult: err,
+                    survivingCGWindowIDs: survivingCGWindowIDs,
+                    hasSubstantialCGWindow: hasSubstantialCGWindow
+                )
             }
             if filtered.isEmpty {
                 cachedWindowsByPID.removeValue(forKey: pid)
@@ -997,6 +1004,39 @@ public final class WindowService: WindowServicing {
                 cachedWindowsByPID[pid] = filtered
             }
         }
+    }
+
+    /// キャッシュ済み AX ウィンドウが現在も生存しており保持すべきかを純粋ロジックで判定する
+    /// - Parameters:
+    ///   - isPresentInLatestAXScan: 直近の AX スキャン（現在スペースおよびフォーカス/メイン補完）で捕捉されたか
+    ///   - knownCGWindowID: 前回までに照合・確定していた CGWindowID（未確定時は nil）
+    ///   - axRoleCheckResult: 対象 AXUIElement の `kAXRoleAttribute` 読み取り結果
+    ///   - survivingCGWindowIDs: 現在システム上に生存している該当 PID の CGWindowID 集合
+    ///   - hasSubstantialCGWindow: 該当 PID に通常サイズ以上の有効レイヤー CGWindow が残存しているか
+    /// - Returns: キャッシュに保持し続ける場合は true、閉鎖済みとして破棄する場合は false
+    nonisolated static func shouldRetainCachedAXWindow(
+        isPresentInLatestAXScan: Bool,
+        knownCGWindowID: UInt32?,
+        axRoleCheckResult: AXError,
+        survivingCGWindowIDs: Set<UInt32>,
+        hasSubstantialCGWindow: Bool
+    ) -> Bool {
+        // 直近の AX スキャンに存在せず、かつ前回確定していた対応 CGWindowID が WindowServer 上から消滅している場合は、
+        // 閉じられたウィンドウが裏方の空き殻 CGWindow に乗り換えてゾンビ化するのを防ぐため即座に破棄する
+        if !isPresentInLatestAXScan,
+           let knownID = knownCGWindowID,
+           !survivingCGWindowIDs.contains(knownID) {
+            return false
+        }
+        if axRoleCheckResult == .success {
+            return true
+        }
+        guard axRoleCheckResult == .cannotComplete else { return false }
+        // AX が一時的に応答できない場合は、対応 CGWindow または（最新 AX スキャンで捕捉済みのときのみ）通常サイズのウィンドウが残っている時だけ保持する
+        if let knownID = knownCGWindowID {
+            return survivingCGWindowIDs.contains(knownID)
+        }
+        return isPresentInLatestAXScan && hasSubstantialCGWindow
     }
 
     /// キャッシュ済み AX ウィンドウに対応する CGWindow を位置・サイズ・表示状態・履歴連続性・包含比較で特定する
@@ -1475,8 +1515,20 @@ public final class WindowService: WindowServicing {
         if notification == kAXUIElementDestroyedNotification {
             if var list = cachedWindowsByPID[pid] {
                 list.removeAll { CFEqual($0.axElement, element) }
-                cachedWindowsByPID[pid] = list
+                if list.isEmpty {
+                    cachedWindowsByPID.removeValue(forKey: pid)
+                } else {
+                    cachedWindowsByPID[pid] = list
+                }
             }
+            // ウィンドウ破棄直後に古いメニュー項目キャッシュ（TTL 2.0秒）が裏方 CGWindow へ割り当てられるのを防ぐ
+            cachedWindowMenuByPID.removeValue(forKey: pid)
+            scheduleBackgroundRefresh(
+                for: pid,
+                markFrontmostAsActive: false,
+                debounce: Self.focusChangeDebounceDuration,
+                allowDisplaySpanningReplacement: true
+            )
             return
         }
 
@@ -1542,6 +1594,27 @@ public final class WindowService: WindowServicing {
             allowDisplaySpanningReplacement: allowDisplaySpanningReplacement,
             screenBounds: screenBounds
         )
+    }
+
+    /// 対象ウィンドウが現在の操作スペース上に在籍しているかを純粋ロジックで判定する
+    /// - Parameters:
+    ///   - isPresentInLatestAXScan: 直近の AX スキャン（`kAXFocusedWindow` 等の別スペース補完を含む）に含まれたか
+    ///   - isOnScreen: CoreGraphics 照合上の画面表示状態（別スペース時は false）
+    ///   - isMinimized: 最小化状態かどうか
+    /// - Returns: 現在スペース上のウィンドウとして直接前面化できる場合は true、別スペース遷移が必要な場合は false
+    nonisolated static func isWindowInCurrentSpace(
+        isPresentInLatestAXScan: Bool,
+        isOnScreen: Bool?,
+        isMinimized: Bool
+    ) -> Bool {
+        guard isPresentInLatestAXScan else {
+            return false
+        }
+        // kAXFocusedWindowAttribute 等で AX 捕捉されていても、非最小化かつ isOnScreen == false なら別スペースにある
+        if isOnScreen == false && !isMinimized {
+            return false
+        }
+        return true
     }
 
     /// ウィンドウアクティブ化時の実行計画を純粋ロジックで決定する
@@ -1762,14 +1835,14 @@ public final class WindowService: WindowServicing {
 
     // MARK: - 「ウィンドウ」メニュー補完ヘルパー
 
-    /// AX で未捕捉の CGWindow 補完候補（別スペース等）を含む PID に対して、アプリの「ウィンドウ」メニューからタイトルを補完する
+    /// AX で未捕捉の CGWindow 補完候補（別スペース等）またはタイトル空の標準 AX 候補を含む PID に対して、アプリの「ウィンドウ」メニューからタイトルを補完する
     /// - Parameter candidates: 構築済みの生ウィンドウ候補一覧
     /// - Returns: タイトル補完および余剰ゴースト候補整理済みの候補一覧
     private func enrichCandidatesWithWindowMenu(_ candidates: [RawWindowCandidate]) -> [RawWindowCandidate] {
-        // 実質サイズを持ちスイッチャー対象となり得る cg-* 候補が存在する PID のみ対象とする
+        // 実質サイズを持ちスイッチャー対象となり得る cg-* 候補、またはタイトル空の標準 AX 候補が存在する PID のみ対象とする
         let targetPIDs = Set(
             candidates.compactMap { candidate -> Int32? in
-                guard !candidate.hasAXInfo, WindowFilter.isValid(candidate) else { return nil }
+                guard WindowMenuCandidatePairing.needsMenuEnrichment(candidate) else { return nil }
                 return candidate.pid
             }
         )
@@ -1798,13 +1871,12 @@ public final class WindowService: WindowServicing {
             processedPIDs.insert(pid)
 
             let group = candidatesByPID[pid] ?? []
-            if targetPIDs.contains(pid),
-               let menuState = cachedWindowMenuByPID[pid],
-               !menuState.items.isEmpty {
+            if targetPIDs.contains(pid) {
+                let menuSnapshots = cachedWindowMenuByPID[pid]?.items.map(\.snapshot) ?? []
                 enriched.append(
                     contentsOf: WindowMenuCandidatePairing.applyMenuTitles(
                         to: group,
-                        menuItems: menuState.items.map(\.snapshot)
+                        menuItems: menuSnapshots
                     )
                 )
             } else {

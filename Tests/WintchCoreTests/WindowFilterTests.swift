@@ -951,4 +951,97 @@ struct WindowFilterTests {
             "cg-onscreen-500"
         ])
     }
+
+    /// Google Chrome のタブ・ウィンドウをすべて閉じた後（アプリ未終了）に画面外に残存する
+    /// 無名空き殻 CGWindow（1920x1042 等）や予測変換ポップアップ（1344x378 等）が除外されて 0 件になり、
+    /// 一方で別スペースのメニュー確定済みウィンドウや実 AX ウィンドウは保持されることを検証する
+    @Test("Google Chrome全閉後の画面外無名空き殻CGWindowを除外し実ウィンドウのみ保持する")
+    func chromeExcludesBlankOffscreenShellsWhenAllWindowsClosedAndKeepsRealWindows() {
+        let blankFullscreenShell = RawWindowCandidate(
+            id: "cg-377",
+            cgWindowID: 377,
+            pid: 1109,
+            bundleIdentifier: "com.google.Chrome",
+            applicationName: "Google Chrome",
+            title: nil,
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 38, width: 1920, height: 1042),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 16
+        )
+        let omniboxPopup = RawWindowCandidate(
+            id: "cg-76",
+            cgWindowID: 76,
+            pid: 1109,
+            bundleIdentifier: "com.google.Chrome",
+            applicationName: "Google Chrome",
+            title: nil,
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 99, y: 26, width: 1344, height: 378),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 31
+        )
+
+        // 1. すべてのタブ・ウィンドウを閉じた待機状態 -> 0 件
+        let allClosedResult = WindowFilter.filterAndMap([blankFullscreenShell, omniboxPopup])
+        #expect(allClosedResult.isEmpty)
+
+        // 2. 複数ウィンドウのうち 1 枚を閉じて実ウィンドウ 1 枚（AX またはメニュー確定タイトル付き）が残っている状態 -> 実ウィンドウのみ
+        let survivingAXWindow = RawWindowCandidate(
+            id: "ax-1109-main",
+            cgWindowID: 58,
+            pid: 1109,
+            bundleIdentifier: "com.google.Chrome",
+            applicationName: "Google Chrome",
+            title: "Issues · sawarame/Wintch - Google Chrome",
+            cgWindowName: "Issues · sawarame/Wintch",
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axRole: "AXWindow",
+            axSubrole: "AXStandardWindow",
+            hasAXInfo: true,
+            isOnScreen: false,
+            zOrderIndex: 82
+        )
+        let survivingMenuPairedCG = RawWindowCandidate(
+            id: "cg-409",
+            cgWindowID: 409,
+            pid: 1109,
+            bundleIdentifier: "com.google.Chrome",
+            applicationName: "Google Chrome",
+            title: "新しいタブ",
+            cgWindowName: "新しいタブ",
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 122, width: 1920, height: 958),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 87
+        )
+
+        let screenBounds = [WindowBounds(x: 0, y: 0, width: 1920, height: 1080)]
+        let partialClosedResult = WindowFilter.filterAndMap(
+            [blankFullscreenShell, omniboxPopup, survivingAXWindow, survivingMenuPairedCG],
+            screenBounds: screenBounds
+        )
+        #expect(partialClosedResult.map(\.id) == ["ax-1109-main", "cg-409"])
+    }
 }
