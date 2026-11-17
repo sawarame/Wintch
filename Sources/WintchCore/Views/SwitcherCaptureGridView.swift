@@ -9,7 +9,10 @@ public struct SwitcherCaptureGridView: View {
     private let onContentSizeChanged: ((CGSize) -> Void)?
 
     /// 権限未許可バナー表示時の最小パネル幅
-    private static let minWidthWithBanner: CGFloat = 360
+    public static let minWidthWithBanner: CGFloat = 360
+
+    /// 画面収録権限が未許可のときに表示する案内メッセージ
+    public static let permissionBannerMessage = "画面収録権限が未許可のためプレースホルダーを表示しています"
 
     /// キャプチャグリッドビューを初期化する
     /// - Parameters:
@@ -93,26 +96,18 @@ public struct SwitcherCaptureGridView: View {
         }
     }
 
-    /// 画面収録権限が未許可のときに表示するコンパクトな案内バナー
-    private var permissionBannerView: some View {
+    /// 画面収録権限が未許可のときに表示するコンパクトな案内バナー（ホールド操作中にクリック不能な設定リンクは設けない）
+    var permissionBannerView: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.orange)
 
-            Text("画面収録権限が未許可のためプレースホルダーを表示しています")
+            Text(Self.permissionBannerMessage)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 4)
-
-            Button("設定を開く") {
-                viewModel.openScreenRecordingSettings()
-            }
-            .buttonStyle(.link)
-            .font(.system(size: 11.5, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, SwitcherGridLayout.gridPadding)
         .padding(.vertical, 9)

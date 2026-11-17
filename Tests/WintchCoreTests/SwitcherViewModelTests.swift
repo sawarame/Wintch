@@ -1050,8 +1050,8 @@ struct SwitcherViewModelTests {
     }
 
     /// 画面収録権限が未許可の状態でキャプチャ表示型を起動してもクラッシュせず、
-    /// 権限未許可フラグとプレースホルダーで切り替え継続でき、設定遷移やランチャー非介入・セッション保護・リスト復帰が動作することを検証する
-    @Test("権限未許可フォールバック・設定遷移・ランチャー非介入・セッション跨ぎ破棄・リスト復帰キャッシュ消去")
+    /// 権限未許可フラグとプレースホルダーで切り替え継続でき、設定画面自動遷移を行わずランチャー非介入・セッション保護・リスト復帰が動作することを検証する
+    @Test("権限未許可フォールバック・設定非遷移・ランチャー非介入・セッション跨ぎ破棄・リスト復帰キャッシュ消去")
     @MainActor
     func captureStyleFallbackSessionSafetyAndOptInIsolation() async {
         let windowService = MockWindowService()
@@ -1089,14 +1089,14 @@ struct SwitcherViewModelTests {
         #expect(viewModel.isPresented == false)
         #expect(windowService.activatedWindows.map(\.id) == ["w2"])
 
-        // 2. パネル上の設定導線から画面収録設定を開くと安全にキャンセルして設定を開く
-        var openSettingsNotified = 0
-        viewModel.onOpenScreenRecordingSettingsRequested = { openSettingsNotified += 1 }
+        // 2. 権限未許可でキャプチャ表示型を開いて Esc キャンセルしても、システム設定遷移や権限要求は行われない
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
-        viewModel.openScreenRecordingSettings()
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.isScreenRecordingGranted == false)
+        viewModel.handleHotKeyEvent(.escapePressed)
         #expect(viewModel.isPresented == false)
-        #expect(screenRecordingService.openSystemSettingsCallCount == 1)
-        #expect(openSettingsNotified == 1)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 0)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
 
         // 3. キャプチャ表示型設定中でも、検索ランチャー起動時は画面収録権限の確認もキャプチャ取得も行わない
         let statusCountBeforeLauncher = screenRecordingService.currentStatusCallCount

@@ -9,7 +9,7 @@
 
 **Purpose**: 既存コードとテストのベースラインを確認し、修正対象箇所を確定する。
 
-- [ ] T001 変更前ベースライン確認として `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、現行コードのテスト状態を確認する（`Sources/WintchCore/Views/SwitcherCaptureGridView.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`）
+- [X] T001 変更前ベースライン確認として `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、現行コードのテスト状態を確認する（`Sources/WintchCore/Views/SwitcherCaptureGridView.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`）
 
 ---
 
@@ -21,10 +21,10 @@
 
 ### Implementation & Tests for User Story 1
 
-- [ ] T002 [US1] `Sources/WintchCore/Views/SwitcherCaptureGridView.swift` の `permissionBannerView` から `Button("設定を開く")`（`.buttonStyle(.link)`）および `Spacer(minLength: 4)` を削除し、定数 `permissionBannerMessage` を定義して `.fixedSize(horizontal: false, vertical: true)` と `.frame(maxWidth: .infinity, alignment: .leading)` による非インタラクティブ・非省略レイアウトへ更新する
-- [ ] T003 [US1] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` からスイッチャーパネル専用で不要となった `onOpenScreenRecordingSettingsRequested` プロパティおよび `openScreenRecordingSettings()` メソッドを削除する
-- [ ] T004 [P] [US1] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` の `captureStyleFallbackSessionSafetyAndOptInIsolation()` から削除対象 `openScreenRecordingSettings()` 呼び出し部分を整理し、未許可状態でのフォールバック表示・ウィンドウ切り替え・ランチャー非介入の検証を維持する
-- [ ] T005 [P] [US1] `Tests/WintchCoreTests/SwitcherCaptureGridViewTests.swift` を新規作成し、`isScreenRecordingGranted == false` の状態で `NSHostingView` にホストした際にクリック可能な `NSButton`（設定リンク）が生成されないこと、最小幅 `360pt` 以上で正の `fittingSize` を持つこと、および `isScreenRecordingGranted == true` 時はバナー分だけ高さが抑えられることを検証する
+- [X] T002 [US1] `Sources/WintchCore/Views/SwitcherCaptureGridView.swift` の `permissionBannerView` から `Button("設定を開く")`（`.buttonStyle(.link)`）および `Spacer(minLength: 4)` を削除し、定数 `permissionBannerMessage` を定義して `.fixedSize(horizontal: false, vertical: true)` と `.frame(maxWidth: .infinity, alignment: .leading)` による非インタラクティブ・非省略レイアウトへ更新する
+- [X] T003 [US1] `Sources/WintchCore/ViewModels/SwitcherViewModel.swift` からスイッチャーパネル専用で不要となった `onOpenScreenRecordingSettingsRequested` プロパティおよび `openScreenRecordingSettings()` メソッドを削除する
+- [X] T004 [P] [US1] `Tests/WintchCoreTests/SwitcherViewModelTests.swift` の `captureStyleFallbackSessionSafetyAndOptInIsolation()` から削除対象 `openScreenRecordingSettings()` 呼び出し部分を整理し、未許可状態でのフォールバック表示・ウィンドウ切り替え・ランチャー非介入の検証を維持する
+- [X] T005 [P] [US1] `Tests/WintchCoreTests/SwitcherCaptureGridViewTests.swift` を新規作成し、`isScreenRecordingGranted == false` の状態で `NSHostingView` にホストした際にクリック可能な `NSButton`（設定リンク）が生成されないこと、最小幅 `360pt` 以上で正の `fittingSize` を持つこと、および `isScreenRecordingGranted == true` 時はバナー分だけ高さが抑えられることを検証する
 
 **Checkpoint**: User Story 1 の実装およびテストが単体で完結・パスする状態。
 
@@ -38,7 +38,7 @@
 
 ### Verification for User Story 2
 
-- [ ] T006 [US2] `Sources/WintchCore/Views/SettingsView.swift` および `Tests/WintchCoreTests/SettingsViewModelTests.swift` を確認・実行し、設定画面における画面収録権限の状態表示・権限リクエスト・システム設定を開く動作が従来通りパスすることを確認する
+- [X] T006 [US2] `Sources/WintchCore/Views/SettingsView.swift` および `Tests/WintchCoreTests/SettingsViewModelTests.swift` を確認・実行し、設定画面における画面収録権限の状態表示・権限リクエスト・システム設定を開く動作が従来通りパスすることを確認する
 
 **Checkpoint**: User Story 1 と User Story 2 の双方が独立して検証済み。
 
@@ -48,9 +48,9 @@
 
 **Purpose**: 全体の整合性・日本語ドキュメント規約・全ユニットテスト・アプリビルドの検証を完了する。
 
-- [ ] T007 変更ファイル全体の日本語コメント・SwiftDoc（`///`）規約および Wintch 憲章 v2.0.0 準拠を確認する（`Sources/WintchCore/Views/SwitcherCaptureGridView.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`, `Tests/WintchCoreTests/`）
-- [ ] T008 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、全ユニットテストがエラー・スキップなしでパスすることを確認する
-- [ ] T009 `./scripts/build-app.sh` を実行し、`.build/Wintch.app` のビルドがエラーなく成功することを確認する
+- [X] T007 変更ファイル全体の日本語コメント・SwiftDoc（`///`）規約および Wintch 憲章 v2.0.0 準拠を確認する（`Sources/WintchCore/Views/SwitcherCaptureGridView.swift`, `Sources/WintchCore/ViewModels/SwitcherViewModel.swift`, `Tests/WintchCoreTests/`）
+- [X] T008 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` を実行し、全ユニットテストがエラー・スキップなしでパスすることを確認する
+- [X] T009 `./scripts/build-app.sh` を実行し、`.build/Wintch.app` のビルドがエラーなく成功することを確認する
 
 ---
 
