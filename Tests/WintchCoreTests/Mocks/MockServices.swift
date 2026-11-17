@@ -457,3 +457,16 @@ final class MockInstalledAppService: InstalledAppServicing {
         launchedApps.append(app)
     }
 }
+
+/// テスト用の標準ウィンドウ最前面表示プレゼンターモック
+@MainActor
+final class MockWindowFrontPresenter: WindowFrontPresenting {
+    /// presentFrontmost に渡されたウィンドウの履歴
+    var presentedWindows: [NSWindow] = []
+
+    /// 指定ウィンドウを最前面表示対象として記録する
+    /// - Parameter window: 表示対象の NSWindow
+    func presentFrontmost(_ window: NSWindow) {
+        presentedWindows.append(window)
+    }
+}

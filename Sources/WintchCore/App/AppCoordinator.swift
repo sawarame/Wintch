@@ -42,6 +42,8 @@ public final class AppCoordinator {
     private let screenRecordingPermissionService: any ScreenRecordingPermissionServicing
     /// ウィンドウサムネイルキャプチャサービス
     private let windowCaptureService: any WindowCaptureServicing
+    /// 標準ウィンドウ最前面表示プレゼンター
+    private let windowFrontPresenter: any WindowFrontPresenting
 
     /// フローティングスイッチャーパネル（遅延生成）
     private var switcherPanel: SwitcherPanel?
@@ -83,6 +85,7 @@ public final class AppCoordinator {
     ///   - installedAppService: インストール済みアプリ取得・起動サービス
     ///   - screenRecordingPermissionService: 画面収録権限サービス
     ///   - windowCaptureService: ウィンドウキャプチャサービス
+    ///   - windowFrontPresenter: 標準ウィンドウ最前面表示プレゼンター
     ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
     public init(
         windowService: any WindowServicing,
@@ -94,6 +97,7 @@ public final class AppCoordinator {
         installedAppService: any InstalledAppServicing = InstalledAppService(),
         screenRecordingPermissionService: any ScreenRecordingPermissionServicing = ScreenRecordingPermissionService(),
         windowCaptureService: any WindowCaptureServicing = WindowCaptureService(),
+        windowFrontPresenter: any WindowFrontPresenting = WindowFrontPresenter(),
         appIdentity: AppIdentity = .current
     ) {
         self.appIdentity = appIdentity
@@ -106,6 +110,7 @@ public final class AppCoordinator {
         self.installedAppService = installedAppService
         self.screenRecordingPermissionService = screenRecordingPermissionService
         self.windowCaptureService = windowCaptureService
+        self.windowFrontPresenter = windowFrontPresenter
         self.permissionStatus = permissionService.currentStatus()
 
         let initialDisplayStyle = preferencesStore.loadNormalDisplayStyle()
@@ -160,17 +165,13 @@ public final class AppCoordinator {
     public func openSettings() {
         settingsViewModel.refreshStatus()
         let window = ensureSettingsWindow()
-        NSApplication.shared.activate()
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        windowFrontPresenter.presentFrontmost(window)
     }
 
     /// 「Wintchについて」画面を最前面に表示する
     public func openAbout() {
         let window = ensureAboutWindow()
-        NSApplication.shared.activate()
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        windowFrontPresenter.presentFrontmost(window)
     }
 
     /// アクセシビリティ権限誘導画面を最前面に表示する
@@ -233,9 +234,7 @@ public final class AppCoordinator {
     /// 再帰的な権限再チェックを発火させずに権限誘導ウィンドウを前面表示する
     private func presentPermissionGuideWindow() {
         let window = ensurePermissionWindow()
-        NSApplication.shared.activate()
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        windowFrontPresenter.presentFrontmost(window)
     }
 
     /// 各 ViewModel とサービスのイベントコールバックを接続する

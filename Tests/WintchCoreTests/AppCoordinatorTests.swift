@@ -182,4 +182,77 @@ struct AppCoordinatorTests {
         #expect(releaseCoordinator.appIdentity.isDevelopment == false)
         #expect(releaseCoordinator.appIdentity.settingsWindowTitle == "Wintch 設定")
     }
+
+    /// メニューバーからの設定画面・「Wintchについて」画面表示が WindowFrontPresenting を通じて実行され、
+    /// 同一ウィンドウインスタンスを再利用することを検証する
+    @Test("openSettings と openAbout は設定済みウィンドウを最前面表示プレゼンターへ委譲する")
+    @MainActor
+    func openSettingsAndAboutDelegateToWindowFrontPresenter() {
+        let presenter = MockWindowFrontPresenter()
+        let coordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            preferencesStore: MockPreferencesStore(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            windowFrontPresenter: presenter
+        )
+
+        coordinator.openSettings()
+        #expect(presenter.presentedWindows.count == 1)
+        let firstSettingsWindow = presenter.presentedWindows[0]
+        #expect(firstSettingsWindow.title == coordinator.appIdentity.settingsWindowTitle)
+        #expect(firstSettingsWindow.isReleasedWhenClosed == false)
+
+        // 再実行時は同一ウィンドウを再利用して再度最前面表示を要求する
+        coordinator.openSettings()
+        #expect(presenter.presentedWindows.count == 2)
+        #expect(presenter.presentedWindows[1] === firstSettingsWindow)
+
+        // 「〜について」画面も同一プレゼンターを経由する
+        coordinator.openAbout()
+        #expect(presenter.presentedWindows.count == 3)
+        let aboutWindow = presenter.presentedWindows[2]
+        #expect(aboutWindow.title == coordinator.appIdentity.aboutMenuTitle)
+        #expect(aboutWindow.isReleasedWhenClosed == false)
+    }
+
+    /// 権限誘導画面が未許可時のみ最前面表示プレゼンターへ委譲され、権限許可済み時は表示されないことを検証する
+    @Test("openPermissionGuide と権限剥奪検知時のみ権限誘導ウィンドウを最前面表示する")
+    @MainActor
+    func permissionGuideDelegatesToWindowFrontPresenterOnlyWhenDenied() {
+        let permissionService = MockAccessibilityPermissionService()
+        permissionService.stubbedStatus = .granted
+        let presenter = MockWindowFrontPresenter()
+
+        let coordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: permissionService,
+            preferencesStore: MockPreferencesStore(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            windowFrontPresenter: presenter
+        )
+
+        coordinator.start()
+        // 権限許可済み時は openPermissionGuide() を呼んでも誘導画面を表示しない
+        coordinator.openPermissionGuide()
+        #expect(presenter.presentedWindows.isEmpty)
+
+        // 権限剥奪を検知すると権限誘導ウィンドウを最前面表示する
+        permissionService.simulateStatusChange(.denied)
+        #expect(presenter.presentedWindows.count == 1)
+        let guideWindow = presenter.presentedWindows[0]
+        #expect(guideWindow.title == coordinator.appIdentity.permissionGuideWindowTitle)
+        #expect(guideWindow.isReleasedWhenClosed == false)
+
+        // メニューバーから権限誘導画面を再表示した際も同一ウィンドウで最前面表示する
+        coordinator.openPermissionGuide()
+        #expect(presenter.presentedWindows.count == 2)
+        #expect(presenter.presentedWindows[1] === guideWindow)
+    }
 }
