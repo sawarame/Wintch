@@ -555,4 +555,113 @@ struct WindowCaptureAndMatchingTests {
         #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 1, height: 1)) == true)
         #expect(WindowCaptureService.isValidCapturedImageSize(CGSize(width: 432, height: 270)) == true)
     }
+
+    /// shouldRetainCachedAXWindow が閉鎖済みで対応 CGWindowID を失った非現在スキャン要素を確実に破棄し、
+    /// 別スペースに生存しているウィンドウや現在スキャン捕捉済みウィンドウを保持することを検証する
+    @Test("shouldRetainCachedAXWindow は対応CGWindowIDが消滅した閉鎖済みキャッシュを破棄し別スペース生存窓を保持する")
+    func shouldRetainCachedAXWindowEvictsClosedWindowWhoseCGWindowDisappeared() {
+        // 1. 今回の AX スキャンに不在で、かつ前回確定していた knownCGWindowID(58) が消滅している場合は、
+        //    たとえ AXRole 読み取りが一時的に .success を返しても閉鎖済みとして破棄し、空き殻 (377) への乗り換えを防ぐ
+        #expect(
+            WindowService.shouldRetainCachedAXWindow(
+                isPresentInLatestAXScan: false,
+                knownCGWindowID: 58,
+                axRoleCheckResult: .success,
+                survivingCGWindowIDs: [377, 76],
+                hasSubstantialCGWindow: true
+            ) == false
+        )
+
+        // 2. 別スペースに存在し、対応する knownCGWindowID(58) が現在も生存している場合は保持する
+        #expect(
+            WindowService.shouldRetainCachedAXWindow(
+                isPresentInLatestAXScan: false,
+                knownCGWindowID: 58,
+                axRoleCheckResult: .success,
+                survivingCGWindowIDs: [58, 377],
+                hasSubstantialCGWindow: true
+            ) == true
+        )
+        #expect(
+            WindowService.shouldRetainCachedAXWindow(
+                isPresentInLatestAXScan: false,
+                knownCGWindowID: 58,
+                axRoleCheckResult: .cannotComplete,
+                survivingCGWindowIDs: [58],
+                hasSubstantialCGWindow: true
+            ) == true
+        )
+
+        // 3. 最新スキャン不在かつ knownCGWindowID 未確定で .cannotComplete となった要素は、裏方 CGWindow だけでは延命しない
+        #expect(
+            WindowService.shouldRetainCachedAXWindow(
+                isPresentInLatestAXScan: false,
+                knownCGWindowID: nil,
+                axRoleCheckResult: .cannotComplete,
+                survivingCGWindowIDs: [377],
+                hasSubstantialCGWindow: true
+            ) == false
+        )
+
+        // 4. 最新スキャンで捕捉されている要素は .cannotComplete でも実質 CGWindow があれば保持し、.invalidUIElement は破棄する
+        #expect(
+            WindowService.shouldRetainCachedAXWindow(
+                isPresentInLatestAXScan: true,
+                knownCGWindowID: nil,
+                axRoleCheckResult: .cannotComplete,
+                survivingCGWindowIDs: [58],
+                hasSubstantialCGWindow: true
+            ) == true
+        )
+        #expect(
+            WindowService.shouldRetainCachedAXWindow(
+                isPresentInLatestAXScan: true,
+                knownCGWindowID: 58,
+                axRoleCheckResult: .invalidUIElement,
+                survivingCGWindowIDs: [58],
+                hasSubstantialCGWindow: true
+            ) == false
+        )
+    }
+
+    /// isWindowInCurrentSpace が kAXFocusedWindow 等で別スペースから AX 捕捉された非最小化オフスクリーンウィンドウを
+    /// 現在スペース不在（false）と正しく判定し、現在スペース表示中や最小化ウィンドウを true と判定することを検証する
+    @Test("isWindowInCurrentSpace は別スペースのフォーカス補完AX窓を現在スペース不在と判定する")
+    func isWindowInCurrentSpaceDistinguishesOffspaceFocusedAXWindow() {
+        // 1. 現在スペース上に表示中の AX ウィンドウ -> true
+        #expect(
+            WindowService.isWindowInCurrentSpace(
+                isPresentInLatestAXScan: true,
+                isOnScreen: true,
+                isMinimized: false
+            ) == true
+        )
+
+        // 2. kAXFocusedWindowAttribute 等で捕捉されたが isOnScreen == false かつ非最小化（別スペース在籍） -> false
+        #expect(
+            WindowService.isWindowInCurrentSpace(
+                isPresentInLatestAXScan: true,
+                isOnScreen: false,
+                isMinimized: false
+            ) == false
+        )
+
+        // 3. 最小化中の AX ウィンドウ（isOnScreen == false でも最小化解除で現在スペース復帰可能） -> true
+        #expect(
+            WindowService.isWindowInCurrentSpace(
+                isPresentInLatestAXScan: true,
+                isOnScreen: false,
+                isMinimized: true
+            ) == true
+        )
+
+        // 4. 最新 AX スキャンで未捕捉 -> false
+        #expect(
+            WindowService.isWindowInCurrentSpace(
+                isPresentInLatestAXScan: false,
+                isOnScreen: true,
+                isMinimized: false
+            ) == false
+        )
+    }
 }

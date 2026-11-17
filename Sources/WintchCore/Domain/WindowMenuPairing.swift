@@ -127,6 +127,20 @@ public enum WindowMenuExtractor {
 
 /// 同一 PID 内の生ウィンドウ候補（AX 取得済み＋CGWindow 補完）と Window メニュー項目を対応付ける純粋ロジック
 public enum WindowMenuCandidatePairing {
+    /// 指定された候補が「ウィンドウ」メニューまたは CGWindow 名からのタイトル補完を必要とするか判定する
+    /// - Parameter candidate: 判定対象の生ウィンドウ候補
+    /// - Returns: メニュー補完対象に含めるべき候補であれば true
+    public static func needsMenuEnrichment(_ candidate: RawWindowCandidate) -> Bool {
+        guard WindowFilter.isValid(candidate) else {
+            return false
+        }
+        if !candidate.hasAXInfo {
+            return true
+        }
+        // 別スペース等で kAXTitleAttribute が空文字列を返す標準 AX ウィンドウもメニュー／CGWindow 名補完の対象とする
+        return isMenuTrackedAXWindow(candidate) && trimmedNonEmpty(candidate.title) == nil
+    }
+
     /// 同一 PID に属する生ウィンドウ候補へ Window メニューのタイトルを補完適用し、余剰なゴースト CGWindow 候補を整理する
     /// - Parameters:
     ///   - candidates: 同一 PID の生ウィンドウ候補一覧（hasAXInfo == true と false が混在可）
@@ -136,9 +150,17 @@ public enum WindowMenuCandidatePairing {
         to candidates: [RawWindowCandidate],
         menuItems: [WindowMenuItemSnapshot]
     ) -> [RawWindowCandidate] {
-        // Window メニューからウィンドウ一覧が取得できないアプリでは既存候補を変更せず返す
+        // Window メニューからウィンドウ一覧が取得できないアプリ（または 0 件時）でも、
+        // タイトルが空の標準 AX 候補に非空の cgWindowName があればタイトルを補完して返す
         guard !menuItems.isEmpty else {
-            return candidates
+            return candidates.map { candidate in
+                guard isMenuTrackedAXWindow(candidate),
+                      trimmedNonEmpty(candidate.title) == nil,
+                      let cgName = trimmedNonEmpty(candidate.cgWindowName) else {
+                    return candidate
+                }
+                return replacingTitle(of: candidate, with: cgName)
+            }
         }
 
         var axCandidates: [RawWindowCandidate] = []

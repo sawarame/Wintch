@@ -133,6 +133,12 @@ public enum AppWindowProfileRegistry {
                 )
             ],
             rationale: "メモアプリはウインドウメニューに makeKeyAndOrderFront: 一覧を持たず、未表示の 475x600 / 500x500 補助 CGWindow を保持するため、AX またはメニュー確定タイトルを持つ実ウィンドウのみを残す"
+        ),
+        "com.google.Chrome": AppWindowProfile(
+            bundleIdentifier: "com.google.Chrome",
+            offscreenCGPolicy: .requireAXOrMenuTitle,
+            hiddenBackingSignatures: [],
+            rationale: "Google Chrome は全タブ・全ウィンドウ閉鎖後も画面外に無名の空き殻 CGWindow（フルスクリーン残骸や予測変換ポップアップ等）を保持するため、AX またはウィンドウメニュー等でタイトルが確定した実ウィンドウのみを許可する"
         )
     ]
 
