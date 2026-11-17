@@ -18,28 +18,39 @@ struct SwitcherListViewTests {
     ) -> SwitcherViewModel {
         let windowService = MockWindowService()
         let now = Date()
-        windowService.stubbedCandidates = (0..<windowCount).map { index in
-            RawWindowCandidate(
+        var candidates: [RawWindowCandidate] = []
+        candidates.reserveCapacity(windowCount)
+        for index in 0..<windowCount {
+            // macOS 15 ランナー上の Swift コンパイラで型推論がタイムアウトしないよう式を分割する
+            let offsetSeconds = TimeInterval(-index * 10)
+            let candidate = RawWindowCandidate(
                 id: "win-\(index)",
                 cgWindowID: UInt32(1000 + index),
                 pid: Int32(100 + index),
                 bundleIdentifier: "com.example.win\(index)",
                 applicationName: "SampleApp\(index)",
                 title: "Document Window \(index)",
-                lastActivatedAt: now.addingTimeInterval(TimeInterval(-index * 10))
+                lastActivatedAt: now.addingTimeInterval(offsetSeconds)
             )
+            candidates.append(candidate)
         }
+        windowService.stubbedCandidates = candidates
 
         let installedAppService = MockInstalledAppService()
-        installedAppService.stubbedApps = (0..<appCount).map { index in
-            LaunchableApp(
-                id: "/Applications/SampleLaunch\(index).app",
+        var apps: [LaunchableApp] = []
+        apps.reserveCapacity(appCount)
+        for index in 0..<appCount {
+            let bundlePath = "/Applications/SampleLaunch\(index).app"
+            let app = LaunchableApp(
+                id: bundlePath,
                 displayName: "SampleLaunch\(index)",
                 alternateName: "Sample",
                 bundleIdentifier: "com.example.launch\(index)",
-                bundleURL: URL(fileURLWithPath: "/Applications/SampleLaunch\(index).app")
+                bundleURL: URL(fileURLWithPath: bundlePath)
             )
+            apps.append(app)
         }
+        installedAppService.stubbedApps = apps
 
         return SwitcherViewModel(
             windowService: windowService,
