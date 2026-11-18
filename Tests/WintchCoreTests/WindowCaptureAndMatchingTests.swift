@@ -664,4 +664,103 @@ struct WindowCaptureAndMatchingTests {
             ) == false
         )
     }
+
+    /// shouldEmitCachedAXWindow が、最新 AX スキャンに不在かつ WindowServer 上の対応 CGWindow も消滅した閉鎖済みキャッシュを除外し、
+    /// 現在スペース捕捉済みまたは別スペースに生存 CGWindow が存在するキャッシュのみを保持することを検証する
+    @Test("shouldEmitCachedAXWindow はAX不在かつ生存CGWindow無しの閉鎖済みキャッシュを出力しない")
+    func shouldEmitCachedAXWindowExcludesNonExistentClosedWindow() {
+        // 1. 最新 AX スキャンに不在かつ照合できた生存 CGWindow も無い場合は閉鎖済みとして除外する
+        #expect(
+            WindowService.shouldEmitCachedAXWindow(
+                isPresentInLatestAXScan: false,
+                resolvedCGWindowID: nil
+            ) == false
+        )
+
+        // 2. 別スペース等に生存中の対応 CGWindow が確認できた場合は保持・出力する
+        #expect(
+            WindowService.shouldEmitCachedAXWindow(
+                isPresentInLatestAXScan: false,
+                resolvedCGWindowID: 511
+            ) == true
+        )
+
+        // 3. 最新 AX スキャンで現在スペース上に捕捉されている場合は保持・出力する
+        #expect(
+            WindowService.shouldEmitCachedAXWindow(
+                isPresentInLatestAXScan: true,
+                resolvedCGWindowID: nil
+            ) == true
+        )
+    }
+
+    /// selectBestCGWindowMatch が通常ウィンドウ（非フローティング）に対して、
+    /// Figma の 400x600（layer=3, isOnscreen=false）のようなオフスクリーン非通常レイヤー補助窓を
+    /// 近接照合および包含フォールバックのいずれでも誤照合しないことを検証する
+    @Test("selectBestCGWindowMatch は通常ウィンドウに対してオフスクリーンlayer=3補助窓を誤照合しない")
+    func selectBestCGWindowMatchDoesNotMatchOffscreenFloatingBackingWindowForStandardWindow() {
+        let figmaBacking400 = (
+            zOrder: 0,
+            info: WindowService.CGWindowMeta(
+                windowID: 432,
+                pid: 14934,
+                layer: 3,
+                bounds: CGRect(x: 760, y: 208, width: 400, height: 600),
+                alpha: 1.0,
+                isOnscreen: false,
+                name: "Figma"
+            )
+        )
+        let figmaTopStrip = (
+            zOrder: 1,
+            info: WindowService.CGWindowMeta(
+                windowID: 427,
+                pid: 14934,
+                layer: 0,
+                bounds: CGRect(x: 0, y: 0, width: 1920, height: 30),
+                alpha: 1.0,
+                isOnscreen: false,
+                name: ""
+            )
+        )
+
+        // 1. 近接距離内（同矩形 400x600）にあっても非フローティング通常ウィンドウなら照合しない
+        let proximityBlocked = WindowService.selectBestCGWindowMatch(
+            axBounds: CGRect(x: 760, y: 208, width: 400, height: 600),
+            axTitle: "Design File — Figma",
+            isMinimized: false,
+            preferOnscreen: false,
+            preferredCGWindowID: nil,
+            allowOffscreenNonZeroLayer: false,
+            in: [figmaBacking400, figmaTopStrip],
+            excluding: []
+        )
+        #expect(proximityBlocked == nil)
+
+        // 2. 包含関係（800x600 の通常ウィンドウ内に 400x600 補助窓が収まるケース）でも誤照合しない
+        let containmentBlocked = WindowService.selectBestCGWindowMatch(
+            axBounds: CGRect(x: 560, y: 208, width: 800, height: 600),
+            axTitle: "Design File — Figma",
+            isMinimized: false,
+            preferOnscreen: false,
+            preferredCGWindowID: nil,
+            allowOffscreenNonZeroLayer: false,
+            in: [figmaBacking400, figmaTopStrip],
+            excluding: []
+        )
+        #expect(containmentBlocked == nil)
+
+        // 3. フローティングサブロール（allowOffscreenNonZeroLayer: true）であれば近接照合できる
+        let floatingAllowed = WindowService.selectBestCGWindowMatch(
+            axBounds: CGRect(x: 760, y: 208, width: 400, height: 600),
+            axTitle: "Palette",
+            isMinimized: false,
+            preferOnscreen: false,
+            preferredCGWindowID: nil,
+            allowOffscreenNonZeroLayer: true,
+            in: [figmaBacking400],
+            excluding: []
+        )
+        #expect(floatingAllowed?.info.windowID == 432)
+    }
 }
