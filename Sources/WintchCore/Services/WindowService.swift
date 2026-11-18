@@ -306,23 +306,41 @@ public final class WindowService: WindowServicing {
                 }
             }
 
+            var retainedList: [CachedAXWindow] = []
+            retainedList.reserveCapacity(updatedList.count)
+
             for index in updatedList.indices {
                 let cached = updatedList[index]
                 let matchedCG = matchedCGByIndex[index]
+                let isFloating = Self.isFloatingAXSubrole(cached.subrole)
 
-                // 座標が取得できない不可視・非ウィンドウ要素はダミーサイズで補完せず除外する
-                guard let rect = cached.bounds ?? matchedCG?.info.bounds else { continue }
                 let resolvedCGID: UInt32?
                 if let matchedID = matchedCG?.info.windowID {
                     resolvedCGID = matchedID
                 } else if let oldID = cached.cgWindowID,
                           !matchedCGWindowIDs.contains(oldID),
-                          pidCGEntries.contains(where: { $0.info.windowID == oldID }) {
+                          pidCGEntries.contains(where: { entry in
+                              entry.info.windowID == oldID
+                                  && (isFloating || entry.info.layer == 0 || entry.info.isOnscreen)
+                          }) {
                     matchedCGWindowIDs.insert(oldID)
                     resolvedCGID = oldID
                 } else {
                     resolvedCGID = nil
                 }
+
+                // 最新 AX スキャンに不在かつ WindowServer 上にも生存 CGWindow がない場合は閉鎖済みとみなし破棄する
+                guard Self.shouldEmitCachedAXWindow(
+                    isPresentInLatestAXScan: cached.isPresentInLatestAXScan,
+                    resolvedCGWindowID: resolvedCGID
+                ) else {
+                    continue
+                }
+
+                retainedList.append(cached)
+
+                // 座標が取得できない不可視・非ウィンドウ要素はダミーサイズで補完せず除外する
+                guard let rect = cached.bounds ?? matchedCG?.info.bounds else { continue }
 
                 candidates.append(
                     RawWindowCandidate(
@@ -354,7 +372,11 @@ public final class WindowService: WindowServicing {
                 )
             }
 
-            cachedWindowsByPID[pid] = updatedList
+            if retainedList.isEmpty {
+                cachedWindowsByPID.removeValue(forKey: pid)
+            } else {
+                cachedWindowsByPID[pid] = retainedList
+            }
         }
 
         // 2. Wintch 起動前から別スペースに存在し AX 未キャッシュの CGWindow を補完追加する
@@ -982,7 +1004,7 @@ public final class WindowService: WindowServicing {
             let pidCGEntries = cgEntriesByPID[pid] ?? []
             let survivingCGWindowIDs = Set(pidCGEntries.map { $0.info.windowID })
             let hasSubstantialCGWindow = pidCGEntries.contains { entry in
-                Self.allowedCGWindowLayers.contains(entry.info.layer)
+                (entry.info.layer == 0 || entry.info.isOnscreen)
                     && entry.info.bounds.width >= 200
                     && entry.info.bounds.height >= 165
             }
@@ -1039,6 +1061,25 @@ public final class WindowService: WindowServicing {
         return isPresentInLatestAXScan && hasSubstantialCGWindow
     }
 
+    /// 照合処理後のキャッシュ済み AX ウィンドウ候補が現在も実在し出力・保持すべきかを純粋ロジックで判定する
+    /// - Parameters:
+    ///   - isPresentInLatestAXScan: 直近の AX スキャンで捕捉されたか
+    ///   - resolvedCGWindowID: WindowServer 上で生存が確認できた対応 CGWindowID（未一致時は nil）
+    /// - Returns: 現在スペースの AX または WindowServer 上に実在し候補として出力すべき場合は true
+    nonisolated static func shouldEmitCachedAXWindow(
+        isPresentInLatestAXScan: Bool,
+        resolvedCGWindowID: UInt32?
+    ) -> Bool {
+        isPresentInLatestAXScan || resolvedCGWindowID != nil
+    }
+
+    /// 指定された AX サブロールがフローティングウィンドウ系かを判定する
+    /// - Parameter subrole: 対象の AX サブロール文字列
+    /// - Returns: フローティングウィンドウ系のサブロールであれば true
+    private nonisolated static func isFloatingAXSubrole(_ subrole: String?) -> Bool {
+        subrole == "AXFloatingWindow" || subrole == "AXSystemFloatingWindow"
+    }
+
     /// キャッシュ済み AX ウィンドウに対応する CGWindow を位置・サイズ・表示状態・履歴連続性・包含比較で特定する
     /// - Parameters:
     ///   - cached: キャッシュ済み AX ウィンドウ情報
@@ -1059,6 +1100,7 @@ public final class WindowService: WindowServicing {
             isMinimized: cached.isMinimized,
             preferOnscreen: cached.isPresentInLatestAXScan && !cached.isMinimized,
             preferredCGWindowID: cached.cgWindowID,
+            allowOffscreenNonZeroLayer: Self.isFloatingAXSubrole(cached.subrole),
             in: entries,
             excluding: excludedIDs
         )
@@ -1071,6 +1113,7 @@ public final class WindowService: WindowServicing {
     ///   - isMinimized: AX 上の最小化状態
     ///   - preferOnscreen: 現在スペース上で捕捉済みであり画面表示中 CGWindow を優先するか
     ///   - preferredCGWindowID: 前回照合されていた CGWindow ID（任意）
+    ///   - allowOffscreenNonZeroLayer: オフスクリーンの非通常レイヤー（layer != 0）候補との照合を許可するか
     ///   - entries: 該当 PID の CGWindow 情報一覧
     ///   - excludedIDs: 既に照合済みのウィンドウ ID セット
     /// - Returns: 最も一致する CGWindow とその Z オーダー順（見つからない場合は nil）
@@ -1080,12 +1123,22 @@ public final class WindowService: WindowServicing {
         isMinimized: Bool,
         preferOnscreen: Bool,
         preferredCGWindowID: UInt32?,
+        allowOffscreenNonZeroLayer: Bool = false,
         in entries: [(zOrder: Int, info: CGWindowMeta)],
         excluding excludedIDs: Set<UInt32>
     ) -> (zOrder: Int, info: CGWindowMeta)? {
-        let available = entries.filter {
-            !excludedIDs.contains($0.info.windowID)
-                && allowedCGWindowLayers.contains($0.info.layer)
+        let available = entries.filter { entry in
+            guard !excludedIDs.contains(entry.info.windowID),
+                  allowedCGWindowLayers.contains(entry.info.layer),
+                  entry.info.bounds.width >= 50,
+                  entry.info.bounds.height >= 50 else {
+                return false
+            }
+            // 通常ウィンドウに対してオフスクリーンのフローティング補助窓（Figma の 400x600 等）を誤照合しない
+            if !allowOffscreenNonZeroLayer && entry.info.layer != 0 && !entry.info.isOnscreen {
+                return false
+            }
+            return true
         }
 
         // 1. 許容誤差 40pt 以内で、最小距離 + 4pt 以内の候補から可視状態・タイトル一致・連続性・Z オーダーを含めて最良を選出する
@@ -1127,6 +1180,9 @@ public final class WindowService: WindowServicing {
         }
 
         let containmentMatch = available.compactMap { entry -> ((zOrder: Int, info: CGWindowMeta), Double)? in
+            if !allowOffscreenNonZeroLayer && entry.info.layer != 0 {
+                return nil
+            }
             let cgBounds = entry.info.bounds
             let cgArea = Double(cgBounds.width * cgBounds.height)
             guard cgArea > 0 else { return nil }
