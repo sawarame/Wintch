@@ -139,6 +139,19 @@ public enum AppWindowProfileRegistry {
             offscreenCGPolicy: .requireAXOrMenuTitle,
             hiddenBackingSignatures: [],
             rationale: "Google Chrome は全タブ・全ウィンドウ閉鎖後も画面外に無名の空き殻 CGWindow（フルスクリーン残骸や予測変換ポップアップ等）を保持するため、AX またはウィンドウメニュー等でタイトルが確定した実ウィンドウのみを許可する"
+        ),
+        "com.figma.Desktop": AppWindowProfile(
+            bundleIdentifier: "com.figma.Desktop",
+            offscreenCGPolicy: .requireAXOrMenuTitle,
+            hiddenBackingSignatures: [
+                // Figma が全ウィンドウ閉鎖後も画面中央付近に未表示で保持する 400x600 の内部補助ウィンドウ
+                HiddenBackingWindowSignature(
+                    width: 400.0,
+                    height: 600.0,
+                    requiresZeroOriginX: false
+                )
+            ],
+            rationale: "Figma は全ウィンドウ閉鎖後も画面外に未表示の 400x600 補助 CGWindow 等を保持するため、AX またはウィンドウメニュー等でタイトルが確定した実ウィンドウのみを許可する"
         )
     ]
 
