@@ -596,6 +596,64 @@ struct WindowMenuPairingTests {
         #expect(fallbackResult[1].title == nil)
     }
 
+    /// Figma で別スペースに通常ウィンドウ（layer=0）が存在し、同時に未表示の 400x600 フローティング補助窓（layer=3, cgWindowName="Figma"）が
+    /// Z オーダー上位に残存していても、補助窓がメニュータイトルを横取りせず通常ウィンドウにタイトルが付与されることを検証する
+    @Test("Figmaの未表示フローティング補助窓が存在しても別スペースの通常ウィンドウへ正しくタイトルを割り当てる")
+    func excludesFigmaHiddenFloatingFromMenuPairingAndPreservesRealOffspaceWindow() {
+        let figmaHiddenFloating = RawWindowCandidate(
+            id: "cg-175",
+            cgWindowID: 175,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: nil,
+            cgWindowName: "Figma",
+            layer: 3,
+            bounds: WindowBounds(x: 760, y: 208, width: 400, height: 600),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 1
+        )
+        let figmaRealOffspace = RawWindowCandidate(
+            id: "cg-511",
+            cgWindowID: 511,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: nil,
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 120, y: 90, width: 1440, height: 900),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 12
+        )
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "Design File – Figma",
+                identifier: "makeKeyAndOrderFront:",
+                mark: "✓",
+                index: 18
+            )
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(
+            to: [figmaHiddenFloating, figmaRealOffspace],
+            menuItems: menuItems
+        )
+        #expect(result.count == 1)
+        #expect(result[0].id == "cg-511")
+        #expect(result[0].title == "Design File – Figma")
+    }
+
     /// テスト用 RawWindowCandidate 生成ヘルパー
     /// - Parameters:
     ///   - id: ウィンドウ識別子

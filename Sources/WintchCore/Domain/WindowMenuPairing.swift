@@ -308,10 +308,10 @@ public enum WindowMenuCandidatePairing {
     /// - Returns: 比較可能な優先順位タプル
     private static func cgCandidatePriority(_ candidate: RawWindowCandidate) -> (Int, Int, Int, Int, Int) {
         let onScreenPriority = (candidate.isOnScreen == true) ? 0 : 1
-        let hasCGNamePriority = (trimmedNonEmpty(candidate.cgWindowName) != nil) ? 0 : 1
         let layerPriority = (candidate.layer == 0) ? 0 : 1
+        let hasCGNamePriority = (trimmedNonEmpty(candidate.cgWindowName) != nil) ? 0 : 1
         let auxiliaryShapePenalty = isAuxiliaryPopupShape(candidate) ? 1 : 0
-        return (onScreenPriority, hasCGNamePriority, layerPriority, auxiliaryShapePenalty, candidate.zOrderIndex)
+        return (onScreenPriority, layerPriority, hasCGNamePriority, auxiliaryShapePenalty, candidate.zOrderIndex)
     }
 
     /// 選出済み CGWindow 候補群とメニュー項目群を、cgWindowName 一致を優先して 1 対 1 でペアリングする

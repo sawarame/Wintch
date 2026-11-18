@@ -1044,4 +1044,113 @@ struct WindowFilterTests {
         )
         #expect(partialClosedResult.map(\.id) == ["ax-1109-main", "cg-409"])
     }
+
+    /// Figma のウィンドウをすべて閉じた後（アプリ未終了）に画面外へ残存する
+    /// 未表示フローティング補助 CGWindow（layer=3, 400x600）や高さ 30pt バー群が除外されて 0 件になり、
+    /// 汎用アプリでも AX 未捕捉かつ画面外のフローティング補助窓（layer=3）が補完されない一方、
+    /// Figma で実際に開いているウィンドウは保持されることを検証する
+    @Test("Figma全閉後の未表示フローティング補助CGWindowを除外し実ウィンドウのみ保持する")
+    func figmaExcludesHiddenFloatingBackingWindowWhenClosedAndKeepsRealWindows() {
+        let figmaHiddenFloating400 = RawWindowCandidate(
+            id: "cg-175",
+            cgWindowID: 175,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: nil,
+            cgWindowName: "Figma",
+            layer: 3,
+            bounds: WindowBounds(x: 760, y: 208, width: 400, height: 600),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 1
+        )
+        let figmaTopStrip = RawWindowCandidate(
+            id: "cg-172",
+            cgWindowID: 172,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: nil,
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 0, width: 1920, height: 30),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 0
+        )
+        let genericOffscreenFloating = RawWindowCandidate(
+            id: "cg-generic-floating-offscreen",
+            cgWindowID: 9500,
+            pid: 9500,
+            bundleIdentifier: "com.example.electron",
+            applicationName: "ElectronApp",
+            title: nil,
+            cgWindowName: "ElectronApp",
+            layer: 3,
+            bounds: WindowBounds(x: 500, y: 300, width: 420, height: 320),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 2
+        )
+
+        // 1. 全ウィンドウ閉鎖状態では Figma の残骸および未登録アプリの画面外 layer=3 残骸ともに 0 件
+        #expect(WindowFilter.filterAndMap([figmaTopStrip, figmaHiddenFloating400, genericOffscreenFloating]).isEmpty)
+
+        // 2. Figma で通常ウィンドウ（AX 捕捉済み・別スペースメニュー確定済み）が開かれている場合は保持し、裏方 400x600 のみ除外する
+        let figmaAXWindow = RawWindowCandidate(
+            id: "ax-4111-1",
+            cgWindowID: 510,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: "Design System — Figma",
+            cgWindowName: "Design System",
+            layer: 0,
+            bounds: WindowBounds(x: 100, y: 80, width: 1440, height: 900),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axRole: "AXWindow",
+            axSubrole: "AXStandardWindow",
+            hasAXInfo: true,
+            isOnScreen: true,
+            zOrderIndex: 3
+        )
+        let figmaOffspaceWindow = RawWindowCandidate(
+            id: "cg-511",
+            cgWindowID: 511,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: "Prototype — Figma",
+            cgWindowName: "Prototype",
+            layer: 0,
+            bounds: WindowBounds(x: 0, y: 38, width: 1920, height: 1042),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 4
+        )
+        let openResult = WindowFilter.filterAndMap(
+            [figmaTopStrip, figmaHiddenFloating400, figmaAXWindow, figmaOffspaceWindow],
+            screenBounds: [WindowBounds(x: 0, y: 0, width: 1920, height: 1080)]
+        )
+        #expect(openResult.map(\.id) == ["ax-4111-1", "cg-511"])
+    }
 }

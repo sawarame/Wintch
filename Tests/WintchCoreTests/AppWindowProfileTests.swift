@@ -18,8 +18,8 @@ struct AppWindowProfileTests {
         #expect(unknownProfile.hiddenBackingSignatures.isEmpty)
     }
 
-    /// 登録済みアプリ（システム設定・メモ・Google Chrome）の個別プロファイルが正しく解決されることを検証する
-    @Test("システム設定・メモ・Google Chromeの個別プロファイルを正しく解決する")
+    /// 登録済みアプリ（システム設定・メモ・Google Chrome・Figma）の個別プロファイルが正しく解決されることを検証する
+    @Test("システム設定・メモ・Google Chrome・Figmaの個別プロファイルを正しく解決する")
     func registeredProfilesResolveExpectedPolicies() {
         let settingsProfile = AppWindowProfileRegistry.profile(for: "com.apple.systempreferences")
         #expect(settingsProfile.bundleIdentifier == "com.apple.systempreferences")
@@ -38,6 +38,15 @@ struct AppWindowProfileTests {
         #expect(chromeProfile.bundleIdentifier == "com.google.Chrome")
         #expect(chromeProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
         #expect(chromeProfile.hiddenBackingSignatures.isEmpty)
+
+        let figmaProfile = AppWindowProfileRegistry.profile(for: "com.figma.Desktop")
+        #expect(figmaProfile.bundleIdentifier == "com.figma.Desktop")
+        #expect(figmaProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
+        #expect(
+            figmaProfile.hiddenBackingSignatures.contains(
+                HiddenBackingWindowSignature(width: 400, height: 600, requiresZeroOriginX: false)
+            )
+        )
     }
 
     /// 共通 500x500 シグネチャとメモ固有 475x600 シグネチャが安全ガード付きで一致判定されることを検証する
@@ -113,6 +122,36 @@ struct AppWindowProfileTests {
             isOnScreen: false
         )
         #expect(!AppWindowProfileRegistry.isHiddenBackingWindow(otherApp475))
+
+        // Figma 固有：画面中央付近の 400x600 未表示補助ウィンドウに一致し、他アプリには巻き込まれない
+        let figmaAux400 = RawWindowCandidate(
+            id: "cg-figma-400",
+            cgWindowID: 175,
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: nil,
+            cgWindowName: "Figma",
+            layer: 3,
+            bounds: WindowBounds(x: 760, y: 208, width: 400, height: 600),
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false
+        )
+        #expect(AppWindowProfileRegistry.isHiddenBackingWindow(figmaAux400))
+
+        let otherApp400 = RawWindowCandidate(
+            id: "cg-other-400",
+            pid: 889,
+            bundleIdentifier: "com.example.other",
+            applicationName: "Other",
+            title: nil,
+            bounds: WindowBounds(x: 760, y: 208, width: 400, height: 600),
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false
+        )
+        #expect(!AppWindowProfileRegistry.isHiddenBackingWindow(otherApp400))
     }
 
     /// ユーザーが実際に開いているウィンドウ（AX 捕捉済み・画面表示中・タイトル保持）は
@@ -158,5 +197,18 @@ struct AppWindowProfileTests {
             isOnScreen: false
         )
         #expect(!AppWindowProfileRegistry.isHiddenBackingWindow(titled500))
+
+        let figmaOnScreen400 = RawWindowCandidate(
+            id: "cg-figma-onscreen-400",
+            pid: 4111,
+            bundleIdentifier: "com.figma.Desktop",
+            applicationName: "Figma",
+            title: nil,
+            bounds: WindowBounds(x: 760, y: 208, width: 400, height: 600),
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: true
+        )
+        #expect(!AppWindowProfileRegistry.isHiddenBackingWindow(figmaOnScreen400))
     }
 }

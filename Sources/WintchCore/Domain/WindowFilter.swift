@@ -65,6 +65,10 @@ public enum WindowFilter {
             if candidate.isOnScreen == true {
                 return false
             }
+            // AX 未捕捉かつ画面外の非通常レイヤー（フローティング補助窓等）は全ウィンドウ閉鎖後の残骸となり得るため補完しない
+            guard candidate.layer == 0 else {
+                return false
+            }
             return isSubstantialWindowBounds(candidate.bounds)
         }
     }
