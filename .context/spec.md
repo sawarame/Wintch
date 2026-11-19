@@ -165,7 +165,7 @@ macOS 標準の `Command + Tab` がアプリケーション単位の切り替え
 - **SemVer 一元管理と自動リリース（`VERSION` + `.github/workflows/release.yml`）**:
   - ルートの `VERSION` ファイル（現在 `0.2.6`）を唯一のバージョン情報源とし、`MAJOR.MINOR.PATCH` および任意プレリリース識別子（`-<id>`）を許容する。
   - ビルド時に `VERSION` の値と Git コミット数（取得不能時は `1`）がバンドル内 `Info.plist` へ反映される。
-  - `main` への `VERSION` 更新プッシュまたは `v*` タグプッシュ・リリース公開時に、CI（`macos-15`）で `swift test` 実行後、Universal Binary（`arm64` + `x86_64`）ビルド、Developer ID 署名・Apple 公証・Staple、`ditto` による `Wintch-v<VERSION>.zip` 生成、GitHub Release 公開、および（安定版時のみ）`sawarame/homebrew-tap` の Cask 自動更新を実行する。
+  - `main` への `VERSION` 更新プッシュまたは `v*` タグプッシュ・リリース公開時に、CI（`macos-15`）で `swift test` 実行後、Universal Binary（`arm64` + `x86_64`）ビルド、Developer ID 署名・Apple 公証・Staple、`ditto` による `Wintch-v<VERSION>.zip` 生成、および `scripts/build-dmg.sh`（`hdiutil`）による `Wintch.app` と `/Applications` シンボリックリンクを含む `Wintch-v<VERSION>.dmg` 生成・署名・Apple 公証・Staple を実施し、ZIP／DMG 双方を添付して GitHub Release を公開する。さらに安定版時のみ、`Wintch-v<VERSION>.zip` の SHA256 を用いて `sawarame/homebrew-tap` の Cask 自動更新を実行する。
 
 ---
 
