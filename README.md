@@ -53,10 +53,10 @@ brew uninstall --cask wintch
 
 ### GitHub Releases から手動でインストール
 
-1. [Releases](https://github.com/sawarame/Wintch/releases) ページから最新の `Wintch-vX.Y.Z.zip` をダウンロードして展開します。
-2. 展開された `Wintch.app` を `/Applications`（アプリケーション）フォルダへ移動して起動します。
+1. [Releases](https://github.com/sawarame/Wintch/releases) ページから最新の `Wintch-vX.Y.Z.dmg`（または `Wintch-vX.Y.Z.zip`）をダウンロードします。
+2. `Wintch-vX.Y.Z.dmg` を開いて `Wintch.app` を `Applications` フォルダへドラッグ＆ドロップし、起動します（`.zip` を選択した場合は展開した `Wintch.app` を `/Applications` へ移動します）。
 
-*(配布版は Developer ID 署名および Apple 公証済みのため、通常の起動で Gatekeeper 警告は表示されません。初回起動時に案内に従って「アクセシビリティ」権限を許可してください。)*
+*(配布版（`.app`・`.dmg`）は Developer ID 署名および Apple 公証済みのため、通常の起動で Gatekeeper 警告は表示されません。初回起動時に案内に従って「アクセシビリティ」権限を許可してください。)*
 
 ---
 
@@ -75,7 +75,7 @@ brew uninstall --cask wintch
 │   └── swift.md                    # Swift 6.0 コーディング規約
 ├── .github/
 │   └── workflows/
-│       └── release.yml             # テスト・署名・公証・ZIP リリース・Homebrew Tap 更新自動化
+│       └── release.yml             # テスト・署名・公証・ZIP/DMG リリース・Homebrew Tap 更新自動化
 ├── Resources/
 │   ├── Info.plist                  # バンドル情報（LSUIElement / CFBundleIconFile 等）
 │   └── Icons/
@@ -94,7 +94,8 @@ brew uninstall --cask wintch
 ├── Tests/
 │   └── WintchCoreTests/            # Swift Testing ユニットテスト
 └── scripts/
-    └── build-app.sh                # .app バンドル組み立て・バージョン反映・アイコン生成・署名スクリプト
+    ├── build-app.sh                # .app バンドル組み立て・バージョン反映・アイコン生成・署名スクリプト
+    └── build-dmg.sh                # .app バンドルと /Applications リンクを格納した DMG 生成・署名スクリプト
 ```
 
 設計仕様やプロジェクト憲章は [constitution.md](.context/constitution.md) および [spec.md](.context/spec.md) にまとめています。
@@ -143,6 +144,9 @@ open .build/Wintch_dev.app
 
 # Apple Silicon + Intel 対応の Universal Binary でビルドする場合
 ./scripts/build-app.sh release --universal
+
+# ビルド済み .app バンドルから DMG ディスクイメージを生成する場合
+./scripts/build-dmg.sh
 ```
 
 （`swift run` 単体では `.app` バンドルや `Info.plist` が構成されないため、動作確認は `./scripts/build-app.sh` 経由で `.build/Wintch_dev.app` を起動することを推奨します）
@@ -152,7 +156,7 @@ open .build/Wintch_dev.app
 アプリバージョンはリポジトリルートの [`VERSION`](VERSION) ファイルでセマンティックバージョニング（例: `0.1.0`、`0.2.0-beta.1`）により一元管理しています。
 
 * `./scripts/build-app.sh` 実行時に `VERSION` の値と Git コミット数がバンドル内の `Info.plist`（`CFBundleShortVersionString` / `CFBundleVersion`）へ自動反映されます。
-* `main` ブランチで `VERSION` を更新してプッシュすると、[`.github/workflows/release.yml`](.github/workflows/release.yml) が自動でテストを実行した上で `v<VERSION>` タグを作成し、Universal Binary 版の `.app` に Developer ID 署名・Apple 公証・Staple を行った `Wintch-v<VERSION>.zip` を GitHub Release へ公開し、安定版では Homebrew Tap（`sawarame/homebrew-tap`）も自動更新します（手動での `v*` タグプッシュ・GitHub Release 公開・`workflow_dispatch` にも対応）。
+* `main` ブランチで `VERSION` を更新してプッシュすると、[`.github/workflows/release.yml`](.github/workflows/release.yml) が自動でテストを実行した上で `v<VERSION>` タグを作成し、Universal Binary 版の `.app` に Developer ID 署名・Apple 公証・Staple を行った `Wintch-v<VERSION>.zip` と、同じく署名・公証・Staple を行った `Wintch-v<VERSION>.dmg`（`Wintch.app` と `/Applications` シンボリックリンクを同梱）を GitHub Release へ公開し、安定版では Homebrew Tap（`sawarame/homebrew-tap`）も自動更新します（手動での `v*` タグプッシュ・GitHub Release 公開・`workflow_dispatch` にも対応）。
 
 ### 5. 再ビルド時のアクセシビリティ権限に関する注意
 

@@ -48,14 +48,15 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │   ├── development.md                   # 開発・テスト・ビルド・リリースワークフロー
 │   └── swift.md                         # Swift 6.0 コーディング・並行性・ドキュメント規約
 ├── .github/workflows/
-│   └── release.yml                      # テスト・Universal Build・署名・公証・Release・Homebrew Tap 自動更新
+│   └── release.yml                      # テスト・Universal Build・署名・公証・ZIP/DMG Release・Homebrew Tap 自動更新
 ├── Resources/
 │   ├── Info.plist                       # バンドル情報ベース（LSUIElement / アイコン指定等）
 │   └── Icons/
 │       ├── AppIcon.svg                  # アプリアイコン原画（1024x1024）
 │       └── MenuBarIcon.svg              # メニューバー用テンプレートアイコン（18x18）
 ├── scripts/
-│   └── build-app.sh                     # .app 組み立て・Info.plist 反映・.icns 生成・署名スクリプト
+│   ├── build-app.sh                     # .app 組み立て・Info.plist 反映・.icns 生成・署名スクリプト
+│   └── build-dmg.sh                     # .app と /Applications リンクを格納した DMG 生成・署名スクリプト
 ├── Sources/
 │   ├── Wintch/
 │   │   └── WintchApp.swift              # エントリポイント・AppDelegate・MenuBarExtra

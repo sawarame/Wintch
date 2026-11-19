@@ -196,9 +196,10 @@ jobs:
             exit 1
           fi
 
-      - name: Notarize, staple, and package release ZIP
+      - name: Notarize, staple, and package release ZIP and DMG
         id: package
         env:
+          WINTCH_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
@@ -207,11 +208,9 @@ jobs:
           TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
           NOTARIZE_ZIP="./.build/Wintch-notarize.zip"
           FINAL_ZIP="./.build/Wintch-${TAG_NAME}.zip"
+          FINAL_DMG="./.build/Wintch-${TAG_NAME}.dmg"
           KEY_PATH="${RUNNER_TEMP}/AuthKey.p8"
           trap 'rm -f "${KEY_PATH}" "${NOTARIZE_ZIP}"' EXIT
-
-          # 公証提出用の一時 ZIP を作成する
-          ditto -c -k --keepParent ./.build/Wintch.app "${NOTARIZE_ZIP}"
 
           # App Store Connect API Key を復元して権限を制限する
           printf '%s' "${NOTARY_KEY_BASE64}" | tr -d '[:space:]' | base64 --decode > "${KEY_PATH}"
@@ -225,41 +224,56 @@ jobs:
             NOTARY_AUTH_ARGS+=(--issuer "${NOTARY_ISSUER_ID}")
           fi
 
-          # Apple 公証サーバーへ提出して結果を待機する
-          set +e
-          SUBMIT_JSON="$(xcrun notarytool submit "${NOTARIZE_ZIP}" "${NOTARY_AUTH_ARGS[@]}" --wait --output-format json)"
-          SUBMIT_EXIT=$?
-          set -e
-          echo "${SUBMIT_JSON}"
+          # Apple 公証サーバーへ提出して結果を検証する共通関数
+          submit_and_wait_notary() {
+            local artifact_path="$1"
+            local artifact_label="$2"
+            local submit_json submit_exit parsed_result notary_status submission_id
 
-          PARSED_RESULT="$(SUBMIT_JSON="${SUBMIT_JSON}" python3 -c 'import json, os; d = json.loads(os.environ.get("SUBMIT_JSON") or "{}"); print(d.get("status", "")); print(d.get("id", ""))')"
-          NOTARY_STATUS="$(printf '%s\n' "${PARSED_RESULT}" | sed -n '1p')"
-          SUBMISSION_ID="$(printf '%s\n' "${PARSED_RESULT}" | sed -n '2p')"
+            set +e
+            submit_json="$(xcrun notarytool submit "${artifact_path}" "${NOTARY_AUTH_ARGS[@]}" --wait --output-format json)"
+            submit_exit=$?
+            set -e
+            echo "${submit_json}"
 
-          if [ "${SUBMIT_EXIT}" -ne 0 ] || [ "${NOTARY_STATUS}" != "Accepted" ]; then
-            echo "::error::Apple 公証に失敗しました (status=${NOTARY_STATUS:-unknown}, id=${SUBMISSION_ID:-unknown})。"
-            if [ -n "${SUBMISSION_ID}" ]; then
-              xcrun notarytool log "${SUBMISSION_ID}" "${NOTARY_AUTH_ARGS[@]}" || true
+            parsed_result="$(SUBMIT_JSON="${submit_json}" python3 -c 'import json, os; d = json.loads(os.environ.get("SUBMIT_JSON") or "{}"); print(d.get("status", "")); print(d.get("id", ""))')"
+            notary_status="$(printf '%s\n' "${parsed_result}" | sed -n '1p')"
+            submission_id="$(printf '%s\n' "${parsed_result}" | sed -n '2p')"
+
+            if [ "${submit_exit}" -ne 0 ] || [ "${notary_status}" != "Accepted" ]; then
+              echo "::error::${artifact_label} の Apple 公証に失敗しました (status=${notary_status:-unknown}, id=${submission_id:-unknown})。"
+              if [ -n "${submission_id}" ]; then
+                xcrun notarytool log "${submission_id}" "${NOTARY_AUTH_ARGS[@]}" || true
+              fi
+              exit 1
             fi
-            exit 1
-          fi
+          }
 
-          # チケット反映遅延に備えてリトライしながら Staple を実行する
-          STAPLED="false"
-          for attempt in 1 2 3 4 5; do
-            if xcrun stapler staple ./.build/Wintch.app; then
-              STAPLED="true"
-              break
+          # チケット反映遅延に備えてリトライしながら Staple と検証を実行する共通関数
+          staple_with_retry() {
+            local target_path="$1"
+            local stapled="false"
+
+            for attempt in 1 2 3 4 5; do
+              if xcrun stapler staple "${target_path}"; then
+                stapled="true"
+                break
+              fi
+              echo "stapler staple のリトライを待機しています (${target_path}, ${attempt}/5)..."
+              sleep 10
+            done
+            if [ "${stapled}" != "true" ]; then
+              echo "::error::公証チケットの添付 (stapler staple) に失敗しました (${target_path})。"
+              exit 1
             fi
-            echo "stapler staple のリトライを待機しています (${attempt}/5)..."
-            sleep 10
-          done
-          if [ "${STAPLED}" != "true" ]; then
-            echo "::error::公証チケットの添付 (stapler staple) に失敗しました。"
-            exit 1
-          fi
 
-          xcrun stapler validate ./.build/Wintch.app
+            xcrun stapler validate "${target_path}"
+          }
+
+          # 公証提出用の一時 ZIP を作成して .app を公証・Staple・検証する
+          ditto -c -k --keepParent ./.build/Wintch.app "${NOTARIZE_ZIP}"
+          submit_and_wait_notary "${NOTARIZE_ZIP}" "Wintch.app"
+          staple_with_retry ./.build/Wintch.app
           spctl -a -vvv -t exec ./.build/Wintch.app
 
           # 公証チケット添付済みの最終配布 ZIP と SHA256 を生成する
@@ -268,6 +282,16 @@ jobs:
           echo "Release ZIP SHA256: ${SHA256}"
           echo "sha256=${SHA256}" >> "${GITHUB_OUTPUT}"
 
+          # 公証済み .app を格納した DMG を生成・署名し、DMG 本体も公証・Staple・検証する
+          ./scripts/build-dmg.sh --app ./.build/Wintch.app --output "${FINAL_DMG}" --volname "Wintch"
+          submit_and_wait_notary "${FINAL_DMG}" "Wintch-${TAG_NAME}.dmg"
+          staple_with_retry "${FINAL_DMG}"
+          spctl -a -t open --context context:primary-signature -vvv "${FINAL_DMG}"
+
+          DMG_SHA256="$(shasum -a 256 "${FINAL_DMG}" | awk '{print $1}')"
+          echo "Release DMG SHA256: ${DMG_SHA256}"
+          echo "dmg_sha256=${DMG_SHA256}" >> "${GITHUB_OUTPUT}"
+
       - name: Publish or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -275,13 +299,15 @@ jobs:
           set -euo pipefail
           TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
           ZIP_PATH="./.build/Wintch-${TAG_NAME}.zip"
+          DMG_PATH="./.build/Wintch-${TAG_NAME}.dmg"
 
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
-            gh release upload "${TAG_NAME}" "${ZIP_PATH}" --clobber
+            gh release upload "${TAG_NAME}" "${ZIP_PATH}" "${DMG_PATH}" --clobber
           else
             CREATE_ARGS=(
               "${TAG_NAME}"
               "${ZIP_PATH}"
+              "${DMG_PATH}"
               --target "${{ needs.prepare.outputs.target_sha }}"
               --title "Wintch ${TAG_NAME}"
               --generate-notes

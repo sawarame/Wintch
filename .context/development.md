@@ -42,6 +42,9 @@ open .build/Wintch_dev.app
 
 # Apple Silicon + Intel 対応 Universal Binary でリリースビルド
 ./scripts/build-app.sh release --universal
+
+# ビルド済み Release バンドルから DMG を生成 (.build/Wintch-v<VERSION>.dmg を生成)
+./scripts/build-dmg.sh
 ```
 
 ### 配布版と開発版の識別分離
@@ -82,5 +85,5 @@ open .build/Wintch_dev.app
    - `macos-15` ランナー上での `swift test` 実行
    - `v<VERSION>` タグの自動作成（`main` push 時）
    - Universal Binary ビルド、Developer ID 署名（Hardened Runtime）、Apple 公証（`notarytool`）・Staple
-   - `ditto` による `Wintch-v<VERSION>.zip` 生成および GitHub Release 公開（プレリリース識別子付きの場合は Prerelease 扱い）
-   - 安定版リリース時のみ `sawarame/homebrew-tap` の Homebrew Cask 自動更新 PR／コミット作成
+   - `ditto` による `Wintch-v<VERSION>.zip` 生成、`scripts/build-dmg.sh` による `Wintch-v<VERSION>.dmg`（`Wintch.app` + `/Applications` シンボリックリンク）生成・署名・Apple 公証・Staple、および ZIP／DMG 双方を添付した GitHub Release 公開（プレリリース識別子付きの場合は Prerelease 扱い）
+   - 安定版リリース時のみ `Wintch-v<VERSION>.zip` の SHA256 を用いた `sawarame/homebrew-tap` の Homebrew Cask 自動更新 PR／コミット作成
