@@ -1,176 +1,180 @@
 # Wintch
 
-**Wintch**（Window + Switch）は、macOS 14.0 (Sonoma) 以降向けに設計された、シンプルで軽量な**ウィンドウ単位スイッチャー＆ランチャー**アプリです。
+**English** | [日本語](README.ja.md)
 
-macOS 標準の `Command + Tab` がアプリケーション単位の切り替えであるのに対し、Wintch は同じアプリの複数ウィンドウも含めて、操作スペース（仮想デスクトップ）を横断しながら素早く目的のウィンドウへ切り替えることができます。
+**Wintch** (Window + Switch) is a simple, lightweight **window-based switcher and launcher** designed for macOS 14.0 (Sonoma) and later.
 
----
-
-## 主な特徴
-
-* **最小権限およびオプトインの原則（Privacy by Design）**
-  標準の「リスト型スイッチャー」および「検索ランチャー」では画面収録権限を一切使用せず、アクセシビリティ API（`AXUIElement`）とウィンドウメタデータ（`CGWindowListCopyWindowInfo`）のみで動作します。設定で「キャプチャ表示型」を明示的に選択した場合のみ、オプトインで `ScreenCaptureKit` による一時メモリ上のサムネイルプレビューを利用できます。
-* **通常スイッチャー（デフォルト `Option + Tab`）**
-  操作スペースを横断して通常ウィンドウを直近アクティブ順（MRU）で表示します。修飾キーを押し続けたままトリガーキー（`Shift` 併用で逆順）や矢印キーで選択を移動し、修飾キーを離した瞬間に切り替えます（`Esc` でキャンセル）。
-* **検索ランチャー＆アプリ起動（デフォルト `Option + Space`）**
-  トグル式の検索入力欄からアプリ名・ウィンドウタイトルをスペース区切り AND のファジー検索で絞り込み、ハイライト表示します。検索入力時には未表示のインストール済みアプリケーションを下部に起動候補として併せて表示し、ウィンドウが 0 件の状態でもアプリ起動ランチャーとして起動できます。
-* **選択中ウィンドウ／アプリの終了操作（スイッチャー修飾キー + `Q`）**
-  スイッチャー・ランチャー上から不要なウィンドウを閉じることができます（同じアプリの最後の 1 枚の場合はアプリ自体を通常終了します）。
-* **メニューバー常駐・セキュア入力対応・カスタマイズ**
-  Dock にアイコンを表示しない常駐アプリ（`LSUIElement`）として動作し、パスワード入力欄等のセキュア入力保護下でもショートカットが機能します。設定画面からショートカットのカスタマイズ（競合防止付き）、表示形式切り替え、ログイン時自動起動を設定できます。
-* **外部依存なし・Apple 標準フレームワークのみ**
-  Swift 6.0 / SwiftUI（フローティングパネル制御のみ `NSPanel`）および `@Observable` マクロを採用した MVVM + Services アーキテクチャで構成し、非公開 API（`CGS*` 等）も使用していません。
+While macOS's built-in `Command + Tab` switches between applications, Wintch lets you quickly switch to any specific window across Spaces (virtual desktops), including multiple windows of the same application.
 
 ---
 
-## 動作環境・要件
+## Key Features
 
-* **OS**: macOS 14.0 (Sonoma) 以降
-* **開発ツール**: Swift 6.0 以降（Xcode または Apple Command Line Tools）
-* **必須権限**: macOS「アクセシビリティ」権限
-  * 初回起動時または未許可時は誘導ダイアログが表示され、「システム設定 ＞ プライバシーとセキュリティ ＞ アクセシビリティ」から許可できます。
-* **任意権限**: macOS「画面収録」権限（通常スイッチャーで「キャプチャ表示型」を選択した場合のみ）
+* **Least Privilege & Opt-In (Privacy by Design)**
+  The default **List Switcher** and **Search Launcher** do not use Screen Recording permission at all—they operate solely using the Accessibility API (`AXUIElement`) and window metadata (`CGWindowListCopyWindowInfo`). Only when you explicitly opt into the **Capture Preview** style in Settings does Wintch use `ScreenCaptureKit` to display in-memory thumbnail previews.
+* **Window Switcher (Default: `Option + Tab`)**
+  Displays standard windows across all Spaces in Most Recently Used (MRU) order. Hold the modifier key and press the trigger key (with `Shift` for reverse order) or arrow keys to move the selection, then release the modifier key to switch (press `Esc` to cancel).
+* **Search Launcher & App Launching (Default: `Option + Space`)**
+  Opens a toggleable search panel to filter by application name and window title using space-separated AND fuzzy matching with match highlights. When typing a query, installed applications not already shown in the window list appear below as launch candidates—allowing it to act as an app launcher even when zero windows are open.
+* **Close Selected Window / Quit App (Switcher Modifier + `Q`)**
+  Close unwanted windows directly from the switcher or launcher (if it is the last window of that app, Wintch gracefully quits the application).
+* **Menu Bar Resident, Secure Input Support & Customization**
+  Runs as a background menu bar app (`LSUIElement`) without a Dock icon, and continues to work even under Secure Input protection (e.g., password fields). Customize shortcuts (with bidirectional conflict prevention), switch display styles, and configure Launch at Login from Settings.
+* **Zero External Dependencies & Standard Apple Frameworks Only**
+  Built with Swift 6.0 / SwiftUI (using `NSPanel` solely for floating panel control) and an `@Observable` MVVM + Services architecture, with no third-party dependencies or private APIs (such as `CGS*`).
 
 ---
 
-## インストール方法
+## Requirements
 
-### Homebrew でインストール（推奨）
+* **OS**: macOS 14.0 (Sonoma) or later
+* **Developer Tools**: Swift 6.0 or later (Xcode or Apple Command Line Tools)
+* **Required Permission**: macOS **Accessibility** permission
+  * On first launch or when ungranted, an onboarding prompt guides you to grant access in **System Settings > Privacy & Security > Accessibility**.
+* **Optional Permission**: macOS **Screen Recording** permission (only required if you select the **Capture Preview** style in the Window Switcher)
+
+---
+
+## Installation
+
+### Install via Homebrew (Recommended)
 
 ```bash
 brew install --cask sawarame/tap/wintch
 ```
 
-アップデート・アンインストールする場合は以下のコマンドを実行します。
+To update or uninstall:
 
 ```bash
-# 最新版へアップデート
+# Update to the latest version
 brew upgrade --cask wintch
 
-# アンインストール（設定ファイルも削除する場合は --zap を付与）
+# Uninstall (add --zap to also remove preference files)
 brew uninstall --cask wintch
 ```
 
-### GitHub Releases から手動でインストール
+### Manual Installation from GitHub Releases
 
-1. [Releases](https://github.com/sawarame/Wintch/releases) ページから最新の `Wintch-vX.Y.Z.dmg`（または `Wintch-vX.Y.Z.zip`）をダウンロードします。
-2. `Wintch-vX.Y.Z.dmg` を開いて `Wintch.app` を `Applications` フォルダへドラッグ＆ドロップし、起動します（`.zip` を選択した場合は展開した `Wintch.app` を `/Applications` へ移動します）。
+1. Download the latest `Wintch-vX.Y.Z.dmg` (or `Wintch-vX.Y.Z.zip`) from the [Releases](https://github.com/sawarame/Wintch/releases) page.
+2. Open `Wintch-vX.Y.Z.dmg`, drag and drop `Wintch.app` into the `Applications` folder, and launch it (if you downloaded `.zip`, extract it and move `Wintch.app` to `/Applications`).
 
-*(配布版（`.app`・`.dmg`）は Developer ID 署名および Apple 公証済みのため、通常の起動で Gatekeeper 警告は表示されません。初回起動時に案内に従って「アクセシビリティ」権限を許可してください。)*
+*(Distributed builds (`.app` and `.dmg`) are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper warnings will not appear on launch. Follow the prompt on first launch to grant Accessibility permission.)*
 
 ---
 
-## プロジェクト構成
+## Project Structure
 
 ```text
 .
-├── Package.swift                   # Swift Package 定義（外部依存なし）
-├── VERSION                         # アプリバージョン定義（セマンティックバージョニング）
-├── AGENTS.md                       # AI エージェント・開発者向けプロジェクトガイド
-├── .context/                       # 基礎ドキュメント・仕様書正本・憲章
-│   ├── constitution.md             # プロジェクト憲章（設計原則・制約）
-│   ├── spec.md                     # 全機能の仕様書正本
-│   ├── tech_stack.md               # 技術スタック・ディレクトリ構成
-│   ├── development.md              # 開発・ビルド・リリースワークフロー
-│   └── swift.md                    # Swift 6.0 コーディング規約
+├── Package.swift                   # Swift Package definition (no external dependencies)
+├── VERSION                         # App version definition (Semantic Versioning)
+├── AGENTS.md                       # Project guide for AI agents and developers
+├── README.md                       # Project overview, installation, and local development (English)
+├── README.ja.md                    # Project overview, installation, and local development (Japanese)
+├── .context/                       # Core documentation, canonical specifications, and constitution
+│   ├── constitution.md             # Project constitution (design principles and constraints)
+│   ├── spec.md                     # Canonical specification for all features
+│   ├── tech_stack.md               # Tech stack and directory structure
+│   ├── development.md              # Development, build, and release workflow
+│   └── swift.md                    # Swift 6.0 coding conventions
 ├── .github/
 │   └── workflows/
-│       └── release.yml             # テスト・署名・公証・ZIP/DMG リリース・Homebrew Tap 更新自動化
+│       └── release.yml             # Automated testing, signing, notarization, ZIP/DMG release & Homebrew Tap update
 ├── Resources/
-│   ├── Info.plist                  # バンドル情報（LSUIElement / CFBundleIconFile 等）
+│   ├── Info.plist                  # Bundle configuration (LSUIElement / CFBundleIconFile, etc.)
 │   └── Icons/
-│       ├── AppIcon.svg             # アプリアイコン原画（1024x1024）
-│       └── MenuBarIcon.svg         # メニューバー用テンプレートアイコン（18x18）
+│       ├── AppIcon.svg             # App icon source artwork (1024x1024)
+│       └── MenuBarIcon.svg         # Menu bar template icon (18x18)
 ├── Sources/
 │   ├── Wintch/
-│   │   └── WintchApp.swift         # アプリエントリポイント・MenuBarExtra
+│   │   └── WintchApp.swift         # App entry point & MenuBarExtra
 │   └── WintchCore/
-│       ├── App/                    # AppCoordinator（画面・サービス統括）
-│       ├── Domain/                 # 純粋なビジネスロジック（フィルタ・ソート・検索・選択・プロファイル等）
-│       ├── Services/               # OS API 隔離層（AX / CGWindow / CGEventTap / Carbon / ScreenCaptureKit 等）
-│       │   └── Protocols/          # テスト用モック差し替えプロトコル群
-│       ├── ViewModels/             # @Observable ViewModel 群
-│       └── Views/                  # SwiftUI ビュー & SwitcherPanel (NSPanel)
+│       ├── App/                    # AppCoordinator (screen & service coordination)
+│       ├── Domain/                 # Pure business logic (filtering, sorting, search, selection, profiles, etc.)
+│       ├── Services/               # OS API isolation layer (AX / CGWindow / CGEventTap / Carbon / ScreenCaptureKit, etc.)
+│       │   └── Protocols/          # Protocols for mock injection in tests
+│       ├── ViewModels/             # @Observable ViewModels
+│       └── Views/                  # SwiftUI views & SwitcherPanel (NSPanel)
 ├── Tests/
-│   └── WintchCoreTests/            # Swift Testing ユニットテスト
+│   └── WintchCoreTests/            # Swift Testing unit tests
 └── scripts/
-    ├── build-app.sh                # .app バンドル組み立て・バージョン反映・アイコン生成・署名スクリプト
-    └── build-dmg.sh                # .app バンドルと /Applications リンクを格納した DMG 生成・署名スクリプト
+    ├── build-app.sh                # Script to assemble .app bundle, inject version, generate icons, and sign
+    └── build-dmg.sh                # Script to create and sign a DMG containing the .app bundle and /Applications symlink
 ```
 
-設計仕様やプロジェクト憲章は [constitution.md](.context/constitution.md) および [spec.md](.context/spec.md) にまとめています。
+See [constitution.md](.context/constitution.md) and [spec.md](.context/spec.md) for detailed design specifications and project principles.
 
 ---
 
-## ローカルでの開発方法
+## Local Development
 
-### 1. リポジトリの取得
+### 1. Clone the Repository
 
 ```bash
 git clone <repository-url>
 cd Wintch
 ```
 
-### 2. テストの実行
+### 2. Run Tests
 
-ドメインロジックや ViewModel のユニットテストは Swift Testing で記述されています。
+Unit tests for domain logic and ViewModels are written with Swift Testing.
 
 ```bash
 swift test
 ```
 
 > [!NOTE]
-> `TestingMacros` 関連のビルドエラーが出た場合は、Xcode の Developer ディレクトリ指定またはキャッシュクリーンを行ってから再実行してください。
+> If you encounter build errors related to `TestingMacros`, specify the Xcode Developer directory or clean the build cache before retrying:
 >
 > ```bash
 > DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
-> # または
+> # or
 > swift package clean && swift test
 > ```
 
-### 3. `.app` バンドルのビルドと起動
+### 3. Build and Launch the `.app` Bundle
 
-`swift build` でバイナリを生成し、`AppIcon.svg` からの `.icns` 生成・リソース同梱・署名をまとめて行うスクリプトを用意しています。ローカル開発用（Debug）ビルドは配布版との競合を防ぐため `Wintch_dev.app` として生成されます。
+Scripts are provided to compile the binary with `swift build`, generate `.icns` from `AppIcon.svg`, bundle resources, and code-sign the app. Local development (Debug) builds are output as `Wintch_dev.app` to avoid conflicts with the distributed version.
 
 ```bash
-# Debug ビルド (.build/Wintch_dev.app を生成)
+# Debug build (generates .build/Wintch_dev.app)
 ./scripts/build-app.sh
 
-# ローカル開発版を起動
+# Launch the local development build
 open .build/Wintch_dev.app
 
-# Release ビルド (.build/Wintch.app を生成)
+# Release build (generates .build/Wintch.app)
 ./scripts/build-app.sh release
 
-# Apple Silicon + Intel 対応の Universal Binary でビルドする場合
+# Build as a Universal Binary (Apple Silicon + Intel)
 ./scripts/build-app.sh release --universal
 
-# ビルド済み .app バンドルから DMG ディスクイメージを生成する場合
+# Create a DMG disk image from the built .app bundle
 ./scripts/build-dmg.sh
 ```
 
-（`swift run` 単体では `.app` バンドルや `Info.plist` が構成されないため、動作確認は `./scripts/build-app.sh` 経由で `.build/Wintch_dev.app` を起動することを推奨します）
+*(Since running `swift run` directly does not construct an `.app` bundle or `Info.plist`, we recommend launching `.build/Wintch_dev.app` via `./scripts/build-app.sh` for verification.)*
 
-### 4. バージョニングと自動リリース（GitHub Actions）
+### 4. Versioning and Automated Releases (GitHub Actions)
 
-アプリバージョンはリポジトリルートの [`VERSION`](VERSION) ファイルでセマンティックバージョニング（例: `0.1.0`、`0.2.0-beta.1`）により一元管理しています。
+The app version is centrally managed in the [`VERSION`](VERSION) file at the repository root using Semantic Versioning (e.g., `0.1.0`, `0.2.0-beta.1`).
 
-* `./scripts/build-app.sh` 実行時に `VERSION` の値と Git コミット数がバンドル内の `Info.plist`（`CFBundleShortVersionString` / `CFBundleVersion`）へ自動反映されます。
-* `main` ブランチで `VERSION` を更新してプッシュすると、[`.github/workflows/release.yml`](.github/workflows/release.yml) が自動でテストを実行した上で `v<VERSION>` タグを作成し、Universal Binary 版の `.app` に Developer ID 署名・Apple 公証・Staple を行った `Wintch-v<VERSION>.zip` と、同じく署名・公証・Staple を行った `Wintch-v<VERSION>.dmg`（`Wintch.app` と `/Applications` シンボリックリンクを同梱）を GitHub Release へ公開し、安定版では Homebrew Tap（`sawarame/homebrew-tap`）も自動更新します（手動での `v*` タグプッシュ・GitHub Release 公開・`workflow_dispatch` にも対応）。
+* Running `./scripts/build-app.sh` automatically injects the `VERSION` value and Git commit count into `Info.plist` (`CFBundleShortVersionString` / `CFBundleVersion`) inside the bundle.
+* Updating `VERSION` and pushing to the `main` branch triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which runs tests, creates a `v<VERSION>` tag, builds a Universal Binary `.app`, signs, notarizes, and staples both `Wintch-v<VERSION>.zip` and `Wintch-v<VERSION>.dmg` (containing `Wintch.app` and an `/Applications` symlink), publishes them to GitHub Releases, and—for stable releases—automatically updates the Homebrew Tap (`sawarame/homebrew-tap`). (Manual `v*` tag pushes, GitHub Release publishing, and `workflow_dispatch` are also supported.)
 
-### 5. 再ビルド時のアクセシビリティ権限に関する注意
+### 5. Note on Accessibility Permissions When Rebuilding
 
-`./scripts/build-app.sh` ではローカル開発用にアドホック署名（`codesign --force --deep --sign -`）を使用しています。macOS の仕様上、アドホック署名アプリは**ビルドごとの署名ハッシュ（`cdhash`）で権限が識別**されるため、コードを変更して再ビルドすると「システム設定」一覧上は ON に見えても内部的に権限が外れることがあります。
+`./scripts/build-app.sh` uses ad-hoc code signing (`codesign --force --deep --sign -`) for local development. Because macOS identifies permissions for ad-hoc signed apps by **each build's code signature hash (`cdhash`)**, rebuilding after code changes can silently invalidate the permission even though it still appears enabled in System Settings.
 
-再ビルド後に権限確認画面が表示された場合は、以下の手順で再登録してください。
+If the permission prompt appears after rebuilding, re-register the app as follows:
 
-1. 起動中の `Wintch_dev`（または `Wintch`）を終了する
-2. **「システム設定」＞「プライバシーとセキュリティ」＞「アクセシビリティ」** を開く
-3. 一覧から **「Wintch_dev」を選択し、「`−`」ボタンで一度削除**する（単なる OFF/ON ではなく削除が必要）
-4. 「`＋`」ボタンから `.build/Wintch_dev.app` を追加し直して起動する
+1. Quit the running `Wintch_dev` (or `Wintch`) instance
+2. Open **System Settings > Privacy & Security > Accessibility**
+3. Select **`Wintch_dev`** in the list and **remove it using the `−` button** (toggling it off and back on is not sufficient)
+4. Click the **`＋` button** to re-add `.build/Wintch_dev.app`, then launch it again
 
 ---
 
-## ライセンス
+## License
 
 [MIT License](LICENSE)
