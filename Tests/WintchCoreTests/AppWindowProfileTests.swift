@@ -18,16 +18,18 @@ struct AppWindowProfileTests {
         #expect(unknownProfile.hiddenBackingSignatures.isEmpty)
     }
 
-    /// 登録済みアプリ（システム設定・メモ・Google Chrome・Figma）の個別プロファイルが正しく解決されることを検証する
-    @Test("システム設定・メモ・Google Chrome・Figmaの個別プロファイルを正しく解決する")
+    /// 登録済みアプリ（システム設定・メモ・Google Chrome・Figma・Gemini）の個別プロファイルが正しく解決されることを検証する
+    @Test("システム設定・メモ・Google Chrome・Figma・Geminiの個別プロファイルを正しく解決する")
     func registeredProfilesResolveExpectedPolicies() {
         let settingsProfile = AppWindowProfileRegistry.profile(for: "com.apple.systempreferences")
         #expect(settingsProfile.bundleIdentifier == "com.apple.systempreferences")
         #expect(settingsProfile.offscreenCGPolicy == .singleRepresentativeOnly)
+        #expect(settingsProfile.requiresLiveVerificationWhenOffscreen == false)
 
         let notesProfile = AppWindowProfileRegistry.profile(for: "com.apple.Notes")
         #expect(notesProfile.bundleIdentifier == "com.apple.Notes")
         #expect(notesProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
+        #expect(notesProfile.requiresLiveVerificationWhenOffscreen == false)
         #expect(
             notesProfile.hiddenBackingSignatures.contains(
                 HiddenBackingWindowSignature(width: 475, height: 600, requiresZeroOriginX: false)
@@ -38,15 +40,23 @@ struct AppWindowProfileTests {
         #expect(chromeProfile.bundleIdentifier == "com.google.Chrome")
         #expect(chromeProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
         #expect(chromeProfile.hiddenBackingSignatures.isEmpty)
+        #expect(chromeProfile.requiresLiveVerificationWhenOffscreen == false)
 
         let figmaProfile = AppWindowProfileRegistry.profile(for: "com.figma.Desktop")
         #expect(figmaProfile.bundleIdentifier == "com.figma.Desktop")
         #expect(figmaProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
+        #expect(figmaProfile.requiresLiveVerificationWhenOffscreen == false)
         #expect(
             figmaProfile.hiddenBackingSignatures.contains(
                 HiddenBackingWindowSignature(width: 400, height: 600, requiresZeroOriginX: false)
             )
         )
+
+        let geminiProfile = AppWindowProfileRegistry.profile(for: "com.google.GeminiMacOS")
+        #expect(geminiProfile.bundleIdentifier == "com.google.GeminiMacOS")
+        #expect(geminiProfile.offscreenCGPolicy == .requireAXOrMenuTitle)
+        #expect(geminiProfile.hiddenBackingSignatures.isEmpty)
+        #expect(geminiProfile.requiresLiveVerificationWhenOffscreen == true)
     }
 
     /// 共通 500x500 シグネチャとメモ固有 475x600 シグネチャが安全ガード付きで一致判定されることを検証する

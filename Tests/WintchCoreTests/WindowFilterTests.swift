@@ -1153,4 +1153,115 @@ struct WindowFilterTests {
         )
         #expect(openResult.map(\.id) == ["ax-4111-1", "cg-511"])
     }
+
+    /// Gemini（com.google.GeminiMacOS）のウィンドウを閉じた後（アプリ起動継続中）に画面外へ残存する
+    /// 任意サイズの orderOut 済み無名 CGWindow（1305x988 等）や 500x500 裏方窓が除外されて 0 件になり、
+    /// 一方で現在スペースの AX 実ウィンドウや別スペースのメニュー確定済みウィンドウは保持されることを検証する
+    @Test("Geminiのウィンドウ全閉後に残存する画面外無名CGWindowを除外し開いている実ウィンドウのみ保持する")
+    func geminiExcludesOrderOutOffscreenWindowWhenClosedAndKeepsOpenWindows() {
+        let geminiClosedOrderOutWindow = RawWindowCandidate(
+            id: "cg-1094",
+            cgWindowID: 1094,
+            pid: 6017,
+            bundleIdentifier: "com.google.GeminiMacOS",
+            applicationName: "Gemini",
+            title: nil,
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 34, y: 46, width: 1305, height: 988),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 10
+        )
+        let geminiMiniAuxWindow = RawWindowCandidate(
+            id: "cg-1095",
+            cgWindowID: 1095,
+            pid: 6017,
+            bundleIdentifier: "com.google.GeminiMacOS",
+            applicationName: "Gemini",
+            title: nil,
+            cgWindowName: "",
+            layer: 3,
+            bounds: WindowBounds(x: 474, y: 946, width: 84, height: 77),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 9
+        )
+
+        // 1. 全ウィンドウ閉鎖状態（orderOut 済み通常サイズ窓＋補助窓のみ） -> 0 件
+        #expect(WindowFilter.filterAndMap([geminiMiniAuxWindow, geminiClosedOrderOutWindow]).isEmpty)
+
+        // 2. 現在スペースに実ウィンドウが開いている場合（AX 捕捉済み）と別スペースのメニュー確定窓は保持し、閉鎖済み残骸は除外する
+        let geminiOpenAXWindow = RawWindowCandidate(
+            id: "ax-6017-1",
+            cgWindowID: 1094,
+            pid: 6017,
+            bundleIdentifier: "com.google.GeminiMacOS",
+            applicationName: "Gemini",
+            title: "Gemini",
+            cgWindowName: "Gemini",
+            layer: 0,
+            bounds: WindowBounds(x: 34, y: 46, width: 1305, height: 988),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axRole: "AXWindow",
+            axSubrole: "AXStandardWindow",
+            hasAXInfo: true,
+            isOnScreen: true,
+            zOrderIndex: 1
+        )
+        let geminiOpenOffspaceWindow = RawWindowCandidate(
+            id: "cg-2001",
+            cgWindowID: 2001,
+            pid: 6017,
+            bundleIdentifier: "com.google.GeminiMacOS",
+            applicationName: "Gemini",
+            title: "別チャット",
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 100, y: 80, width: 960, height: 720),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 5
+        )
+        let closedOtherWindow = RawWindowCandidate(
+            id: "cg-2002",
+            cgWindowID: 2002,
+            pid: 6017,
+            bundleIdentifier: "com.google.GeminiMacOS",
+            applicationName: "Gemini",
+            title: nil,
+            cgWindowName: "",
+            layer: 0,
+            bounds: WindowBounds(x: 200, y: 120, width: 900, height: 700),
+            alpha: 1.0,
+            isRegularApplication: true,
+            isSelf: false,
+            axSubrole: nil,
+            hasAXInfo: false,
+            isOnScreen: false,
+            zOrderIndex: 6
+        )
+
+        let openResult = WindowFilter.filterAndMap([
+            geminiMiniAuxWindow,
+            geminiOpenAXWindow,
+            geminiOpenOffspaceWindow,
+            closedOtherWindow
+        ])
+        #expect(openResult.map(\.id) == ["ax-6017-1", "cg-2001"])
+    }
 }

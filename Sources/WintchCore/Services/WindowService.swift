@@ -371,8 +371,29 @@ public final class WindowService: WindowServicing {
             guard let app = appMap[pid] else { continue }
             let isRegular = app.activationPolicy == .regular
             let appName = app.localizedName ?? "不明なアプリ"
+            let profile = AppWindowProfileRegistry.profile(for: app.bundleIdentifier)
             let pidCGEntries = cgEntriesByPID[pid] ?? []
             var updatedList = cachedList
+
+            // 閉鎖時に orderOut 等で CGWindow を残すアプリでは、画面外化した非最小化キャッシュの最新 AX 在籍を確認する
+            if !usesSyncFallback,
+               profile.requiresLiveVerificationWhenOffscreen,
+               !app.isHidden,
+               updatedList.contains(where: { cached in
+                   guard cached.isPresentInLatestAXScan, !cached.isMinimized else { return false }
+                   if let knownID = cached.cgWindowID,
+                      let entry = pidCGEntries.first(where: { $0.info.windowID == knownID }) {
+                       return !entry.info.isOnscreen
+                   }
+                   if let matched = findMatchingCGWindow(for: cached, in: pidCGEntries, excluding: matchedCGWindowIDs) {
+                       return !matched.info.isOnscreen
+                   }
+                   return true
+               }) {
+                refreshAXWindows(for: pid, markFrontmostAsActive: app.isActive)
+                updatedList = cachedWindowsByPID[pid] ?? []
+            }
+
             var matchedCGByIndex: [Int: (zOrder: Int, info: CGWindowMeta)] = [:]
 
             // 現在スペース上でアクティブ捕捉された非最小化ウィンドウを優先して CGWindow と照合し、
@@ -398,6 +419,36 @@ public final class WindowService: WindowServicing {
                 }
             }
 
+            // orderOut 閉鎖後のオフスクリーンキャッシュを判定するため、必要な場合のみ「ウィンドウ」メニューを参照する
+            let needsOffscreenMenuVerification = profile.requiresLiveVerificationWhenOffscreen
+                && !app.isHidden
+                && updatedList.indices.contains { index in
+                    let cached = updatedList[index]
+                    guard !cached.isPresentInLatestAXScan, !cached.isMinimized else { return false }
+                    if let matched = matchedCGByIndex[index] {
+                        return !matched.info.isOnscreen
+                    }
+                    if let knownID = cached.cgWindowID,
+                       let oldEntry = pidCGEntries.first(where: { $0.info.windowID == knownID }) {
+                        return !oldEntry.info.isOnscreen
+                    }
+                    return true
+                }
+            let verificationMenuSnapshots: [WindowMenuItemSnapshot]
+            if needsOffscreenMenuVerification {
+                let now = Date()
+                if let existingMenu = cachedWindowMenuByPID[pid],
+                   Self.isMenuCacheFresh(fetchedAt: existingMenu.fetchedAt, now: now) {
+                    verificationMenuSnapshots = existingMenu.items.map(\.snapshot)
+                } else {
+                    let freshMenuItems = Self.fetchWindowMenuItems(for: pid)
+                    cachedWindowMenuByPID[pid] = CachedWindowMenuState(items: freshMenuItems, fetchedAt: now)
+                    verificationMenuSnapshots = freshMenuItems.map(\.snapshot)
+                }
+            } else {
+                verificationMenuSnapshots = []
+            }
+
             var retainedList: [CachedAXWindow] = []
             retainedList.reserveCapacity(updatedList.count)
 
@@ -407,24 +458,41 @@ public final class WindowService: WindowServicing {
                 let isFloating = Self.isFloatingAXSubrole(cached.subrole)
 
                 let resolvedCGID: UInt32?
-                if let matchedID = matchedCG?.info.windowID {
-                    resolvedCGID = matchedID
+                let resolvedCGIsOnscreen: Bool
+                if let matchedCG {
+                    resolvedCGID = matchedCG.info.windowID
+                    resolvedCGIsOnscreen = matchedCG.info.isOnscreen
                 } else if let oldID = cached.cgWindowID,
                           !matchedCGWindowIDs.contains(oldID),
-                          pidCGEntries.contains(where: { entry in
+                          let oldEntry = pidCGEntries.first(where: { entry in
                               entry.info.windowID == oldID
                                   && (isFloating || entry.info.layer == 0 || entry.info.isOnscreen)
                           }) {
                     matchedCGWindowIDs.insert(oldID)
                     resolvedCGID = oldID
+                    resolvedCGIsOnscreen = oldEntry.info.isOnscreen
                 } else {
                     resolvedCGID = nil
+                    resolvedCGIsOnscreen = false
                 }
 
                 // 最新 AX スキャンに不在かつ WindowServer 上にも生存 CGWindow がない場合は閉鎖済みとみなし破棄する
                 guard Self.shouldEmitCachedAXWindow(
                     isPresentInLatestAXScan: cached.isPresentInLatestAXScan,
                     resolvedCGWindowID: resolvedCGID
+                ) else {
+                    continue
+                }
+
+                // orderOut 等で CGWindow を残したまま閉じられたキャッシュ済み AX ウィンドウを破棄する
+                guard Self.shouldRetainOffscreenCachedAXWindow(
+                    requiresLiveVerificationWhenOffscreen: profile.requiresLiveVerificationWhenOffscreen,
+                    isPresentInLatestAXScan: cached.isPresentInLatestAXScan,
+                    isMinimized: cached.isMinimized,
+                    isAppHidden: app.isHidden,
+                    isCGOnScreen: resolvedCGIsOnscreen,
+                    title: cached.title,
+                    menuItems: verificationMenuSnapshots
                 ) else {
                     continue
                 }
@@ -1399,6 +1467,42 @@ public final class WindowService: WindowServicing {
         isPresentInLatestAXScan || resolvedCGWindowID != nil
     }
 
+    /// 閉鎖後に orderOut 等で CGWindow を残すアプリのオフスクリーンキャッシュを保持すべきか純粋ロジックで判定する
+    /// - Parameters:
+    ///   - requiresLiveVerificationWhenOffscreen: 対象アプリがオフスクリーン時の生存再検証を必要とするか
+    ///   - isPresentInLatestAXScan: 直近の AX スキャンで捕捉されたか
+    ///   - isMinimized: 最小化状態かどうか
+    ///   - isAppHidden: アプリケーション自体が非表示（Cmd+H）状態か
+    ///   - isCGOnScreen: 対応する CGWindow が画面表示中か
+    ///   - title: キャッシュされていたウィンドウタイトル
+    ///   - menuItems: アプリの「ウィンドウ」メニューから抽出した開いているウィンドウ一覧
+    /// - Returns: 実在するウィンドウとして保持すべき場合は true、閉鎖済みとみなして破棄する場合は false
+    nonisolated static func shouldRetainOffscreenCachedAXWindow(
+        requiresLiveVerificationWhenOffscreen: Bool,
+        isPresentInLatestAXScan: Bool,
+        isMinimized: Bool,
+        isAppHidden: Bool,
+        isCGOnScreen: Bool,
+        title: String?,
+        menuItems: [WindowMenuItemSnapshot]
+    ) -> Bool {
+        guard requiresLiveVerificationWhenOffscreen else {
+            return true
+        }
+        if isMinimized || isAppHidden || isCGOnScreen || isPresentInLatestAXScan {
+            return true
+        }
+        guard let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmedTitle.isEmpty else {
+            return false
+        }
+        return WindowMenuCandidatePairing.matchingMenuItemIndex(
+            for: trimmedTitle,
+            in: menuItems,
+            preferUnchecked: false
+        ) != nil
+    }
+
     /// 指定された AX サブロールがフローティングウィンドウ系かを判定する
     /// - Parameter subrole: 対象の AX サブロール文字列
     /// - Returns: フローティングウィンドウ系のサブロールであれば true
@@ -1812,15 +1916,36 @@ public final class WindowService: WindowServicing {
 
         let appElement = AXUIElementCreateApplication(pid)
         Self.applyMessagingTimeout(to: appElement)
-        let axWindows = Self.collectAXWindows(for: appElement)
-        if !axWindows.isEmpty {
-            return axWindows.contains { CFEqual($0, axElement) }
+        let (axWindows, windowsAttributeSucceeded) = Self.collectAXWindowsWithStatus(for: appElement)
+        if let knownResult = Self.evaluateAXWindowLivenessFromList(
+            windowsAttributeSucceeded: windowsAttributeSucceeded,
+            containsTarget: axWindows.contains { CFEqual($0, axElement) }
+        ) {
+            return knownResult
         }
 
         // ウィンドウ一覧取得に失敗した場合は対象要素のロール読み取り可否で生存確認する
         Self.applyMessagingTimeout(to: axElement)
         var roleRef: CFTypeRef?
         return AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleRef) == .success
+    }
+
+    /// AX ウィンドウ一覧取得結果から対象ウィンドウの生存可否を判定する純粋ロジック
+    /// - Parameters:
+    ///   - windowsAttributeSucceeded: `kAXWindowsAttribute` の読み取り自体が成功したか
+    ///   - containsTarget: 収集済み一覧に対象ウィンドウが含まれていたか
+    /// - Returns: 生存判定が確定した場合は真偽値、一覧取得失敗時はフォールバック判定を促す nil
+    nonisolated static func evaluateAXWindowLivenessFromList(
+        windowsAttributeSucceeded: Bool,
+        containsTarget: Bool
+    ) -> Bool? {
+        if containsTarget {
+            return true
+        }
+        if windowsAttributeSucceeded {
+            return false
+        }
+        return nil
     }
 
     /// クローズ確認済みのウィンドウを内部キャッシュから除去する
@@ -2218,14 +2343,24 @@ public final class WindowService: WindowServicing {
     /// - Parameter appElement: 対象アプリケーションの AXUIElement
     /// - Returns: 重複のないウィンドウ AXUIElement 配列
     private nonisolated static func collectAXWindows(for appElement: AXUIElement) -> [AXUIElement] {
+        collectAXWindowsWithStatus(for: appElement).windows
+    }
+
+    /// アプリケーション要素からウィンドウ AXUIElement 配列と `kAXWindowsAttribute` 取得成否を併せて収集する
+    /// - Parameter appElement: 対象アプリケーションの AXUIElement
+    /// - Returns: 収集したウィンドウ配列と `kAXWindowsAttribute` が成功したかの組
+    private nonisolated static func collectAXWindowsWithStatus(
+        for appElement: AXUIElement
+    ) -> (windows: [AXUIElement], windowsAttributeSucceeded: Bool) {
         var result: [AXUIElement] = []
         var windowsRef: CFTypeRef?
         let windowsStatus = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
         if isAXCommunicationAbortError(windowsStatus) {
             // アプリがタイムアウト／API無効の場合はフォーカス・メイン補完での追加タイムアウト連鎖を防ぐ
-            return result
+            return (result, false)
         }
-        if windowsStatus == .success,
+        let windowsAttributeSucceeded = (windowsStatus == .success)
+        if windowsAttributeSucceeded,
            let axWindows = windowsRef as? [AXUIElement] {
             result = axWindows
         }
@@ -2248,7 +2383,7 @@ public final class WindowService: WindowServicing {
             }
         }
 
-        return result
+        return (result, windowsAttributeSucceeded)
     }
 
     /// 文字列属性を読み取る
