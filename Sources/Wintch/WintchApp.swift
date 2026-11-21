@@ -23,6 +23,14 @@ struct WintchApp: App {
     /// アプリ起動フック用の AppDelegate アダプタ
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    /// メニューバーと設定画面で共有される通常スイッチャー表示形式の双方向バインディング
+    private var normalDisplayStyleBinding: Binding<SwitcherDisplayStyle> {
+        Binding(
+            get: { appDelegate.coordinator.normalDisplayStyle },
+            set: { appDelegate.coordinator.updateNormalDisplayStyle($0) }
+        )
+    }
+
     /// アプリケーションのルートシーン定義（メニューバー常駐アイコンとメニュー）
     var body: some Scene {
         MenuBarExtra {
@@ -39,6 +47,16 @@ struct WintchApp: App {
             }
 
             Divider()
+
+            Menu("表示形式") {
+                Picker("表示形式", selection: normalDisplayStyleBinding) {
+                    ForEach(SwitcherDisplayStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
 
             Button("設定を開く...") {
                 appDelegate.coordinator.openSettings()

@@ -192,11 +192,11 @@ public final class SwitcherViewModel {
         scheduleInstalledAppsRefresh()
     }
 
-    /// 通常スイッチャーの表示形式を更新し、リスト型へ戻った場合は一時キャプチャキャッシュを即時破棄する
+    /// 通常スイッチャーの表示形式を更新し、キャプチャ表示型以外へ切り替わった場合は一時キャプチャキャッシュを即時破棄する
     /// - Parameter style: 新しい表示形式
     public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
         normalDisplayStyle = style
-        if style == .list {
+        if style != .capture {
             captureRefreshTask?.cancel()
             captureRefreshTask = nil
             capturedThumbnails.removeAll()
