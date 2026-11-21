@@ -59,6 +59,26 @@ public final class WindowService: WindowServicing {
         var lastActivatedAt: Date?
     }
 
+    /// ウィンドウキャッシュ整理時の CGWindow 生存チェック方針
+    enum CGCacheRetentionDecision: Equatable, Sendable {
+        /// キャッシュをそのまま保持する
+        case retain
+        /// 閉鎖済みとしてキャッシュから即座に破棄する
+        case evict
+        /// CGWindowID の付け替わり等の可能性があるため、旧 ID を解除して再照合する
+        case clearCGWindowIDAndRevalidate
+    }
+
+    /// メニューキャッシュ参照時の取得戦略
+    enum MenuCacheLookupAction: Equatable, Sendable {
+        /// 新鮮なキャッシュをそのまま利用する
+        case useFresh
+        /// 既存キャッシュを即時利用しつつバックグラウンドで最新化する（Stale-While-Revalidate）
+        case useStaleAndRefreshInBackground
+        /// キャッシュが存在しないため同期取得する
+        case fetchSynchronously
+    }
+
     /// PID ごとのキャッシュされたウィンドウ一覧
     private var cachedWindowsByPID: [Int32: [CachedAXWindow]] = [:]
 
@@ -70,6 +90,15 @@ public final class WindowService: WindowServicing {
 
     /// PID ごとのデバウンス付きバックグラウンド更新タスク
     private var pendingRefreshTasksByPID: [Int32: Task<Void, Never>] = [:]
+
+    /// PID ごとのバックグラウンドメニュー更新タスク（Stale-While-Revalidate 用）
+    private var pendingMenuRefreshTasksByPID: [Int32: Task<Void, Never>] = [:]
+
+    /// PID ごとの最新バックグラウンドスキャン世代カウンタ（古い結果による上書き防止用）
+    private var scanGenerationByPID: [Int32: UInt64] = [:]
+
+    /// メニュー補完（別スペース候補等）が必要と判定された PID 集合
+    private var menuEnrichmentTargetPIDs: Set<Int32> = []
 
     /// スペース切り替え／初期スキャン用のバックグラウンド走査タスク
     private var pendingSpaceScanTask: Task<Void, Never>?
@@ -83,14 +112,28 @@ public final class WindowService: WindowServicing {
     /// 監視中フラグ
     private var isObserving = false
 
+    /// 起動直後の初期バックグラウンド全スキャンが完了したかどうか
+    private var hasCompletedInitialBackgroundScan = false
+
     /// 操作スペース切り替え後のバックグラウンド全体再走査が完了するまでフルスクリーン置換を抑制するフラグ
     private var hasPendingSpaceChange = false
 
-    /// AX IPC 呼び出しをメインスレッド外で直列実行するためのワーカーキュー
+    /// バックグラウンド AX IPC 呼び出しを並列実行するためのコンカレントワーカーキュー
     private nonisolated let axWorkerQueue = DispatchQueue(
         label: "dev.wintch.WindowService.AXWorker",
-        qos: .utility
+        qos: .utility,
+        attributes: .concurrent
     )
+
+    /// 切り替え確定直後のフォーカス確認を他アプリのバックグラウンド走査に待たれず実行する高優先度キュー
+    private nonisolated let axActivationQueue = DispatchQueue(
+        label: "dev.wintch.WindowService.AXActivation",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+
+    /// 全アプリ並列バックグラウンドスキャン時の最大同時実行数
+    private static let maxConcurrentBackgroundScans = 6
 
     /// 応答しないアプリによる長時間ブロックを防ぐための AX IPC タイムアウト（秒）
     nonisolated static let axMessagingTimeoutSeconds: Float = 0.2
@@ -106,6 +149,17 @@ public final class WindowService: WindowServicing {
 
     /// 操作スペース切り替え時の全体再走査デバウンス間隔
     static let spaceChangeDebounceDuration: Duration = .milliseconds(60)
+
+    /// キャッシュ対象として許可する AX ロール
+    private nonisolated static let allowedCachedRoles: Set<String> = ["AXWindow"]
+
+    /// キャッシュ対象として許可する AX サブロール
+    private nonisolated static let allowedCachedSubroles: Set<String> = [
+        "AXStandardWindow",
+        "AXDialog",
+        "AXFloatingWindow",
+        "AXSystemFloatingWindow"
+    ]
 
     /// 照合および補完候補として許可する CoreGraphics ウィンドウレイヤー（通常・フローティング）
     private nonisolated static let allowedCGWindowLayers: Set<Int> = [
@@ -226,6 +280,7 @@ public final class WindowService: WindowServicing {
     public func stopObserving() {
         guard isObserving else { return }
         isObserving = false
+        hasCompletedInitialBackgroundScan = false
         hasPendingSpaceChange = false
 
         pendingSpaceScanTask?.cancel()
@@ -236,6 +291,12 @@ public final class WindowService: WindowServicing {
             task.cancel()
         }
         pendingRefreshTasksByPID.removeAll()
+        for task in pendingMenuRefreshTasksByPID.values {
+            task.cancel()
+        }
+        pendingMenuRefreshTasksByPID.removeAll()
+        scanGenerationByPID.removeAll()
+        menuEnrichmentTargetPIDs.removeAll()
 
         let center = NSWorkspace.shared.notificationCenter
         for token in workspaceObservers {
@@ -253,14 +314,40 @@ public final class WindowService: WindowServicing {
     /// 現在の全操作スペース上のウィンドウ候補を収集して返す
     /// - Returns: フィルタリング前の生ウィンドウ候補一覧
     public func fetchRawWindowCandidates() -> [RawWindowCandidate] {
-        // 最新の AX ウィンドウ状態をスキャンする
-        scanAllRegularApps()
-
         let selfPID = ProcessInfo.processInfo.processIdentifier
-        let cgWindows = fetchCGWindowInfos()
+        let runningApps = NSWorkspace.shared.runningApplications
         let appMap = Dictionary(
-            uniqueKeysWithValues: NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) }
+            uniqueKeysWithValues: runningApps.map { ($0.processIdentifier, $0) }
         )
+
+        // 非監視時または起動直後の初回スキャン未完了時のみ同期スキャンへフォールバックし、
+        // 定常稼働時はバックグラウンド更新済みキャッシュを用いてメインスレッドの AX IPC 待ちを排除する
+        let usesSyncFallback = Self.shouldPerformSyncScanOnFetch(
+            isObserving: isObserving,
+            hasCompletedInitialBackgroundScan: hasCompletedInitialBackgroundScan
+        )
+        if usesSyncFallback {
+            scanAllRegularApps()
+            if isObserving {
+                hasCompletedInitialBackgroundScan = true
+            }
+        } else {
+            // 通知漏れ等で監視未登録の新規通常アプリを検知した場合は非同期で監視・スキャンを予約する
+            for app in runningApps where app.activationPolicy == .regular {
+                let pid = app.processIdentifier
+                guard pid != selfPID else { continue }
+                if observersByPID[pid] == nil {
+                    registerObserver(for: pid)
+                    scheduleBackgroundRefresh(
+                        for: pid,
+                        markFrontmostAsActive: app.isActive,
+                        debounce: nil
+                    )
+                }
+            }
+        }
+
+        let cgWindows = fetchCGWindowInfos()
 
         // CGWindow を PID ごとにグルーピングし、システム重なり順 (zOrderIndex) を付与する
         var cgEntriesByPID: [Int32: [(zOrder: Int, info: CGWindowMeta)]] = [:]
@@ -268,8 +355,13 @@ public final class WindowService: WindowServicing {
             cgEntriesByPID[info.pid, default: []].append((zOrder: index, info: info))
         }
 
-        // キャッシュの整合性整理：CGWindow にも現在の AX にも存在しない終了済みウィンドウを除去
-        cleanupClosedWindows(cgEntriesByPID: cgEntriesByPID)
+        // 終了済みアプリおよび CGWindow 上から消滅した閉鎖済みウィンドウをキャッシュから整理する
+        purgeTerminatedPIDs(activeAppPIDs: Set(appMap.keys))
+        if usesSyncFallback {
+            cleanupClosedWindows(cgEntriesByPID: cgEntriesByPID)
+        } else {
+            cleanupClosedWindowsUsingCGWindows(cgEntriesByPID: cgEntriesByPID)
+        }
 
         var candidates: [RawWindowCandidate] = []
         var matchedCGWindowIDs = Set<UInt32>()
@@ -385,6 +477,21 @@ public final class WindowService: WindowServicing {
             guard Self.allowedCGWindowLayers.contains(cgInfo.layer) else { continue }
             guard let app = appMap[cgInfo.pid],
                   app.activationPolicy == .regular else { continue }
+
+            // 現在スペース上で表示中にもかかわらず AX キャッシュに一致しなかった場合は、次回に向けてバックグラウンド更新を予約する
+            if !usesSyncFallback,
+               cgInfo.pid != selfPID,
+               cgInfo.isOnscreen,
+               cgInfo.layer == 0,
+               cgInfo.bounds.width >= 200,
+               cgInfo.bounds.height >= 165,
+               pendingRefreshTasksByPID[cgInfo.pid] == nil {
+                scheduleBackgroundRefresh(
+                    for: cgInfo.pid,
+                    markFrontmostAsActive: app.isActive,
+                    debounce: nil
+                )
+            }
 
             candidates.append(
                 RawWindowCandidate(
@@ -708,7 +815,7 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// 起動中の全通常アプリをバックグラウンドキューでスキャンし、結果をキャッシュへ反映する
+    /// 起動中の全通常アプリを最大同時実行数付きで並列バックグラウンドスキャンし、結果を順次キャッシュへ反映する
     /// - Parameter debounce: 連続発生時のデバウンス待機時間（即時実行時は nil）
     private func scheduleBackgroundScanAllRegularApps(debounce: Duration?) {
         pendingSpaceScanTask?.cancel()
@@ -719,45 +826,82 @@ public final class WindowService: WindowServicing {
             guard !Task.isCancelled, let self, self.isObserving else { return }
 
             let selfPID = ProcessInfo.processInfo.processIdentifier
-            let scanTargets: [(pid: Int32, isActive: Bool)] = NSWorkspace.shared.runningApplications.compactMap { app in
+            let cgWindows = self.fetchCGWindowInfos()
+            let pidsNeedingMenu = Self.pidsRequiringMenuPreload(
+                from: cgWindows,
+                knownTargetPIDs: self.menuEnrichmentTargetPIDs
+            )
+
+            let scanTargets: [(pid: Int32, isActive: Bool, includeMenu: Bool, generation: UInt64)] = NSWorkspace.shared.runningApplications.compactMap { app in
                 guard app.activationPolicy == .regular else { return nil }
                 let pid = app.processIdentifier
                 guard pid != selfPID else { return nil }
                 if self.observersByPID[pid] == nil {
                     self.registerObserver(for: pid)
                 }
-                return (pid: pid, isActive: app.isActive)
+                let generation = self.bumpScanGeneration(for: pid)
+                let includeMenu = pidsNeedingMenu.contains(pid)
+                return (pid: pid, isActive: app.isActive, includeMenu: includeMenu, generation: generation)
             }
 
-            let results = await withCheckedContinuation { continuation in
-                self.axWorkerQueue.async {
-                    let scanned = scanTargets.map { target in
-                        (
-                            pid: target.pid,
-                            isActive: target.isActive,
-                            snapshots: Self.fetchAXWindowSnapshots(for: target.pid),
-                            menuItems: Self.fetchWindowMenuItems(for: target.pid)
+            let workerQueue = self.axWorkerQueue
+            let maxConcurrency = Self.maxConcurrentBackgroundScans
+
+            await withTaskGroup(of: (pid: Int32, isActive: Bool, generation: UInt64, snapshots: [ScannedAXWindowSnapshot], menuItems: [ScannedWindowMenuItem]?).self) { group in
+                var nextIndex = 0
+                let initialBatch = min(maxConcurrency, scanTargets.count)
+
+                for _ in 0..<initialBatch {
+                    let target = scanTargets[nextIndex]
+                    nextIndex += 1
+                    group.addTask {
+                        let data = await Self.fetchAXDataInBackground(
+                            for: target.pid,
+                            includeMenuItems: target.includeMenu,
+                            on: workerQueue
+                        )
+                        return (target.pid, target.isActive, target.generation, data.snapshots, data.menuItems)
+                    }
+                }
+
+                while let result = await group.next() {
+                    if Task.isCancelled || !self.isObserving {
+                        group.cancelAll()
+                        break
+                    }
+                    if nextIndex < scanTargets.count {
+                        let target = scanTargets[nextIndex]
+                        nextIndex += 1
+                        group.addTask {
+                            let data = await Self.fetchAXDataInBackground(
+                                for: target.pid,
+                                includeMenuItems: target.includeMenu,
+                                on: workerQueue
+                            )
+                            return (target.pid, target.isActive, target.generation, data.snapshots, data.menuItems)
+                        }
+                    }
+
+                    // より新しい個別更新が先行完了していた場合は古いスキャン結果を破棄する
+                    guard self.scanGenerationByPID[result.pid] == result.generation else { continue }
+                    self.applyAXWindowSnapshots(
+                        result.snapshots,
+                        for: result.pid,
+                        markFrontmostAsActive: result.isActive,
+                        allowDisplaySpanningReplacement: false
+                    )
+                    if let menuItems = result.menuItems {
+                        self.cachedWindowMenuByPID[result.pid] = CachedWindowMenuState(
+                            items: menuItems,
+                            fetchedAt: Date()
                         )
                     }
-                    continuation.resume(returning: scanned)
                 }
             }
 
             guard !Task.isCancelled, self.isObserving else { return }
-            let fetchedAt = Date()
-            for item in results {
-                self.applyAXWindowSnapshots(
-                    item.snapshots,
-                    for: item.pid,
-                    markFrontmostAsActive: item.isActive,
-                    allowDisplaySpanningReplacement: false
-                )
-                self.cachedWindowMenuByPID[item.pid] = CachedWindowMenuState(
-                    items: item.menuItems,
-                    fetchedAt: fetchedAt
-                )
-            }
             self.hasPendingSpaceChange = false
+            self.hasCompletedInitialBackgroundScan = true
         }
     }
 
@@ -769,41 +913,48 @@ public final class WindowService: WindowServicing {
     ///   - activatedElement: 更新後に MRU 時刻を更新する対象要素（任意）
     ///   - activatedAt: 記録するアクティブ時刻（任意）
     ///   - allowDisplaySpanningReplacement: 同一スペース内のタブ切り替えとしてディスプレイ占有級置換を許可するか
+    ///   - includeMenuItems: ウィンドウメニュー項目の再取得も同時に行うか
     private func scheduleBackgroundRefresh(
         for pid: Int32,
         markFrontmostAsActive: Bool,
         debounce: Duration?,
         activatedElement: SendableAXElement? = nil,
         activatedAt: Date? = nil,
-        allowDisplaySpanningReplacement: Bool = false
+        allowDisplaySpanningReplacement: Bool = false,
+        includeMenuItems: Bool = false
     ) {
         pendingRefreshTasksByPID[pid]?.cancel()
+        let generation = bumpScanGeneration(for: pid)
+        let workerQueue = axWorkerQueue
+        let shouldFetchMenu = includeMenuItems || menuEnrichmentTargetPIDs.contains(pid)
+
         pendingRefreshTasksByPID[pid] = Task { @MainActor [weak self] in
             if let debounce {
                 try? await Task.sleep(for: debounce)
             }
             guard !Task.isCancelled, let self, self.isObserving else { return }
 
-            let result = await withCheckedContinuation { continuation in
-                self.axWorkerQueue.async {
-                    let snapshots = Self.fetchAXWindowSnapshots(for: pid)
-                    let menuItems = Self.fetchWindowMenuItems(for: pid)
-                    continuation.resume(returning: (snapshots, menuItems))
-                }
-            }
+            let result = await Self.fetchAXDataInBackground(
+                for: pid,
+                includeMenuItems: shouldFetchMenu,
+                on: workerQueue
+            )
             guard !Task.isCancelled, self.isObserving else { return }
             self.pendingRefreshTasksByPID.removeValue(forKey: pid)
+            guard self.scanGenerationByPID[pid] == generation else { return }
 
             self.applyAXWindowSnapshots(
-                result.0,
+                result.snapshots,
                 for: pid,
                 markFrontmostAsActive: markFrontmostAsActive,
                 allowDisplaySpanningReplacement: allowDisplaySpanningReplacement && !self.hasPendingSpaceChange
             )
-            self.cachedWindowMenuByPID[pid] = CachedWindowMenuState(
-                items: result.1,
-                fetchedAt: Date()
-            )
+            if let menuItems = result.menuItems {
+                self.cachedWindowMenuByPID[pid] = CachedWindowMenuState(
+                    items: menuItems,
+                    fetchedAt: Date()
+                )
+            }
 
             if let activatedElement, let activatedAt {
                 self.updateMRUTimestamp(
@@ -815,12 +966,63 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// バックグラウンドの直列ワーカーキューで指定 PID の AX ウィンドウ一覧を取得する
+    /// 指定 PID の「ウィンドウ」メニュー項目のみをバックグラウンドで非同期更新する（Stale-While-Revalidate 用）
+    /// - Parameter pid: 対象プロセス ID
+    private func scheduleBackgroundMenuRefresh(for pid: Int32) {
+        guard isObserving, pendingMenuRefreshTasksByPID[pid] == nil else { return }
+        let workerQueue = axWorkerQueue
+        pendingMenuRefreshTasksByPID[pid] = Task { @MainActor [weak self] in
+            let menuItems = await withCheckedContinuation { continuation in
+                workerQueue.async {
+                    continuation.resume(returning: Self.fetchWindowMenuItems(for: pid))
+                }
+            }
+            guard let self else { return }
+            self.pendingMenuRefreshTasksByPID.removeValue(forKey: pid)
+            guard !Task.isCancelled, self.isObserving else { return }
+            self.cachedWindowMenuByPID[pid] = CachedWindowMenuState(
+                items: menuItems,
+                fetchedAt: Date()
+            )
+        }
+    }
+
+    /// 指定 PID のスキャン世代番号を進め、更新後の値を返す
+    /// - Parameter pid: 対象プロセス ID
+    /// - Returns: 更新された世代番号
+    private func bumpScanGeneration(for pid: Int32) -> UInt64 {
+        let next = (scanGenerationByPID[pid] ?? 0) &+ 1
+        scanGenerationByPID[pid] = next
+        return next
+    }
+
+    /// 指定ワーカーキュー上で対象 PID の AX ウィンドウ一覧と必要なメニュー項目を非同期取得する
+    /// - Parameters:
+    ///   - pid: 対象プロセス ID
+    ///   - includeMenuItems: ウィンドウメニューも同時に取得するか
+    ///   - queue: 実行先の DispatchQueue
+    /// - Returns: スナップショット配列および（取得時のみ）メニュー項目配列
+    private nonisolated static func fetchAXDataInBackground(
+        for pid: Int32,
+        includeMenuItems: Bool,
+        on queue: DispatchQueue
+    ) async -> (snapshots: [ScannedAXWindowSnapshot], menuItems: [ScannedWindowMenuItem]?) {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let snapshots = fetchAXWindowSnapshots(for: pid)
+                let menuItems = includeMenuItems ? fetchWindowMenuItems(for: pid) : nil
+                continuation.resume(returning: (snapshots, menuItems))
+            }
+        }
+    }
+
+    /// 高優先度ワーカーキューで指定 PID の AX ウィンドウ一覧を取得する（切り替え確定フォローアップ用）
     /// - Parameter pid: 対象プロセス ID
     /// - Returns: 取得された AX ウィンドウスナップショット配列
     private func fetchAXWindowSnapshotsInBackground(for pid: Int32) async -> [ScannedAXWindowSnapshot] {
-        await withCheckedContinuation { continuation in
-            axWorkerQueue.async {
+        let queue = axActivationQueue
+        return await withCheckedContinuation { continuation in
+            queue.async {
                 let snapshots = Self.fetchAXWindowSnapshots(for: pid)
                 continuation.resume(returning: snapshots)
             }
@@ -904,12 +1106,12 @@ public final class WindowService: WindowServicing {
         if hasDisappearedCandidates {
             cachedWindowMenuByPID.removeValue(forKey: pid)
         }
-        let screenBounds = currentDisplayBounds()
         let activeWindowEntries = existing.filter {
             $0.isPresentInLatestAXScan && $0.role == "AXWindow" && $0.subrole != nil
         }
 
         if allowDisplaySpanningReplacement, hasDisappearedCandidates, !activeWindowEntries.isEmpty {
+            let screenBounds = currentDisplayBounds()
             let survivingCGWindowIDs = Self.fetchSurvivingCGWindowIDs(for: pid)
             var inheritedDateByReplacementID: [String: Date] = [:]
             existing.removeAll { candidate in
@@ -954,11 +1156,14 @@ public final class WindowService: WindowServicing {
     private func markFocusedWindowActivatedInBackground(for pid: Int32) {
         pendingRefreshTasksByPID[pid]?.cancel()
         let capturedNow = Date()
+        let generation = bumpScanGeneration(for: pid)
+        let workerQueue = axWorkerQueue
+
         pendingRefreshTasksByPID[pid] = Task { @MainActor [weak self] in
             guard let self, self.isObserving else { return }
 
             let result = await withCheckedContinuation { continuation in
-                self.axWorkerQueue.async {
+                workerQueue.async {
                     let appElement = AXUIElementCreateApplication(pid)
                     Self.applyMessagingTimeout(to: appElement)
                     var focusedRef: CFTypeRef?
@@ -978,18 +1183,14 @@ public final class WindowService: WindowServicing {
                         focusedElement = nil
                     }
                     let snapshots = Self.fetchAXWindowSnapshots(for: pid)
-                    let menuItems = Self.fetchWindowMenuItems(for: pid)
-                    continuation.resume(returning: (focusedElement, snapshots, menuItems))
+                    continuation.resume(returning: (focusedElement, snapshots))
                 }
             }
 
             guard !Task.isCancelled, self.isObserving else { return }
             self.pendingRefreshTasksByPID.removeValue(forKey: pid)
+            guard self.scanGenerationByPID[pid] == generation else { return }
             self.applyAXWindowSnapshots(result.1, for: pid, markFrontmostAsActive: true)
-            self.cachedWindowMenuByPID[pid] = CachedWindowMenuState(
-                items: result.2,
-                fetchedAt: Date()
-            )
 
             if let focusedElement = result.0 {
                 self.updateMRUTimestamp(pid: pid, axElement: focusedElement.value, date: capturedNow)
@@ -997,7 +1198,132 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// 閉じられた・存在しなくなったウィンドウをキャッシュから整理する
+    /// 既に終了したプロセス ID に紐付くキャッシュと監視リソースを一括解放する
+    /// - Parameter activeAppPIDs: 現在稼働中のアプリケーション PID 集合
+    private func purgeTerminatedPIDs(activeAppPIDs: Set<Int32>) {
+        let stalePIDs = Set(cachedWindowsByPID.keys)
+            .union(cachedWindowMenuByPID.keys)
+            .union(observersByPID.keys)
+            .subtracting(activeAppPIDs)
+        for pid in stalePIDs {
+            unregisterObserver(for: pid)
+            cachedWindowsByPID.removeValue(forKey: pid)
+            cachedWindowMenuByPID.removeValue(forKey: pid)
+            menuEnrichmentTargetPIDs.remove(pid)
+            scanGenerationByPID.removeValue(forKey: pid)
+        }
+    }
+
+    /// 同期 AX IPC を行わずに CGWindow 生存情報のみを用いて閉鎖済みキャッシュウィンドウを整理する
+    /// - Parameter cgEntriesByPID: 現在の CGWindow マップ
+    private func cleanupClosedWindowsUsingCGWindows(cgEntriesByPID: [Int32: [(zOrder: Int, info: CGWindowMeta)]]) {
+        for (pid, list) in cachedWindowsByPID {
+            let pidCGEntries = cgEntriesByPID[pid] ?? []
+            let survivingCGWindowIDs = Set(pidCGEntries.map { $0.info.windowID })
+            let hasSubstantialCGWindow = pidCGEntries.contains { entry in
+                (entry.info.layer == 0 || entry.info.isOnscreen)
+                    && entry.info.bounds.width >= 200
+                    && entry.info.bounds.height >= 165
+            }
+
+            var needsBackgroundValidation = false
+            var retained: [CachedAXWindow] = []
+            retained.reserveCapacity(list.count)
+
+            for var cached in list {
+                let decision = Self.cgCacheRetentionDecision(
+                    isPresentInLatestAXScan: cached.isPresentInLatestAXScan,
+                    isMinimized: cached.isMinimized,
+                    knownCGWindowID: cached.cgWindowID,
+                    survivingCGWindowIDs: survivingCGWindowIDs,
+                    hasSubstantialCGWindow: hasSubstantialCGWindow
+                )
+                switch decision {
+                case .retain:
+                    retained.append(cached)
+                case .evict:
+                    needsBackgroundValidation = true
+                case .clearCGWindowIDAndRevalidate:
+                    cached.cgWindowID = nil
+                    retained.append(cached)
+                    needsBackgroundValidation = true
+                }
+            }
+
+            if retained.isEmpty {
+                cachedWindowsByPID.removeValue(forKey: pid)
+            } else {
+                cachedWindowsByPID[pid] = retained
+            }
+
+            if needsBackgroundValidation, pendingRefreshTasksByPID[pid] == nil {
+                scheduleBackgroundRefresh(for: pid, markFrontmostAsActive: false, debounce: nil)
+            }
+        }
+    }
+
+    /// ウィンドウ候補収集時にメインスレッドでの同期全アプリスキャンへフォールバックすべきか判定する純粋関数
+    /// - Parameters:
+    ///   - isObserving: AXObserver によるバックグラウンド監視が稼働中か
+    ///   - hasCompletedInitialBackgroundScan: 初期バックグラウンド全スキャンが完了済みか
+    /// - Returns: 同期スキャンが必要な場合は true、キャッシュベースで即時構築すべき場合は false
+    nonisolated static func shouldPerformSyncScanOnFetch(
+        isObserving: Bool,
+        hasCompletedInitialBackgroundScan: Bool
+    ) -> Bool {
+        !isObserving || !hasCompletedInitialBackgroundScan
+    }
+
+    /// 全体バックグラウンドスキャン時に「ウィンドウ」メニュー先読みが必要な PID 集合を算出する純粋関数
+    /// - Parameters:
+    ///   - cgWindows: WindowServer から取得した CGWindow メタデータ一覧
+    ///   - knownTargetPIDs: 直近の候補構築でメニュー補完対象と判定された PID 集合
+    /// - Returns: バックグラウンドスキャン時にメニュー取得も併用すべき PID 集合
+    nonisolated static func pidsRequiringMenuPreload(
+        from cgWindows: [CGWindowMeta],
+        knownTargetPIDs: Set<Int32>
+    ) -> Set<Int32> {
+        var result = knownTargetPIDs
+        for cg in cgWindows where !cg.isOnscreen && cg.layer == 0 && cg.bounds.width >= 200 && cg.bounds.height >= 165 {
+            result.insert(cg.pid)
+        }
+        return result
+    }
+
+    /// CGWindow の生存情報のみからキャッシュ済みウィンドウの保持／破棄／再照合を判定する純粋関数
+    /// - Parameters:
+    ///   - isPresentInLatestAXScan: 直近の AX スキャンで捕捉されたか
+    ///   - isMinimized: 最小化状態かどうか
+    ///   - knownCGWindowID: 前回までに確定していた CGWindowID（未確定時は nil）
+    ///   - survivingCGWindowIDs: 現在 WindowServer 上に生存している該当 PID の CGWindowID 集合
+    ///   - hasSubstantialCGWindow: 該当 PID に通常サイズ以上の有効レイヤー CGWindow が残存しているか
+    /// - Returns: キャッシュに対する処置方針 (`CGCacheRetentionDecision`)
+    nonisolated static func cgCacheRetentionDecision(
+        isPresentInLatestAXScan: Bool,
+        isMinimized: Bool,
+        knownCGWindowID: UInt32?,
+        survivingCGWindowIDs: Set<UInt32>,
+        hasSubstantialCGWindow: Bool
+    ) -> CGCacheRetentionDecision {
+        guard let knownID = knownCGWindowID else {
+            return .retain
+        }
+        if survivingCGWindowIDs.contains(knownID) {
+            return .retain
+        }
+        // 直近の AX スキャンに不在かつ対応 CGWindowID も消滅している場合は閉鎖済みとして即破棄する
+        if !isPresentInLatestAXScan {
+            return .evict
+        }
+        // 非最小化かつ実サイズ CGWindow が完全に無くなっている場合は閉鎖済みとみなす
+        if !isMinimized && !hasSubstantialCGWindow {
+            return .evict
+        }
+        // フルスクリーン遷移等で CGWindowID のみ入れ替わった可能性を考慮し、旧 ID を外して再照合する
+        return isMinimized ? .retain : .clearCGWindowIDAndRevalidate
+    }
+
+    /// 閉じられた・存在しなくなったウィンドウをキャッシュから整理する（非監視時の同期フォールバック用）
     /// - Parameter cgEntriesByPID: 現在の CGWindow マップ
     private func cleanupClosedWindows(cgEntriesByPID: [Int32: [(zOrder: Int, info: CGWindowMeta)]]) {
         for (pid, list) in cachedWindowsByPID {
@@ -1525,10 +1851,16 @@ public final class WindowService: WindowServicing {
             guard let refcon else { return }
             let notifName = notification as String
             let service = Unmanaged<WindowService>.fromOpaque(refcon).takeUnretainedValue()
-            // C コールバックからの通知を MainActor へディスパッチする
-            let wrappedElement = SendableAXElement(value: element)
-            Task { @MainActor in
-                service.handleAXNotification(element: wrappedElement.value, notification: notifName)
+            // CFRunLoopGetMain に登録されたコールバックは既にメインスレッド上のため不要な Task 生成を回避する
+            if Thread.isMainThread {
+                MainActor.assumeIsolated {
+                    service.handleAXNotification(element: element, notification: notifName)
+                }
+            } else {
+                let wrappedElement = SendableAXElement(value: element)
+                Task { @MainActor in
+                    service.handleAXNotification(element: wrappedElement.value, notification: notifName)
+                }
             }
         }, &observerRef)
 
@@ -1540,6 +1872,8 @@ public final class WindowService: WindowServicing {
             kAXWindowCreatedNotification,
             kAXFocusedWindowChangedNotification,
             kAXMainWindowChangedNotification,
+            kAXWindowMiniaturizedNotification,
+            kAXWindowDeminiaturizedNotification,
             kAXTitleChangedNotification,
             kAXUIElementDestroyedNotification
         ]
@@ -1555,6 +1889,7 @@ public final class WindowService: WindowServicing {
     /// - Parameter pid: 監視を解除するプロセスの PID
     private func unregisterObserver(for pid: Int32) {
         pendingRefreshTasksByPID.removeValue(forKey: pid)?.cancel()
+        pendingMenuRefreshTasksByPID.removeValue(forKey: pid)?.cancel()
         guard let observer = observersByPID.removeValue(forKey: pid) else { return }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
     }
@@ -1577,7 +1912,7 @@ public final class WindowService: WindowServicing {
                     cachedWindowsByPID[pid] = list
                 }
             }
-            // ウィンドウ破棄直後に古いメニュー項目キャッシュ（TTL 2.0秒）が裏方 CGWindow へ割り当てられるのを防ぐ
+            // ウィンドウ破棄直後に古いメニュー項目キャッシュが裏方 CGWindow へ割り当てられるのを防ぐ
             cachedWindowMenuByPID.removeValue(forKey: pid)
             scheduleBackgroundRefresh(
                 for: pid,
@@ -1591,6 +1926,9 @@ public final class WindowService: WindowServicing {
         let isActivationEvent = notification == kAXFocusedWindowChangedNotification
             || notification == kAXMainWindowChangedNotification
             || notification == kAXWindowCreatedNotification
+        let isStructureOrStateEvent = isActivationEvent
+            || notification == kAXWindowMiniaturizedNotification
+            || notification == kAXWindowDeminiaturizedNotification
 
         let now = Date()
         if isActivationEvent {
@@ -1598,7 +1936,7 @@ public final class WindowService: WindowServicing {
             updateMRUTimestamp(pid: pid, axElement: element, date: now)
         }
 
-        let debounce = isActivationEvent ? Self.focusChangeDebounceDuration : Self.titleChangeDebounceDuration
+        let debounce = isStructureOrStateEvent ? Self.focusChangeDebounceDuration : Self.titleChangeDebounceDuration
         scheduleBackgroundRefresh(
             for: pid,
             markFrontmostAsActive: false,
@@ -1792,6 +2130,28 @@ public final class WindowService: WindowServicing {
         AXUIElementSetMessagingTimeout(element, axMessagingTimeoutSeconds)
     }
 
+    /// 読み取った AX ロール／サブロールがスイッチャー候補用キャッシュとして保持対象か判定する純粋関数
+    /// - Parameters:
+    ///   - role: 取得された `kAXRoleAttribute`
+    ///   - subrole: 取得された `kAXSubroleAttribute`
+    /// - Returns: キャッシュ対象となるウィンドウ要素であれば true
+    nonisolated static func shouldCacheAXWindowAttributes(role: String?, subrole: String?) -> Bool {
+        if let role, !allowedCachedRoles.contains(role) {
+            return false
+        }
+        if let subrole, !allowedCachedSubroles.contains(subrole) {
+            return false
+        }
+        return true
+    }
+
+    /// AXError がプロセス無応答・API 無効化等の通信打ち切り対象かを判定する
+    /// - Parameter error: AXUIElement API の戻り値エラーコード
+    /// - Returns: 同一対象への後続 IPC 呼び出しを即座に打ち切るべき場合は true
+    private nonisolated static func isAXCommunicationAbortError(_ error: AXError) -> Bool {
+        error == .cannotComplete || error == .apiDisabled || error == .notImplemented
+    }
+
     /// 指定 PID のアプリから現在の AX ウィンドウ一覧と属性をバックグラウンド安全に収集する
     /// - Parameter pid: 対象プロセス ID
     /// - Returns: 収集された ScannedAXWindowSnapshot 配列
@@ -1803,18 +2163,55 @@ public final class WindowService: WindowServicing {
             return []
         }
 
-        return axWindows.map { axWin in
+        var snapshots: [ScannedAXWindowSnapshot] = []
+        snapshots.reserveCapacity(axWindows.count)
+
+        for axWin in axWindows {
             applyMessagingTimeout(to: axWin)
-            return ScannedAXWindowSnapshot(
-                uniqueID: "ax-\(pid)-\(CFHash(axWin))",
-                axElement: SendableAXElement(value: axWin),
-                role: copyStringAttribute(axWin, attribute: kAXRoleAttribute as CFString),
-                title: copyStringAttribute(axWin, attribute: kAXTitleAttribute as CFString),
-                subrole: copyStringAttribute(axWin, attribute: kAXSubroleAttribute as CFString),
-                bounds: copyBounds(axWin),
-                isMinimized: copyBoolAttribute(axWin, attribute: kAXMinimizedAttribute as CFString) ?? false
+
+            let roleResult = copyStringAttributeWithError(axWin, attribute: kAXRoleAttribute as CFString)
+            if isAXCommunicationAbortError(roleResult.error) {
+                // アプリがハング・タイムアウトしている場合は残りの属性／ウィンドウへの連続タイムアウトを回避する
+                break
+            }
+            if let role = roleResult.value, !allowedCachedRoles.contains(role) {
+                continue
+            }
+
+            let subroleResult = copyStringAttributeWithError(axWin, attribute: kAXSubroleAttribute as CFString)
+            if isAXCommunicationAbortError(subroleResult.error) {
+                break
+            }
+            guard shouldCacheAXWindowAttributes(role: roleResult.value, subrole: subroleResult.value) else {
+                continue
+            }
+
+            let titleResult = copyStringAttributeWithError(axWin, attribute: kAXTitleAttribute as CFString)
+            if isAXCommunicationAbortError(titleResult.error) {
+                break
+            }
+            let boundsResult = copyBoundsWithError(axWin)
+            if isAXCommunicationAbortError(boundsResult.error) {
+                break
+            }
+            let minimizedResult = copyBoolAttributeWithError(axWin, attribute: kAXMinimizedAttribute as CFString)
+            if isAXCommunicationAbortError(minimizedResult.error) {
+                break
+            }
+
+            snapshots.append(
+                ScannedAXWindowSnapshot(
+                    uniqueID: "ax-\(pid)-\(CFHash(axWin))",
+                    axElement: SendableAXElement(value: axWin),
+                    role: roleResult.value,
+                    title: titleResult.value,
+                    subrole: subroleResult.value,
+                    bounds: boundsResult.value,
+                    isMinimized: minimizedResult.value ?? false
+                )
             )
         }
+        return snapshots
     }
 
     /// アプリケーション要素から kAXWindowsAttribute に加え、フォーカス／メインウィンドウを重複排除して収集する
@@ -1823,7 +2220,12 @@ public final class WindowService: WindowServicing {
     private nonisolated static func collectAXWindows(for appElement: AXUIElement) -> [AXUIElement] {
         var result: [AXUIElement] = []
         var windowsRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+        let windowsStatus = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
+        if isAXCommunicationAbortError(windowsStatus) {
+            // アプリがタイムアウト／API無効の場合はフォーカス・メイン補完での追加タイムアウト連鎖を防ぐ
+            return result
+        }
+        if windowsStatus == .success,
            let axWindows = windowsRef as? [AXUIElement] {
             result = axWindows
         }
@@ -1831,7 +2233,11 @@ public final class WindowService: WindowServicing {
         // kAXWindowsAttribute に含まれないフローティングパネルや別スペースの現在ウィンドウを補完する
         for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
             var extraRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(appElement, attribute as CFString, &extraRef) == .success,
+            let status = AXUIElementCopyAttributeValue(appElement, attribute as CFString, &extraRef)
+            if isAXCommunicationAbortError(status) {
+                break
+            }
+            guard status == .success,
                   let extraValue = extraRef,
                   CFGetTypeID(extraValue) == AXUIElementGetTypeID() else {
                 continue
@@ -1851,9 +2257,22 @@ public final class WindowService: WindowServicing {
     ///   - attribute: 読み取る属性名
     /// - Returns: 取得された文字列（失敗時は nil）
     private nonisolated static func copyStringAttribute(_ element: AXUIElement, attribute: CFString) -> String? {
+        copyStringAttributeWithError(element, attribute: attribute).value
+    }
+
+    /// 文字列属性と AXError をあわせて読み取る
+    /// - Parameters:
+    ///   - element: 対象の AXUIElement
+    ///   - attribute: 読み取る属性名
+    /// - Returns: 取得された文字列と AXError のタプル
+    private nonisolated static func copyStringAttributeWithError(
+        _ element: AXUIElement,
+        attribute: CFString
+    ) -> (value: String?, error: AXError) {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
-        return value as? String
+        let status = AXUIElementCopyAttributeValue(element, attribute, &value)
+        guard status == .success else { return (nil, status) }
+        return (value as? String, status)
     }
 
     /// 真偽値属性を読み取る
@@ -1862,34 +2281,70 @@ public final class WindowService: WindowServicing {
     ///   - attribute: 読み取る属性名
     /// - Returns: 取得された真偽値（失敗時は nil）
     private nonisolated static func copyBoolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
-        return value as? Bool
+        copyBoolAttributeWithError(element, attribute: attribute).value
     }
 
-    /// 位置 (kAXPositionAttribute) とサイズ (kAXSizeAttribute) を組み合わせて CGRect を構築する
+    /// 真偽値属性と AXError をあわせて読み取る
+    /// - Parameters:
+    ///   - element: 対象の AXUIElement
+    ///   - attribute: 読み取る属性名
+    /// - Returns: 取得された真偽値と AXError のタプル
+    private nonisolated static func copyBoolAttributeWithError(
+        _ element: AXUIElement,
+        attribute: CFString
+    ) -> (value: Bool?, error: AXError) {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, attribute, &value)
+        guard status == .success else { return (nil, status) }
+        return (value as? Bool, status)
+    }
+
+    /// 位置 (kAXPositionAttribute) とサイズ (kAXSizeAttribute) を組み合わせて CGRect と AXError を返す
     /// - Parameter element: 対象の AXUIElement
-    /// - Returns: 取得されたウィンドウ矩形（失敗時は nil）
-    private nonisolated static func copyBounds(_ element: AXUIElement) -> CGRect? {
+    /// - Returns: 取得されたウィンドウ矩形と最終 AXError のタプル
+    private nonisolated static func copyBoundsWithError(_ element: AXUIElement) -> (value: CGRect?, error: AXError) {
         var posRef: CFTypeRef?
+        let posStatus = AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef)
+        guard posStatus == .success, let posVal = posRef else {
+            return (nil, posStatus)
+        }
+
         var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
-              let posVal = posRef,
-              let sizeVal = sizeRef else {
-            return nil
+        let sizeStatus = AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
+        guard sizeStatus == .success, let sizeVal = sizeRef else {
+            return (nil, sizeStatus)
         }
 
         var origin = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(posVal as! AXValue, .cgPoint, &origin),
               AXValueGetValue(sizeVal as! AXValue, .cgSize, &size) else {
-            return nil
+            return (nil, .failure)
         }
-        return CGRect(origin: origin, size: size)
+        return (CGRect(origin: origin, size: size), .success)
     }
 
     // MARK: - 「ウィンドウ」メニュー補完ヘルパー
+
+    /// メニューキャッシュの有無と鮮度から取得・利用方針を決定する純粋関数
+    /// - Parameters:
+    ///   - hasCachedState: キャッシュ済みメニュー状態が存在するか
+    ///   - isFresh: キャッシュが TTL 以内か
+    ///   - allowStaleWhileRevalidate: Stale-While-Revalidate を許可するか（通常監視中は true）
+    /// - Returns: 実行すべき `MenuCacheLookupAction`
+    nonisolated static func menuCacheLookupAction(
+        hasCachedState: Bool,
+        isFresh: Bool,
+        allowStaleWhileRevalidate: Bool
+    ) -> MenuCacheLookupAction {
+        guard hasCachedState else {
+            return .fetchSynchronously
+        }
+        if isFresh {
+            return .useFresh
+        }
+        return allowStaleWhileRevalidate ? .useStaleAndRefreshInBackground : .fetchSynchronously
+    }
 
     /// AX で未捕捉の CGWindow 補完候補（別スペース等）またはタイトル空の標準 AX 候補を含む PID に対して、アプリの「ウィンドウ」メニューからタイトルを補完する
     /// - Parameter candidates: 構築済みの生ウィンドウ候補一覧
@@ -1902,18 +2357,29 @@ public final class WindowService: WindowServicing {
                 return candidate.pid
             }
         )
+        menuEnrichmentTargetPIDs = targetPIDs
         guard !targetPIDs.isEmpty else {
             return candidates
         }
 
         let now = Date()
         for pid in targetPIDs {
-            if let existing = cachedWindowMenuByPID[pid],
-               Self.isMenuCacheFresh(fetchedAt: existing.fetchedAt, now: now) {
+            let existing = cachedWindowMenuByPID[pid]
+            let isFresh = existing.map { Self.isMenuCacheFresh(fetchedAt: $0.fetchedAt, now: now) } ?? false
+            let action = Self.menuCacheLookupAction(
+                hasCachedState: existing != nil,
+                isFresh: isFresh,
+                allowStaleWhileRevalidate: isObserving
+            )
+            switch action {
+            case .useFresh:
                 continue
+            case .useStaleAndRefreshInBackground:
+                scheduleBackgroundMenuRefresh(for: pid)
+            case .fetchSynchronously:
+                let items = Self.fetchWindowMenuItems(for: pid)
+                cachedWindowMenuByPID[pid] = CachedWindowMenuState(items: items, fetchedAt: now)
             }
-            let items = Self.fetchWindowMenuItems(for: pid)
-            cachedWindowMenuByPID[pid] = CachedWindowMenuState(items: items, fetchedAt: now)
         }
 
         let candidatesByPID = Dictionary(grouping: candidates, by: \.pid)
@@ -1955,20 +2421,22 @@ public final class WindowService: WindowServicing {
         preferUnchecked: Bool,
         forceFresh: Bool = false
     ) -> Bool {
+        // 既存キャッシュ要素が利用可能であれば TTL 超過時でもまず直接押下を試み、失敗時のみ最新メニューを再取得する
         if !forceFresh,
-           let cachedElement = resolveWindowMenuItemElement(
-               pid: pid,
-               windowTitle: windowTitle,
-               preferUnchecked: preferUnchecked,
-               forceRefresh: false
+           let cached = cachedWindowMenuByPID[pid],
+           let matchedCached = Self.findMatchingMenuItem(
+               in: cached.items,
+               title: windowTitle,
+               preferUnchecked: preferUnchecked
            ) {
+            let cachedElement = matchedCached.axElement.value
             Self.applyMessagingTimeout(to: cachedElement)
             if AXUIElementPerformAction(cachedElement, kAXPressAction as CFString) == .success {
                 return true
             }
         }
 
-        // キャッシュ無効または押下失敗時は最新メニューを再取得して押下を試行する
+        // キャッシュ未保持または押下失敗時は最新メニューを再取得して押下を試行する
         cachedWindowMenuByPID.removeValue(forKey: pid)
         guard let freshElement = resolveWindowMenuItemElement(
             pid: pid,
@@ -2106,7 +2574,11 @@ public final class WindowService: WindowServicing {
 
         for barItem in barItems {
             applyMessagingTimeout(to: barItem)
-            if let barTitle = copyStringAttribute(barItem, attribute: kAXTitleAttribute as CFString),
+            let titleResult = copyStringAttributeWithError(barItem, attribute: kAXTitleAttribute as CFString)
+            if isAXCommunicationAbortError(titleResult.error) {
+                break
+            }
+            if let barTitle = titleResult.value,
                WindowMenuExtractor.isWindowMenuBarTitle(barTitle) {
                 return barItem
             }
@@ -2138,29 +2610,124 @@ public final class WindowService: WindowServicing {
             return []
         }
 
+        // 第1パス：全項目で最小属性（title と identifier）のみ読み取り、空タイトル／セパレータの不要 IPC をスキップする
+        var titlesByIndex = Array<String?>(repeating: nil, count: rawChildren.count)
+        var identifiersByIndex = Array<String?>(repeating: nil, count: rawChildren.count)
+        var hasStandardMakeKeyItems = false
+        var nonEmptyIndices: [Int] = []
+        nonEmptyIndices.reserveCapacity(rawChildren.count)
+
+        for (idx, item) in rawChildren.enumerated() {
+            applyMessagingTimeout(to: item)
+            let titleResult = copyStringAttributeWithError(item, attribute: kAXTitleAttribute as CFString)
+            if isAXCommunicationAbortError(titleResult.error) {
+                return []
+            }
+            guard let rawTitle = titleResult.value,
+                  !rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            let identifierResult = copyStringAttributeWithError(item, attribute: kAXIdentifierAttribute as CFString)
+            if isAXCommunicationAbortError(identifierResult.error) {
+                return []
+            }
+            titlesByIndex[idx] = rawTitle
+            identifiersByIndex[idx] = identifierResult.value
+            if identifierResult.value == WindowMenuExtractor.standardWindowActionIdentifier {
+                hasStandardMakeKeyItems = true
+            }
+            nonEmptyIndices.append(idx)
+        }
+
+        guard !nonEmptyIndices.isEmpty else { return [] }
+
+        // 標準識別子 "makeKeyAndOrderFront:" が存在する場合、非標準項目の残属性およびサブメニュー/コマンドキー判定を完全にスキップする
+        if hasStandardMakeKeyItems {
+            var snapshots: [WindowMenuItemSnapshot] = []
+            for idx in nonEmptyIndices where identifiersByIndex[idx] == WindowMenuExtractor.standardWindowActionIdentifier {
+                let item = rawChildren[idx]
+                let enabledResult = copyBoolAttributeWithError(item, attribute: kAXEnabledAttribute as CFString)
+                if isAXCommunicationAbortError(enabledResult.error) {
+                    return []
+                }
+                guard enabledResult.value ?? true else { continue }
+                let markResult = copyStringAttributeWithError(item, attribute: kAXMenuItemMarkCharAttribute as CFString)
+                if isAXCommunicationAbortError(markResult.error) {
+                    return []
+                }
+                snapshots.append(
+                    WindowMenuItemSnapshot(
+                        title: titlesByIndex[idx] ?? "",
+                        identifier: identifiersByIndex[idx],
+                        mark: markResult.value,
+                        hasCommandKey: false,
+                        hasSubmenu: false,
+                        isEnabled: true,
+                        index: idx
+                    )
+                )
+            }
+            let extracted = WindowMenuExtractor.extractWindowListItems(from: snapshots)
+            return extracted.compactMap { snapshot in
+                guard snapshot.index >= 0, snapshot.index < rawChildren.count else { return nil }
+                return ScannedWindowMenuItem(
+                    snapshot: snapshot,
+                    axElement: SendableAXElement(value: rawChildren[snapshot.index])
+                )
+            }
+        }
+
+        // フォールバック：セパレータ境界を保った全項目スナップショットを構築し、非空項目のみ必要属性を読み取る
         var snapshots: [WindowMenuItemSnapshot] = []
         snapshots.reserveCapacity(rawChildren.count)
         for (idx, item) in rawChildren.enumerated() {
-            applyMessagingTimeout(to: item)
-            let title = copyStringAttribute(item, attribute: kAXTitleAttribute as CFString) ?? ""
-            let identifier = copyStringAttribute(item, attribute: kAXIdentifierAttribute as CFString)
-            let mark = copyStringAttribute(item, attribute: kAXMenuItemMarkCharAttribute as CFString)
+            guard let title = titlesByIndex[idx] else {
+                snapshots.append(WindowMenuItemSnapshot(title: "", index: idx))
+                continue
+            }
+            let identifier = identifiersByIndex[idx]
+            // 明らかにシステム項目と分かる識別子は残りの属性取得をスキップする
+            if let identifier, identifier == "_toggleIPad:" || identifier.hasPrefix("_NS:") {
+                snapshots.append(
+                    WindowMenuItemSnapshot(title: title, identifier: identifier, index: idx)
+                )
+                continue
+            }
+            let isEnabled = copyBoolAttribute(item, attribute: kAXEnabledAttribute as CFString) ?? true
+            guard isEnabled else {
+                snapshots.append(
+                    WindowMenuItemSnapshot(title: title, identifier: identifier, isEnabled: false, index: idx)
+                )
+                continue
+            }
             let cmdChar = copyStringAttribute(item, attribute: kAXMenuItemCmdCharAttribute as CFString)
             let cmdVirtualKey = copyStringAttribute(item, attribute: kAXMenuItemCmdVirtualKeyAttribute as CFString)
             let hasCmdChar = !(cmdChar ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let hasCmdVKey = !(cmdVirtualKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if hasCmdChar || hasCmdVKey {
+                snapshots.append(
+                    WindowMenuItemSnapshot(
+                        title: title,
+                        identifier: identifier,
+                        hasCommandKey: true,
+                        isEnabled: true,
+                        index: idx
+                    )
+                )
+                continue
+            }
             let subChildren = copyAXChildren(item)
             let hasSubmenu = !(subChildren?.isEmpty ?? true)
-            let isEnabled = copyBoolAttribute(item, attribute: kAXEnabledAttribute as CFString) ?? true
+            let mark = hasSubmenu ? nil : copyStringAttribute(item, attribute: kAXMenuItemMarkCharAttribute as CFString)
 
             snapshots.append(
                 WindowMenuItemSnapshot(
                     title: title,
                     identifier: identifier,
                     mark: mark,
-                    hasCommandKey: hasCmdChar || hasCmdVKey,
+                    hasCommandKey: false,
                     hasSubmenu: hasSubmenu,
-                    isEnabled: isEnabled,
+                    isEnabled: true,
                     index: idx
                 )
             )
