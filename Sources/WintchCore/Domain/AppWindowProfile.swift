@@ -70,6 +70,8 @@ public struct AppWindowProfile: Equatable, Sendable {
     public let offscreenCGPolicy: OffscreenCGFallbackPolicy
     /// 当該アプリ固有の未表示補助ウィンドウ幾何シグネチャ群
     public let hiddenBackingSignatures: [HiddenBackingWindowSignature]
+    /// キャッシュ済み AX ウィンドウがオフスクリーン化した際、AX またはウィンドウメニューでの生存再検証を必要とするか
+    public let requiresLiveVerificationWhenOffscreen: Bool
     /// このプロファイル定義が必要となったアプリ／OS 固有の背景説明
     public let rationale: String
 
@@ -78,16 +80,19 @@ public struct AppWindowProfile: Equatable, Sendable {
     ///   - bundleIdentifier: 対象アプリの Bundle ID（汎用既定プロファイル時は nil）
     ///   - offscreenCGPolicy: 画面外 CGWindow 補完候補の採用ポリシー
     ///   - hiddenBackingSignatures: アプリ固有の未表示補助ウィンドウシグネチャ一覧
+    ///   - requiresLiveVerificationWhenOffscreen: オフスクリーン化したキャッシュ済み AX ウィンドウの生存再検証が必要か
     ///   - rationale: プロファイル定義の根拠説明
     public init(
         bundleIdentifier: String?,
         offscreenCGPolicy: OffscreenCGFallbackPolicy,
         hiddenBackingSignatures: [HiddenBackingWindowSignature] = [],
+        requiresLiveVerificationWhenOffscreen: Bool = false,
         rationale: String = ""
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.offscreenCGPolicy = offscreenCGPolicy
         self.hiddenBackingSignatures = hiddenBackingSignatures
+        self.requiresLiveVerificationWhenOffscreen = requiresLiveVerificationWhenOffscreen
         self.rationale = rationale
     }
 }
@@ -152,6 +157,13 @@ public enum AppWindowProfileRegistry {
                 )
             ],
             rationale: "Figma は全ウィンドウ閉鎖後も画面外に未表示の 400x600 補助 CGWindow 等を保持するため、AX またはウィンドウメニュー等でタイトルが確定した実ウィンドウのみを許可する"
+        ),
+        "com.google.GeminiMacOS": AppWindowProfile(
+            bundleIdentifier: "com.google.GeminiMacOS",
+            offscreenCGPolicy: .requireAXOrMenuTitle,
+            hiddenBackingSignatures: [],
+            requiresLiveVerificationWhenOffscreen: true,
+            rationale: "Gemini はウィンドウ閉鎖後も orderOut 等により画面外に非表示の元サイズ CGWindow を保持するため、AX またはウィンドウメニュー等でタイトルが確定した実ウィンドウのみを許可し、オフスクリーンキャッシュの生存再検証を行う"
         )
     ]
 

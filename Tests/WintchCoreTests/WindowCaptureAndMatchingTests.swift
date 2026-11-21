@@ -763,4 +763,131 @@ struct WindowCaptureAndMatchingTests {
         )
         #expect(floatingAllowed?.info.windowID == 432)
     }
+
+    /// shouldRetainOffscreenCachedAXWindow が、orderOut 等で CGWindow を残すアプリの閉鎖済みオフスクリーンキャッシュを破棄し、
+    /// メニュー確認済みの別スペース窓・最小化窓・アプリ非表示中・現在スペース表示中・対象外アプリを保持することを検証する
+    @Test("shouldRetainOffscreenCachedAXWindow は未確認のorderOut閉鎖キャッシュを破棄し生存ウィンドウを保持する")
+    func shouldRetainOffscreenCachedAXWindowEvictsClosedOrderOutAndKeepsLegitimateWindows() {
+        let matchingMenu = [
+            WindowMenuItemSnapshot(
+                title: "Gemini",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 12
+            )
+        ]
+
+        // 1. 閉鎖済み（AX 不在・非最小化・アプリ非表示なし・CG 非表示・ウィンドウメニュー不一致） -> 破棄
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: true,
+                isPresentInLatestAXScan: false,
+                isMinimized: false,
+                isAppHidden: false,
+                isCGOnScreen: false,
+                title: "Gemini",
+                menuItems: []
+            ) == false
+        )
+
+        // 2. 別スペースで実際に開いている（ウィンドウメニューに同一タイトルが存在） -> 保持
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: true,
+                isPresentInLatestAXScan: false,
+                isMinimized: false,
+                isAppHidden: false,
+                isCGOnScreen: false,
+                title: "Gemini",
+                menuItems: matchingMenu
+            ) == true
+        )
+
+        // 3. 最小化・アプリ非表示（Cmd+H）・画面表示中・最新 AX 捕捉済み・対象外アプリ -> 保持
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: true,
+                isPresentInLatestAXScan: false,
+                isMinimized: true,
+                isAppHidden: false,
+                isCGOnScreen: false,
+                title: "Gemini",
+                menuItems: []
+            ) == true
+        )
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: true,
+                isPresentInLatestAXScan: false,
+                isMinimized: false,
+                isAppHidden: true,
+                isCGOnScreen: false,
+                title: "Gemini",
+                menuItems: []
+            ) == true
+        )
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: true,
+                isPresentInLatestAXScan: false,
+                isMinimized: false,
+                isAppHidden: false,
+                isCGOnScreen: true,
+                title: "Gemini",
+                menuItems: []
+            ) == true
+        )
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: true,
+                isPresentInLatestAXScan: true,
+                isMinimized: false,
+                isAppHidden: false,
+                isCGOnScreen: false,
+                title: "Gemini",
+                menuItems: []
+            ) == true
+        )
+        #expect(
+            WindowService.shouldRetainOffscreenCachedAXWindow(
+                requiresLiveVerificationWhenOffscreen: false,
+                isPresentInLatestAXScan: false,
+                isMinimized: false,
+                isAppHidden: false,
+                isCGOnScreen: false,
+                title: "メモ",
+                menuItems: []
+            ) == true
+        )
+    }
+
+    /// evaluateAXWindowLivenessFromList が、kAXWindowsAttribute 成功時の空配列をクローズ済み（false）と判定し、
+    /// 取得失敗時のみ要素ロール確認へのフォールバック（nil）を指示することを検証する
+    @Test("evaluateAXWindowLivenessFromList はkAXWindows成功時の不在を閉鎖済みと判定する")
+    func evaluateAXWindowLivenessFromListTreatsSuccessfulEmptyListAsClosed() {
+        #expect(
+            WindowService.evaluateAXWindowLivenessFromList(
+                windowsAttributeSucceeded: true,
+                containsTarget: true
+            ) == true
+        )
+        #expect(
+            WindowService.evaluateAXWindowLivenessFromList(
+                windowsAttributeSucceeded: true,
+                containsTarget: false
+            ) == false
+        )
+        #expect(
+            WindowService.evaluateAXWindowLivenessFromList(
+                windowsAttributeSucceeded: false,
+                containsTarget: true
+            ) == true
+        )
+        #expect(
+            WindowService.evaluateAXWindowLivenessFromList(
+                windowsAttributeSucceeded: false,
+                containsTarget: false
+            ) == nil
+        )
+    }
 }
