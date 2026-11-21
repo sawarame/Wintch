@@ -40,7 +40,7 @@ public final class SettingsViewModel {
     /// 現在のアクセシビリティ権限状態
     public private(set) var permissionStatus: AccessibilityPermissionStatus
 
-    /// 通常スイッチャーの表示形式設定（リスト型／キャプチャ表示型）
+    /// 通常スイッチャーの表示形式設定（リスト型／アイコン型／キャプチャ表示型）
     public private(set) var normalDisplayStyle: SwitcherDisplayStyle
 
     /// 画面収録権限状態（キャプチャ表示型が選択されている場合のみ確認対象となる）
@@ -194,14 +194,14 @@ public final class SettingsViewModel {
     public func refreshStatus(permissionStatus overridePermissionStatus: AccessibilityPermissionStatus? = nil) {
         isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         permissionStatus = overridePermissionStatus ?? permissionService.currentStatus()
-        // リスト型選択中は画面収録権限を一切確認しない（FR-003）
+        // リスト型・アイコン型選択中は画面収録権限を一切確認しない（FR-003）
         if normalDisplayStyle == .capture {
             screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
         }
     }
 
     /// 通常スイッチャーの表示形式を変更して永続化し、関連ステータスを更新する
-    /// - Parameter style: 新しい表示形式（リスト型／キャプチャ表示型）
+    /// - Parameter style: 新しい表示形式（リスト型／アイコン型／キャプチャ表示型）
     public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
         guard normalDisplayStyle != style else { return }
         normalDisplayStyle = style

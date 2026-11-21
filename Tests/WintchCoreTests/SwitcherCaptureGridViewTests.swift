@@ -137,4 +137,84 @@ struct SwitcherCaptureGridViewTests {
         #expect(grantedSize.width == SwitcherGridLayout.cardWidth + SwitcherGridLayout.gridPadding * 2)
         #expect(deniedSize.height > grantedSize.height)
     }
+
+    /// アイコン型グリッドビューが「1 ウィンドウ = 1 アイコン」でアプリ名・ウィンドウタイトルを表示し、
+    /// 画面収録権限未許可バナーを含まず列数に応じた幅でレイアウトされること、および SwitcherContentView がモード・表示形式に応じて正しく分岐することを検証する
+    @Test("SwitcherIconGridView のタイル表示・複数列レイアウトと SwitcherContentView の分岐を検証する")
+    @MainActor
+    func iconGridViewRendersTilesWithoutPermissionBannerAndContentViewBranches() {
+        let windowService = MockWindowService()
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 101,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Apple Documentation",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "w2",
+                cgWindowID: 102,
+                pid: 10,
+                applicationName: "Safari",
+                title: "GitHub Repository",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            ),
+            RawWindowCandidate(
+                id: "w3",
+                cgWindowID: 103,
+                pid: 20,
+                applicationName: "Visual Studio Code",
+                title: "Wintch",
+                lastActivatedAt: now.addingTimeInterval(-20)
+            )
+        ]
+
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            iconProvider: MockIconProvider(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .icon
+        )
+        viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+
+        // アイコン型起動時に画面収録権限チェックやキャプチャ処理が一切呼ばれていないこと
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        #expect(viewModel.gridColumnCount == 3)
+
+        let iconGridView = SwitcherIconGridView(viewModel: viewModel)
+        let hostingView = NSHostingView(rootView: iconGridView)
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingSize = hostingView.fittingSize
+
+        let expectedWidth = 3 * SwitcherGridLayout.iconTileWidth
+            + 2 * SwitcherGridLayout.cardSpacing
+            + SwitcherGridLayout.gridPadding * 2
+        #expect(fittingSize.width == expectedWidth)
+        #expect(fittingSize.height >= SwitcherGridLayout.iconTileHeight + SwitcherGridLayout.gridPadding * 2)
+
+        // SwitcherContentView が通常モード・アイコン型のときはアイコングリッド幅でレイアウトされ、
+        // ランチャーモード時はアイコン型設定中でもリスト型（幅 520pt）で描画されること
+        let normalContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
+        normalContentHosting.layoutSubtreeIfNeeded()
+        #expect(normalContentHosting.fittingSize.width == expectedWidth)
+
+        viewModel.cancel()
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.mode == .launcher)
+        let launcherContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
+        launcherContentHosting.layoutSubtreeIfNeeded()
+        #expect(launcherContentHosting.fittingSize.width == 520)
+    }
 }

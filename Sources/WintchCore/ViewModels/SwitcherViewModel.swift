@@ -40,7 +40,7 @@ public final class SwitcherViewModel {
     /// ランチャーモードでウィンドウ一覧の下に表示するアプリ起動候補一覧（表示中のウィンドウと同アプリは除外）
     public private(set) var displayedAppResults: [AppSearchResult] = []
 
-    /// 通常スイッチャーの現在の表示形式（リスト型／キャプチャ表示型）
+    /// 通常スイッチャーの現在の表示形式（リスト型／アイコン型／キャプチャ表示型）
     public private(set) var normalDisplayStyle: SwitcherDisplayStyle
 
     /// キャプチャ表示型で使用するウィンドウごとのサムネイル画像（cgWindowID キー、メモリ限定）
@@ -49,7 +49,7 @@ public final class SwitcherViewModel {
     /// キャプチャ表示型における画面収録権限の許可状態（未許可時はバナー案内とプレースホルダー表示へフォールバック）
     public private(set) var isScreenRecordingGranted: Bool = true
 
-    /// キャプチャグリッドで現在適用中の 1 行あたり列数（上下矢印の行間移動計算に使用）
+    /// アイコン型・キャプチャ表示型グリッドで現在適用中の 1 行あたり列数（上下矢印の行間移動計算に使用）
     public private(set) var gridColumnCount: Int = 1
 
     /// アクティブディスプレイの利用可能サイズ（グリッド列数および最大高さ算出用）
@@ -203,9 +203,16 @@ public final class SwitcherViewModel {
             isScreenRecordingGranted = true
             windowCaptureService?.clearCache()
         }
+        if style.usesGridLayout && !displayedResults.isEmpty {
+            gridColumnCount = SwitcherGridLayout.columnsCount(
+                itemCount: displayedResults.count,
+                availableScreenWidth: availableScreenSize.width,
+                style: style
+            )
+        }
     }
 
-    /// キャプチャグリッドで現在適用されている列数を更新する
+    /// グリッド表示（アイコン型・キャプチャ表示型）で現在適用されている列数を更新する
     /// - Parameter columns: 1 以上の列数
     public func updateGridColumnCount(_ columns: Int) {
         gridColumnCount = max(columns, 1)
@@ -218,7 +225,8 @@ public final class SwitcherViewModel {
         if !displayedResults.isEmpty {
             gridColumnCount = SwitcherGridLayout.columnsCount(
                 itemCount: displayedResults.count,
-                availableScreenWidth: size.width
+                availableScreenWidth: size.width,
+                style: normalDisplayStyle
             )
         }
     }
@@ -315,10 +323,11 @@ public final class SwitcherViewModel {
         case .normal:
             displayedResults = allEntries.map { WindowSearchResult(entry: $0) }
             displayedAppResults = []
-            if normalDisplayStyle == .capture {
+            if normalDisplayStyle.usesGridLayout {
                 gridColumnCount = SwitcherGridLayout.columnsCount(
                     itemCount: displayedResults.count,
-                    availableScreenWidth: availableScreenSize.width
+                    availableScreenWidth: availableScreenSize.width,
+                    style: normalDisplayStyle
                 )
             }
         case .launcher:
@@ -353,7 +362,7 @@ public final class SwitcherViewModel {
         let count = activeResultCount
         guard mode != .inactive, count > 0 else { return }
 
-        if mode == .normal && normalDisplayStyle == .capture {
+        if mode == .normal && normalDisplayStyle.usesGridLayout {
             selectedIndex = SwitcherGridLayout.moveIndex(
                 current: selectedIndex,
                 direction: direction,
@@ -469,6 +478,13 @@ public final class SwitcherViewModel {
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
 
         let shouldUseCapture = targetMode == .normal && normalDisplayStyle == .capture
+        if targetMode == .normal && normalDisplayStyle.usesGridLayout {
+            gridColumnCount = SwitcherGridLayout.columnsCount(
+                itemCount: sorted.count,
+                availableScreenWidth: availableScreenSize.width,
+                style: normalDisplayStyle
+            )
+        }
         if shouldUseCapture {
             let granted: Bool
             if let screenRecordingPermissionService {
@@ -493,10 +509,6 @@ public final class SwitcherViewModel {
                 }
             }
             capturedThumbnails = initialThumbnails
-            gridColumnCount = SwitcherGridLayout.columnsCount(
-                itemCount: sorted.count,
-                availableScreenWidth: availableScreenSize.width
-            )
         } else {
             capturedThumbnails = [:]
             isScreenRecordingGranted = true

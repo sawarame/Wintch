@@ -1856,4 +1856,111 @@ struct SwitcherViewModelTests {
         #expect(viewModel.displayedAppResults.map(\.app.bundleIdentifier) == ["com.google.Chrome"])
         viewModel.cancel()
     }
+
+    /// アイコン型スイッチャーにおける 1 ウィンドウ = 1 アイコン表示、画面幅 85% 折り返しによる 4 方向矢印移動、
+    /// Tab / Shift+Tab 移動、クリック確定、Esc キャンセル、修飾キー+Q クローズ、画面収録権限非参照、
+    /// およびキャプチャ表示型からアイコン型への切り替え時のキャッシュ破棄を検証する
+    @Test("アイコン型で画面収録権限を使わず4方向移動・クローズ・確定・キャプチャキャッシュ破棄が動作する")
+    @MainActor
+    func iconStyleFourWayNavigationCloseWindowAndZeroScreenRecordingAccess() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        // 同一アプリの複数ウィンドウを含む 5 件の有効ウィンドウ
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 401, pid: 10, applicationName: "Safari", title: "Tab 1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 402, pid: 10, applicationName: "Safari", title: "Tab 2", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", cgWindowID: 403, pid: 20, applicationName: "Finder", title: "Desktop", lastActivatedAt: now.addingTimeInterval(-20)),
+            RawWindowCandidate(id: "w4", cgWindowID: 404, pid: 30, applicationName: "Code", title: "Wintch", lastActivatedAt: now.addingTimeInterval(-30)),
+            RawWindowCandidate(id: "w5", cgWindowID: 405, pid: 40, applicationName: "Notes", title: "Ideas", lastActivatedAt: now.addingTimeInterval(-40))
+        ]
+
+        // 先にキャプチャ表示型でサムネイルを保持した状態からアイコン型へ切り替えた際、即座にキャッシュが破棄されることを確認する
+        screenRecordingService.stubbedStatus = .granted
+        captureService.cachedThumbnails[401] = NSImage(size: NSSize(width: 80, height: 60))
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture
+        )
+        // 500pt 幅画面: アイコン型では 3 列（1 行目: [0, 1, 2]、2 行目: [3, 4]）に折り返される
+        viewModel.updateAvailableScreenSize(CGSize(width: 500, height: 800))
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.capturedThumbnails[401] != nil)
+        viewModel.cancel()
+
+        // キャプチャ表示型 -> アイコン型へ変更するとキャプチャキャッシュが全破棄される
+        let statusCallsBeforeIcon = screenRecordingService.currentStatusCallCount
+        let captureCallsBeforeIcon = captureService.capturedRequestWindowIDs.count
+        viewModel.updateNormalDisplayStyle(.icon)
+        #expect(viewModel.normalDisplayStyle == .icon)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+        #expect(captureService.clearCacheCallCount == 1)
+
+        // アイコン型で起動: 同一アプリの複数ウィンドウも集約せず 5 件すべて並び、初期選択は 2 番目（index 1）
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.mode == .normal)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3", "w4", "w5"])
+        #expect(viewModel.selectedIndex == 1)
+        #expect(viewModel.gridColumnCount == 3)
+        // 画面収録権限の確認・キャプチャ要求・キャッシュpruneは一切実行されない
+        #expect(screenRecordingService.currentStatusCallCount == statusCallsBeforeIcon)
+        #expect(captureService.capturedRequestWindowIDs.count == captureCallsBeforeIcon)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+
+        // 3 列 × 5 件グリッドでの上下左右矢印移動（index 1 -> 下:4 -> 上:1 -> 右:2 -> 下:4(最終行末尾丸め) -> 左:3）
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 4)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
+        #expect(viewModel.selectedIndex == 1)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .right))
+        #expect(viewModel.selectedIndex == 2)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 4)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .left))
+        #expect(viewModel.selectedIndex == 3)
+
+        // Tab / Shift + Tab による前後移動
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 4)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
+        #expect(viewModel.selectedIndex == 3)
+
+        // 修飾キー + Q で index 3 (w4) を閉じ、続いてさらに2件閉じて残り 2 件になると gridColumnCount も 2 列へ再計算される
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [30])
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3", "w5"])
+        #expect(viewModel.gridColumnCount == 3)
+
+        await viewModel.closeSelectedWindow() // index 3 (w5) を閉じる -> 残り 3 件
+        viewModel.moveSelection(.left) // index 2 -> 1 (w2: Safari 2枚のうち1枚)
+        await viewModel.closeSelectedWindow() // w2 を単体クローズ -> 残り 2 件 (w1, w3)
+        #expect(windowService.closedWindows.map(\.id) == ["w2"])
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+        #expect(viewModel.gridColumnCount == 2)
+
+        // タイルクリック（selectAndActivate）で直接確定・アクティブ化できる
+        viewModel.selectAndActivate(at: 0)
+        #expect(viewModel.isPresented == false)
+        #expect(windowService.activatedWindows.map(\.id) == ["w1"])
+
+        // 再起動して Esc キャンセルするとアクティブ化せず閉じる
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.isPresented == true)
+        viewModel.handleHotKeyEvent(.escapePressed)
+        #expect(viewModel.isPresented == false)
+        #expect(windowService.activatedWindows.map(\.id) == ["w1"])
+    }
 }

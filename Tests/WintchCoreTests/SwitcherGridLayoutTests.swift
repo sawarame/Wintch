@@ -12,7 +12,7 @@ struct SwitcherGridLayoutTests {
         #expect(SwitcherGridLayout.columnsCount(itemCount: 1, availableScreenWidth: 1440) == 1)
         #expect(SwitcherGridLayout.columnsCount(itemCount: 2, availableScreenWidth: 1440) == 2)
 
-        // 広い画面でも最大列数上限（5 列）を超えない
+        // 広い画面でも最大列数上限（キャプチャ表示型: 5 列）を超えない
         #expect(SwitcherGridLayout.columnsCount(itemCount: 12, availableScreenWidth: 2560) == 5)
 
         // 狭い画面（例: 520pt）では画面幅 85% 以内に収まる列数へ自動調整される
@@ -21,6 +21,38 @@ struct SwitcherGridLayoutTests {
 
         // 0 件以下でも安全な 1 を返す
         #expect(SwitcherGridLayout.columnsCount(itemCount: 0, availableScreenWidth: 1440) == 1)
+    }
+
+    /// アイコン型のタイル幅（112pt）と最大列数上限（8 列）に基づく列数算出および SwitcherDisplayStyle の定義を検証する
+    @Test("アイコン型の列数計算および SwitcherDisplayStyle の定義順・プロパティを検証する")
+    func iconStyleColumnsCountAndDisplayStyleProperties() {
+        // SwitcherDisplayStyle の列挙順・rawValue・displayName・default・usesGridLayout
+        #expect(SwitcherDisplayStyle.allCases == [.list, .icon, .capture])
+        #expect(SwitcherDisplayStyle.default == .list)
+        #expect(SwitcherDisplayStyle.list.rawValue == "list")
+        #expect(SwitcherDisplayStyle.icon.rawValue == "icon")
+        #expect(SwitcherDisplayStyle.capture.rawValue == "capture")
+        #expect(SwitcherDisplayStyle.list.displayName == "リスト型")
+        #expect(SwitcherDisplayStyle.icon.displayName == "アイコン型")
+        #expect(SwitcherDisplayStyle.capture.displayName == "キャプチャ表示型")
+        #expect(SwitcherDisplayStyle.list.usesGridLayout == false)
+        #expect(SwitcherDisplayStyle.icon.usesGridLayout == true)
+        #expect(SwitcherDisplayStyle.capture.usesGridLayout == true)
+
+        // アイコン型でも 1〜3 件のときは項目数に一致し、不要な空列を作らない
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 1, availableScreenWidth: 1440, style: .icon) == 1)
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 3, availableScreenWidth: 1440, style: .icon) == 3)
+
+        // 広い画面では最大列数上限（8 列）でクランプされる
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 12, availableScreenWidth: 1440, style: .icon) == 8)
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 20, availableScreenWidth: 2560, style: .icon) == 8)
+
+        // 狭い画面では画面幅 85% 以内に収まる列数へ自動折り返しされる
+        // availableScreenWidth = 500 -> maxPanelWidth = 425 -> innerWidth = 397 -> floor((397 + 10) / 122) = 3 列
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 10, availableScreenWidth: 500, style: .icon) == 3)
+        // availableScreenWidth = 300 -> maxPanelWidth = 255 -> innerWidth = 227 -> floor((227 + 10) / 122) = 1 列
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 10, availableScreenWidth: 300, style: .icon) == 1)
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 0, availableScreenWidth: 1440, style: .icon) == 1)
     }
 
     /// 3 列 × 7 件（最終行 1 件）のグリッドにおける上下左右の循環移動を検証する
