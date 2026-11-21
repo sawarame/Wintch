@@ -24,6 +24,11 @@ public final class AppCoordinator {
     /// 権限誘導画面の状態管理 ViewModel
     public let permissionGuideViewModel: PermissionGuideViewModel
 
+    /// 現在の通常スイッチャー表示形式
+    public var normalDisplayStyle: SwitcherDisplayStyle {
+        settingsViewModel.normalDisplayStyle
+    }
+
     /// ウィンドウ情報サービス
     private let windowService: any WindowServicing
     /// グローバルホットキー監視サービス
@@ -188,6 +193,12 @@ public final class AppCoordinator {
         windowService.stopObserving()
         permissionService.stopMonitoring()
         NSApplication.shared.terminate(nil)
+    }
+
+    /// 通常スイッチャーの表示形式を更新し、永続化・スイッチャー状態・設定画面を即時同期する
+    /// - Parameter style: 新しい表示形式
+    public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
+        settingsViewModel.updateNormalDisplayStyle(style)
     }
 
     /// 権限状態の変化に応じて監視サービスの起動・停止および誘導画面の表示を切り替える

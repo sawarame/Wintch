@@ -141,6 +141,89 @@ struct AppCoordinatorTests {
         // 再びキャプチャ表示型へ切り替えると即座に反映される
         coordinator.settingsViewModel.updateNormalDisplayStyle(.capture)
         #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
+        #expect(coordinator.normalDisplayStyle == .capture)
+    }
+
+    /// メニューバー相当の共有経路（AppCoordinator.updateNormalDisplayStyle）からの切り替えで
+    /// 永続化・SettingsViewModel・SwitcherViewModel への双方向同期およびキャッシュ破棄が行われ、
+    /// 権限未許可時も設定画面や権限ダイアログを開かないことを検証する
+    @Test("コーディネーター経由の表示形式切り替えが永続化・双方向同期・キャッシュ破棄され権限ダイアログを開かない")
+    @MainActor
+    func coordinatorDisplayStyleUpdateSyncsPersistsClearsCacheWithoutPrompting() {
+        let store = MockPreferencesStore()
+        store.storedNormalDisplayStyle = .list
+        let windowService = MockWindowService()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 101,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Docs",
+                lastActivatedAt: Date()
+            )
+        ]
+        let permissionService = MockAccessibilityPermissionService()
+        permissionService.stubbedStatus = .granted
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+        let presenter = MockWindowFrontPresenter()
+
+        let coordinator = AppCoordinator(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: permissionService,
+            preferencesStore: store,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            windowFrontPresenter: presenter
+        )
+
+        coordinator.start()
+        #expect(coordinator.normalDisplayStyle == .list)
+        #expect(coordinator.settingsViewModel.normalDisplayStyle == .list)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .list)
+
+        // 画面収録権限が未許可の状態でキャプチャ表示型へ切り替えても、設定画面や OS 権限ダイアログは開かない
+        coordinator.updateNormalDisplayStyle(.capture)
+        #expect(coordinator.normalDisplayStyle == .capture)
+        #expect(coordinator.settingsViewModel.normalDisplayStyle == .capture)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
+        #expect(store.storedNormalDisplayStyle == .capture)
+        #expect(store.saveNormalDisplayStyleCallCount == 1)
+        #expect(coordinator.settingsViewModel.screenRecordingStatus == .denied)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 0)
+        #expect(presenter.presentedWindows.isEmpty)
+
+        // 権限許可状態で通常スイッチャーを起動してサムネイルを保持させた状態でリスト型へ戻す
+        screenRecordingService.stubbedStatus = .granted
+        captureService.cachedThumbnails[101] = NSImage(size: NSSize(width: 64, height: 64))
+        let clearCountBeforeList = captureService.clearCacheCallCount
+        coordinator.switcherViewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(coordinator.switcherViewModel.capturedThumbnails[101] != nil)
+
+        coordinator.updateNormalDisplayStyle(.list)
+        #expect(coordinator.normalDisplayStyle == .list)
+        #expect(coordinator.settingsViewModel.normalDisplayStyle == .list)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .list)
+        #expect(store.storedNormalDisplayStyle == .list)
+        #expect(store.saveNormalDisplayStyleCallCount == 2)
+        #expect(coordinator.switcherViewModel.capturedThumbnails.isEmpty)
+        #expect(captureService.cachedThumbnails.isEmpty)
+        #expect(captureService.clearCacheCallCount == clearCountBeforeList + 1)
+
+        // 後続テストや他テストへの影響を防ぐためパネルを閉じておく
+        coordinator.switcherViewModel.cancel()
+
+        // 設定画面側（SettingsViewModel）から変更した場合もコーディネーター参照値に即時反映される
+        coordinator.settingsViewModel.updateNormalDisplayStyle(.capture)
+        #expect(coordinator.normalDisplayStyle == .capture)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
     }
 
     /// 開発版と配布版それぞれの AppIdentity が AppCoordinator に正しく保持されることを検証する
