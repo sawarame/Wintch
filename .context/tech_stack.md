@@ -9,7 +9,7 @@ Wintch プロジェクトで使用されている技術スタック、アーキ�
 - **言語 / パッケージ管理**: Swift 6.0（Strict Concurrency 対応） / Swift Package Manager（`Package.swift`）
 - **対象 OS**: macOS 14.0 (Sonoma) 以降
 - **UI フレームワーク**:
-  - **SwiftUI**: 設定画面、権限誘導画面、「Wintchについて」画面、スイッチャーリスト、キャプチャグリッド、メニューバー常駐メニュー（`MenuBarExtra`）の構築
+  - **SwiftUI**: 設定画面、権限誘導画面、「Wintchについて」画面、スイッチャーリスト、アイコングリッド、キャプチャグリッド、メニューバー常駐メニュー（`MenuBarExtra`）の構築
   - **AppKit**: 最前面フローティングパネル制御（`NSPanel`）、IME 対応検索入力欄（`NSTextField`）、ショートカット記録フィールド（`NSView`）、ウィンドウ最前面化およびアプリ起動（`NSWorkspace`, `NSRunningApplication`）
 - **状態管理**: Swift 標準 Observation フレームワーク（`@Observable` + `@MainActor`）
 - **OS 低レイヤー・システム API**:
@@ -80,8 +80,8 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── ScreenRecordingPermissionStatus.swift # 画面収録権限状態
 │       │   ├── ShortcutConflictValidator.swift  # 通常スイッチャー・ランチャー間の双方向競合検証
 │       │   ├── ShortcutPreference.swift         # 通常スイッチャーショートカット設定（旧形式マイグレーション含む）
-│       │   ├── SwitcherDisplayStyle.swift       # 表示形式（リスト型 / キャプチャ表示型）
-│       │   ├── SwitcherGridLayout.swift         # キャプチャグリッド列数算出・4 方向循環カーソル計算
+│       │   ├── SwitcherDisplayStyle.swift       # 表示形式（リスト型 / アイコン型 / キャプチャ表示型）
+│       │   ├── SwitcherGridLayout.swift         # アイコン型・キャプチャグリッド列数算出・4 方向循環カーソル計算
 │       │   ├── SwitcherListRow.swift            # リスト表示用の統合行識別・構築ロジック
 │       │   ├── SwitcherSelection.swift          # スイッチャー／ランチャーの選択インデックス・循環計算
 │       │   ├── WindowEntry.swift                # 表示対象ウィンドウドメインモデル
@@ -115,6 +115,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │           ├── ShortcutRecorderView.swift       # ショートカットキー入力キャプチャビュー
 │           ├── SwitcherCaptureGridView.swift    # キャプチャ表示型グリッドビュー
 │           ├── SwitcherContentView.swift        # モード・表示形式に応じたコンテナ分岐ビュー
+│           ├── SwitcherIconGridView.swift       # アイコン型グリッドビュー
 │           ├── SwitcherListView.swift           # リスト型スイッチャー＆検索ランチャー統合ビュー
 │           └── SwitcherPanel.swift              # 非アクティブ表示対応フローティング NSPanel ラッパー
 └── Tests/

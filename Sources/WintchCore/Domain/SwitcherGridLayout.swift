@@ -1,33 +1,77 @@
 import CoreGraphics
 import Foundation
 
-/// キャプチャ表示型グリッドの列数計算および 4 方向カーソル移動を行う純粋ロジック
+/// アイコン型およびキャプチャ表示型グリッドの列数計算および 4 方向カーソル移動を行う純粋ロジック
 public enum SwitcherGridLayout {
-    /// 1 枚のカードの固定横幅（ポイント）
+    /// キャプチャ表示型 1 枚のカードの固定横幅（ポイント）
     public static let cardWidth: CGFloat = 216
-    /// 1 枚のカードの固定高さ（ポイント）
+    /// キャプチャ表示型 1 枚のカードの固定高さ（ポイント）
     public static let cardHeight: CGFloat = 164
-    /// カード間の横・縦間隔（ポイント）
+    /// アイコン型 1 枚のタイルの固定横幅（ポイント）
+    public static let iconTileWidth: CGFloat = 112
+    /// アイコン型 1 枚のタイルの固定高さ（ポイント）
+    public static let iconTileHeight: CGFloat = 120
+    /// カード／タイル間の横・縦間隔（ポイント）
     public static let cardSpacing: CGFloat = 10
     /// グリッド外側の余白（ポイント）
     public static let gridPadding: CGFloat = 14
-    /// 1 行あたりに配置する最大列数上限
+    /// キャプチャ表示型で 1 行あたりに配置する最大列数上限
     public static let maxColumnsLimit: Int = 5
+    /// アイコン型で 1 行あたりに配置する最大列数上限
+    public static let iconMaxColumnsLimit: Int = 8
     /// ディスプレイ利用可能幅に対するパネル最大幅の比率
     public static let maxScreenWidthRatio: CGFloat = 0.85
 
-    /// 項目数と利用可能な画面幅から、1 行あたりの適切な列数を算出する
+    /// 項目数、利用可能な画面幅、および表示形式から、1 行あたりの適切な列数を算出する
     /// - Parameters:
-    ///   - itemCount: 表示するウィンドウカードの総数
+    ///   - itemCount: 表示するウィンドウ項目の総数
     ///   - availableScreenWidth: アクティブディスプレイの利用可能横幅（ポイント）
+    ///   - style: 計算対象の表示形式（既定値は `.capture`）
     /// - Returns: 1 以上かつ項目数以下のグリッド列数
-    public static func columnsCount(itemCount: Int, availableScreenWidth: CGFloat) -> Int {
+    public static func columnsCount(
+        itemCount: Int,
+        availableScreenWidth: CGFloat,
+        style: SwitcherDisplayStyle = .capture
+    ) -> Int {
+        switch style {
+        case .icon:
+            return columnsCount(
+                itemCount: itemCount,
+                availableScreenWidth: availableScreenWidth,
+                itemWidth: iconTileWidth,
+                maxColumns: iconMaxColumnsLimit
+            )
+        case .capture, .list:
+            return columnsCount(
+                itemCount: itemCount,
+                availableScreenWidth: availableScreenWidth,
+                itemWidth: cardWidth,
+                maxColumns: maxColumnsLimit
+            )
+        }
+    }
+
+    /// 項目数、利用可能な画面幅、個別アイテム幅、および最大列数上限から、1 行あたりの列数を算出する
+    /// - Parameters:
+    ///   - itemCount: 表示するウィンドウ項目の総数
+    ///   - availableScreenWidth: アクティブディスプレイの利用可能横幅（ポイント）
+    ///   - itemWidth: 1 アイテムあたりの固定横幅（ポイント）
+    ///   - maxColumns: 1 行あたりの最大列数上限
+    /// - Returns: 1 以上かつ項目数以下のグリッド列数
+    public static func columnsCount(
+        itemCount: Int,
+        availableScreenWidth: CGFloat,
+        itemWidth: CGFloat,
+        maxColumns: Int
+    ) -> Int {
         guard itemCount > 0 else { return 1 }
 
-        let maxPanelWidth = max(availableScreenWidth * maxScreenWidthRatio, cardWidth + gridPadding * 2)
-        let innerWidth = max(maxPanelWidth - gridPadding * 2, cardWidth)
-        let rawFitColumns = Int(floor((innerWidth + cardSpacing) / (cardWidth + cardSpacing)))
-        let clampedFitColumns = min(max(rawFitColumns, 1), maxColumnsLimit)
+        let safeItemWidth = max(itemWidth, 1)
+        let safeMaxColumns = max(maxColumns, 1)
+        let maxPanelWidth = max(availableScreenWidth * maxScreenWidthRatio, safeItemWidth + gridPadding * 2)
+        let innerWidth = max(maxPanelWidth - gridPadding * 2, safeItemWidth)
+        let rawFitColumns = Int(floor((innerWidth + cardSpacing) / (safeItemWidth + cardSpacing)))
+        let clampedFitColumns = min(max(rawFitColumns, 1), safeMaxColumns)
         return min(itemCount, clampedFitColumns)
     }
 

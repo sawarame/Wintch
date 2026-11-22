@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// スイッチャーパネル内のルートコンテナビュー
-/// 通常モードかつ表示形式がキャプチャ表示型のときのみグリッドビューを描画し、それ以外は既存のリストビューを描画する
+/// 通常モード時は選択中の表示形式（リスト型／アイコン型／キャプチャ表示型）に応じたビューを描画し、検索ランチャー時は常にリストビューを描画する
 public struct SwitcherContentView: View {
     /// スイッチャーの状態管理を行う ViewModel
     private let viewModel: SwitcherViewModel
@@ -24,11 +24,26 @@ public struct SwitcherContentView: View {
     /// 現在のモードと表示形式に応じて表示ビューを切り替える本体構築
     public var body: some View {
         Group {
-            if viewModel.mode == .normal && viewModel.normalDisplayStyle == .capture {
-                SwitcherCaptureGridView(
-                    viewModel: viewModel,
-                    onContentSizeChanged: onContentSizeChanged
-                )
+            if viewModel.mode == .normal {
+                switch viewModel.normalDisplayStyle {
+                case .list:
+                    SwitcherListView(
+                        viewModel: viewModel,
+                        onContentHeightChanged: { newHeight in
+                            onContentSizeChanged?(CGSize(width: 520, height: newHeight))
+                        }
+                    )
+                case .icon:
+                    SwitcherIconGridView(
+                        viewModel: viewModel,
+                        onContentSizeChanged: onContentSizeChanged
+                    )
+                case .capture:
+                    SwitcherCaptureGridView(
+                        viewModel: viewModel,
+                        onContentSizeChanged: onContentSizeChanged
+                    )
+                }
             } else {
                 SwitcherListView(
                     viewModel: viewModel,

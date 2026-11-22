@@ -11,7 +11,7 @@ While macOS's built-in `Command + Tab` switches between applications, Wintch let
 ## Key Features
 
 * **Least Privilege & Opt-In (Privacy by Design)**
-  The default **List Switcher** and **Search Launcher** do not use Screen Recording permission at all—they operate solely using the Accessibility API (`AXUIElement`) and window metadata (`CGWindowListCopyWindowInfo`). Only when you explicitly opt into the **Capture Preview** style in Settings does Wintch use `ScreenCaptureKit` to display in-memory thumbnail previews.
+  The default **List Switcher**, **Icon Switcher**, and **Search Launcher** do not use Screen Recording permission at all—they operate solely using the Accessibility API (`AXUIElement`) and window metadata (`CGWindowListCopyWindowInfo`). Only when you explicitly opt into the **Capture Preview** style in Settings or the menu bar does Wintch use `ScreenCaptureKit` to display in-memory thumbnail previews.
 * **Window Switcher (Default: `Option + Tab`)**
   Displays standard windows across all Spaces in Most Recently Used (MRU) order. Hold the modifier key and press the trigger key (with `Shift` for reverse order) or arrow keys to move the selection, then release the modifier key to switch (press `Esc` to cancel).
 * **Search Launcher & App Launching (Default: `Option + Space`)**

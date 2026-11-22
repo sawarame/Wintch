@@ -60,7 +60,7 @@ public struct PermissionGuideView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             // 複数行折り返し時に SwiftUI による縦方向圧縮で末尾が途切れないよう固定する
-            Text("※ リスト型および検索ランチャーでは「画面収録」権限を使用しません（キャプチャ表示型を選択した場合のみ任意で使用します）。")
+            Text("※ リスト型・アイコン型および検索ランチャーでは「画面収録」権限を使用しません（キャプチャ表示型を選択した場合のみ任意で使用します）。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -225,6 +225,19 @@ struct SettingsViewModelTests {
         #expect(store.storedNormalDisplayStyle == .list)
         #expect(notifiedStyles == [.capture, .list])
         #expect(screenRecordingService.currentStatusCallCount == countBeforeRevert)
+
+        // アイコン型へ切り替えた場合も永続化・通知が行われ、画面収録権限の確認・要求・設定遷移は一切行わない
+        viewModel.updateNormalDisplayStyle(.icon)
+        viewModel.refreshStatus()
+        viewModel.requestScreenRecordingPermission()
+        viewModel.openScreenRecordingSettings()
+        #expect(viewModel.normalDisplayStyle == .icon)
+        #expect(store.storedNormalDisplayStyle == .icon)
+        #expect(notifiedStyles == [.capture, .list, .icon])
+        #expect(viewModel.screenRecordingStatus == .denied)
+        #expect(screenRecordingService.currentStatusCallCount == countBeforeRevert)
+        #expect(screenRecordingService.requestPermissionCallCount == 1)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 1)
     }
 
     /// PreferencesStore が表示形式の初期値フォールバック・保存・読み込みを正しく行うことを検証する
@@ -237,6 +250,9 @@ struct SettingsViewModelTests {
 
         let store = PreferencesStore(suiteName: suiteName)
         #expect(store.loadNormalDisplayStyle() == .list)
+
+        store.saveNormalDisplayStyle(.icon)
+        #expect(store.loadNormalDisplayStyle() == .icon)
 
         store.saveNormalDisplayStyle(.capture)
         #expect(store.loadNormalDisplayStyle() == .capture)

@@ -142,6 +142,12 @@ struct AppCoordinatorTests {
         coordinator.settingsViewModel.updateNormalDisplayStyle(.capture)
         #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
         #expect(coordinator.normalDisplayStyle == .capture)
+
+        // アイコン型へ切り替えた場合も即座に反映され、キャプチャキャッシュが全消去される
+        coordinator.settingsViewModel.updateNormalDisplayStyle(.icon)
+        #expect(coordinator.switcherViewModel.normalDisplayStyle == .icon)
+        #expect(coordinator.normalDisplayStyle == .icon)
+        #expect(captureService.clearCacheCallCount == 2)
     }
 
     /// メニューバー相当の共有経路（AppCoordinator.updateNormalDisplayStyle）からの切り替えで
