@@ -353,11 +353,11 @@ struct AppCoordinatorTests {
         #expect(releaseCoordinator.appIdentity.settingsWindowTitle == "Wintch 設定")
     }
 
-    /// メニューバーからの設定画面・「Wintchについて」画面表示が WindowFrontPresenting を通じて実行され、
-    /// 同一ウィンドウインスタンスを再利用することを検証する
-    @Test("openSettings と openAbout は設定済みウィンドウを最前面表示プレゼンターへ委譲する")
+    /// メニューバーからの設定画面表示が WindowFrontPresenting を通じて固定サイズで実行され、
+    /// 再オープン時も同一ウィンドウインスタンスおよび前回選択メニューを保持することを検証する
+    @Test("openSettings は固定サイズの設定ウィンドウを最前面表示し再表示時も選択メニューを維持する")
     @MainActor
-    func openSettingsAndAboutDelegateToWindowFrontPresenter() {
+    func openSettingsDelegatesToWindowFrontPresenterAndRetainsSelectedTab() {
         let presenter = MockWindowFrontPresenter()
         let coordinator = AppCoordinator(
             windowService: MockWindowService(),
@@ -370,23 +370,24 @@ struct AppCoordinatorTests {
             windowFrontPresenter: presenter
         )
 
+        #expect(coordinator.settingsViewModel.selectedTab == .general)
+
         coordinator.openSettings()
         #expect(presenter.presentedWindows.count == 1)
         let firstSettingsWindow = presenter.presentedWindows[0]
         #expect(firstSettingsWindow.title == coordinator.appIdentity.settingsWindowTitle)
         #expect(firstSettingsWindow.isReleasedWhenClosed == false)
+        #expect(firstSettingsWindow.styleMask.contains(.resizable) == false)
+        let contentSize = firstSettingsWindow.contentView?.frame.size ?? .zero
+        #expect(contentSize.width == SettingsView.preferredWidth)
+        #expect(contentSize.height == SettingsView.preferredHeight)
 
-        // 再実行時は同一ウィンドウを再利用して再度最前面表示を要求する
+        // 別メニューを選択してウィンドウを再オープンしても同一ウィンドウと選択メニューが維持される
+        coordinator.settingsViewModel.selectTab(.system)
         coordinator.openSettings()
         #expect(presenter.presentedWindows.count == 2)
         #expect(presenter.presentedWindows[1] === firstSettingsWindow)
-
-        // 「〜について」画面も同一プレゼンターを経由する
-        coordinator.openAbout()
-        #expect(presenter.presentedWindows.count == 3)
-        let aboutWindow = presenter.presentedWindows[2]
-        #expect(aboutWindow.title == coordinator.appIdentity.aboutMenuTitle)
-        #expect(aboutWindow.isReleasedWhenClosed == false)
+        #expect(coordinator.settingsViewModel.selectedTab == .system)
     }
 
     /// 権限誘導画面が未許可時のみ最前面表示プレゼンターへ委譲され、権限許可済み時は表示されないことを検証する

@@ -9,7 +9,7 @@ Wintch プロジェクトで使用されている技術スタック、アーキ�
 - **言語 / パッケージ管理**: Swift 6.0（Strict Concurrency 対応） / Swift Package Manager（`Package.swift`）
 - **対象 OS**: macOS 14.0 (Sonoma) 以降
 - **UI フレームワーク**:
-  - **SwiftUI**: 設定画面、権限誘導画面、「Wintchについて」画面、スイッチャーリスト、アイコングリッド、キャプチャグリッド、メニューバー常駐メニュー（`MenuBarExtra`）の構築
+  - **SwiftUI**: 設定画面（左サイドバー付き 4 メニュー構成）、権限誘導画面、スイッチャーリスト、アイコングリッド、キャプチャグリッド、メニューバー常駐メニュー（`MenuBarExtra`）の構築
   - **AppKit**: 最前面フローティングパネル制御（`NSPanel`）、IME 対応検索入力欄（`NSTextField`）、ショートカット記録フィールド（`NSView`）、ウィンドウ最前面化およびアプリ起動（`NSWorkspace`, `NSRunningApplication`）
 - **状態管理**: Swift 標準 Observation フレームワーク（`@Observable` + `@MainActor`）
 - **OS 低レイヤー・システム API**:
@@ -79,6 +79,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── LauncherShortcutPreference.swift # 検索ランチャーショートカット設定・キーラベル解決
 │       │   ├── RawWindowCandidate.swift         # フィルタリング前の生ウィンドウ候補モデル
 │       │   ├── ScreenRecordingPermissionStatus.swift # 画面収録権限状態
+│       │   ├── SettingsTab.swift                # 設定画面左サイドバーの4メニュー定義
 │       │   ├── ShortcutConflictValidator.swift  # 通常スイッチャー・ランチャー間の双方向競合検証
 │       │   ├── ShortcutPreference.swift         # 通常スイッチャーショートカット設定（旧形式マイグレーション含む）
 │       │   ├── SwitcherDisplayStyle.swift       # 表示形式（リスト型 / アイコン型 / キャプチャ表示型）
@@ -106,13 +107,12 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   └── WindowService.swift
 │       ├── ViewModels/
 │       │   ├── PermissionGuideViewModel.swift   # 権限誘導画面の状態・アクション管理
-│       │   ├── SettingsViewModel.swift          # 設定画面の状態・ショートカット記録・検証管理
+│       │   ├── SettingsViewModel.swift          # 設定画面の選択メニュー・ショートカット記録・検証・権限管理
 │       │   └── SwitcherViewModel.swift          # スイッチャー／ランチャー表示・検索・終了操作・キャプチャ統括
 │       └── Views/
-│           ├── AboutView.swift                  # 「Wintchについて」画面
 │           ├── LauncherSearchField.swift        # IME 優先 NSTextField ラッパー検索入力欄
 │           ├── PermissionGuideView.swift        # アクセシビリティ権限誘導画面
-│           ├── SettingsView.swift               # 設定画面
+│           ├── SettingsView.swift               # 左サイドバー付き設定画面（バージョン情報統合）
 │           ├── ShortcutRecorderView.swift       # ショートカットキー入力キャプチャビュー
 │           ├── SwitcherCaptureGridView.swift    # キャプチャ表示型グリッドビュー
 │           ├── SwitcherContentView.swift        # モード・表示形式に応じたコンテナ分岐ビュー

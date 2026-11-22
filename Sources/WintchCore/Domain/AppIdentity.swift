@@ -41,11 +41,6 @@ public struct AppIdentity: Equatable, Sendable {
     /// 開発用ビルドとして識別されているかどうか
     public let isDevelopment: Bool
 
-    /// メニューバーおよびウィンドウタイトルで使用する「〜について」文言
-    public var aboutMenuTitle: String {
-        "\(displayName)について"
-    }
-
     /// メニューバーの終了ボタン文言
     public var quitMenuTitle: String {
         "\(displayName) を終了"

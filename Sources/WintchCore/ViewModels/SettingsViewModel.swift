@@ -9,10 +9,13 @@ public enum ShortcutValidationTarget: Equatable, Sendable {
     case launcher
 }
 
-/// 設定画面の状態管理（通常/ランチャーショートカット、記録状態、自動起動、権限ステータス）を行う ViewModel
+/// 設定画面の状態管理（選択中メニュー、通常/ランチャーショートカット、記録状態、表示形式、自動起動、権限ステータス）を行う ViewModel
 @MainActor
 @Observable
 public final class SettingsViewModel {
+    /// サイドバーで現在選択中のメニュー（アプリ起動時は「一般」、ウィンドウ再オープン時は前回値を維持）
+    public private(set) var selectedTab: SettingsTab = .general
+
     /// 現在の通常スイッチャー用ショートカット設定
     public private(set) var shortcut: ShortcutPreference
 
@@ -187,6 +190,17 @@ public final class SettingsViewModel {
         isRecordingNormalShortcut = false
         isRecordingLauncherShortcut = false
         hotKeyMonitor.isSuspendedForRecording = false
+    }
+
+    /// サイドバーの選択中メニューを切り替える
+    /// 別メニューへの遷移時は、進行中のショートカット記録待機を自動キャンセルし、未解消の検証エラーをクリアする
+    /// - Parameter tab: 切り替え先のメニュー種別
+    public func selectTab(_ tab: SettingsTab) {
+        guard selectedTab != tab else { return }
+        cancelAllRecordings()
+        shortcutValidationError = nil
+        shortcutValidationTarget = nil
+        selectedTab = tab
     }
 
     /// ログイン時自動起動の有効・無効を切り替える

@@ -50,12 +50,6 @@ struct WintchApp: App {
                 Divider()
             }
 
-            Button(appDelegate.coordinator.appIdentity.aboutMenuTitle) {
-                appDelegate.coordinator.openAbout()
-            }
-
-            Divider()
-
             Menu("表示形式") {
                 Section("通常スイッチャー") {
                     Picker("通常スイッチャー", selection: normalDisplayStyleBinding) {
