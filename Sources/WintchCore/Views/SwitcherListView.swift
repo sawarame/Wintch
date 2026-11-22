@@ -8,6 +8,12 @@ public struct SwitcherListView: View {
     /// ランチャーのキャプチャ表示行に配置する小型サムネイルの高さ
     public static let captureThumbnailHeight: CGFloat = 50
 
+    /// 通常スイッチャーのアイコン型（グルーピング ON）行に配置する大きなアプリアイコンの描画サイズ
+    public static let groupedIconDisplaySize: CGFloat = 46
+
+    /// 通常スイッチャーのアイコン型（グルーピング ON）行におけるアイコン領域のフレームサイズ（枠・背景なし）
+    public static let groupedIconContainerSize: CGFloat = 50
+
     /// スイッチャーの状態管理を行う ViewModel
     private let viewModel: SwitcherViewModel
 
@@ -39,15 +45,22 @@ public struct SwitcherListView: View {
         viewModel.mode == .launcher && viewModel.launcherDisplayStyle == .capture
     }
 
-    /// ウィンドウ行に小型プレビュー枠付き行（ランチャーのキャプチャ表示型と同一デザイン）を使用するかどうか
-    /// 検索ランチャーのキャプチャ表示型、およびグルーピング ON 時の通常スイッチャー（アイコン型・キャプチャ表示型）で有効
-    private var usesPreviewRowStyle: Bool {
+    /// 現在の表示状態が通常スイッチャーのアイコン型（グルーピング ON）かどうか
+    private var isNormalIconGroupedStyle: Bool {
+        viewModel.mode == .normal
+            && viewModel.isNormalSwitcherGroupedByApp
+            && viewModel.normalDisplayStyle == .icon
+    }
+
+    /// ウィンドウ行にキャプチャサムネイル枠付き行を使用するかどうか
+    /// 検索ランチャーのキャプチャ表示型、およびグルーピング ON 時の通常スイッチャー（キャプチャ表示型）で有効
+    private var usesCaptureRowStyle: Bool {
         if isLauncherCaptureStyle {
             return true
         }
         return viewModel.mode == .normal
             && viewModel.isNormalSwitcherGroupedByApp
-            && (viewModel.normalDisplayStyle == .capture || viewModel.normalDisplayStyle == .icon)
+            && viewModel.normalDisplayStyle == .capture
     }
 
     /// 画面収録権限未許可バナーを表示すべきかどうか（実際にキャプチャ表示が有効なモードかつ未許可時のみ）
@@ -182,7 +195,13 @@ public struct SwitcherListView: View {
 
                         case let .window(index, result):
                             Group {
-                                if usesPreviewRowStyle {
+                                if isNormalIconGroupedStyle {
+                                    SwitcherGroupedIconRowView(
+                                        result: result,
+                                        icon: viewModel.icon(for: result.entry.pid),
+                                        isSelected: index == viewModel.selectedIndex
+                                    )
+                                } else if usesCaptureRowStyle {
                                     SwitcherCaptureRowView(
                                         result: result,
                                         thumbnail: viewModel.isCaptureActiveForCurrentMode
@@ -485,6 +504,65 @@ private struct SwitcherRowView: View {
         .padding(.trailing, 12)
         .padding(.vertical, showsAppInfo ? 8 : 6)
         .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+}
+
+/// 通常スイッチャーのアイコン型（グルーピング ON）における1行（背景・枠線なしの大きなアプリアイコン・ウィンドウタイトル）を表す行ビュー
+private struct SwitcherGroupedIconRowView: View {
+    /// 表示対象の検索結果項目
+    let result: WindowSearchResult
+    /// 所有アプリのアイコン画像
+    let icon: NSImage?
+    /// 現在選択状態として強調表示するか
+    let isSelected: Bool
+
+    /// 行ビューの本体構築
+    var body: some View {
+        HStack(spacing: 12) {
+            largeIconView
+                .frame(
+                    width: SwitcherListView.groupedIconContainerSize,
+                    height: SwitcherListView.groupedIconContainerSize
+                )
+
+            Text(
+                SwitcherRowStyling.highlightedText(
+                    result.entry.displayTitle,
+                    ranges: result.matchedTitleRanges,
+                    baseWeight: .medium,
+                    baseColor: isSelected ? .white : .primary,
+                    highlightColor: isSelected ? .white : .accentColor
+                )
+            )
+            .lineLimit(2)
+            .truncationMode(.tail)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 24)
+        .padding(.trailing, 12)
+        .padding(.vertical, 6)
+        .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+
+    /// 灰色背景や枠線を持たない大きなアプリアイコン（未取得時は macwindow シンボルフォールバック）
+    @ViewBuilder
+    private var largeIconView: some View {
+        if let icon {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(
+                    width: SwitcherListView.groupedIconDisplaySize,
+                    height: SwitcherListView.groupedIconDisplaySize
+                )
+        } else {
+            Image(systemName: "macwindow")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 34, height: 34)
+                .foregroundStyle(isSelected ? .white.opacity(0.9) : .secondary)
+        }
     }
 }
 

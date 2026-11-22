@@ -425,7 +425,10 @@ struct SwitcherListViewTests {
         #expect(normalCaptureGrantedSize.width == 520)
         #expect(normalCaptureDeniedSize.width == 520)
 
-        // アイコン型・キャプチャ表示型（権限許可）は同一のプレビュー枠付き行（80x50pt）のため高さが一致し、リスト型より大きい
+        // アイコン型（大きなアイコン 46pt・枠/背景なし・領域 50pt）とキャプチャ表示型（サムネイル高さ 50pt・権限許可）は
+        // 同じ行高さとなり、リスト型より大きい
+        #expect(SwitcherListView.groupedIconDisplaySize > 28)
+        #expect(SwitcherListView.groupedIconContainerSize == SwitcherListView.captureThumbnailHeight)
         #expect(abs(normalIconSize.height - normalCaptureGrantedSize.height) < 0.5)
         #expect(normalIconSize.height > normalListSize.height)
 
