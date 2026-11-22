@@ -59,8 +59,6 @@ public final class AppCoordinator {
     private var switcherPanel: SwitcherPanel?
     /// 設定画面ウィンドウ（遅延生成）
     private var settingsWindow: NSWindow?
-    /// 「Wintchについて」ウィンドウ（遅延生成）
-    private var aboutWindow: NSWindow?
     /// 権限誘導画面ウィンドウ（遅延生成）
     private var permissionWindow: NSWindow?
     /// 開始済みフラグ
@@ -179,12 +177,6 @@ public final class AppCoordinator {
     public func openSettings() {
         settingsViewModel.refreshStatus()
         let window = ensureSettingsWindow()
-        windowFrontPresenter.presentFrontmost(window)
-    }
-
-    /// 「Wintchについて」画面を最前面に表示する
-    public func openAbout() {
-        let window = ensureAboutWindow()
         windowFrontPresenter.presentFrontmost(window)
     }
 
@@ -345,9 +337,18 @@ public final class AppCoordinator {
         if let settingsWindow {
             return settingsWindow
         }
-        let hostingView = NSHostingView(rootView: SettingsView(viewModel: settingsViewModel))
+        let hostingView = NSHostingView(
+            rootView: SettingsView(
+                viewModel: settingsViewModel,
+                appIdentity: appIdentity
+            )
+        )
+        let contentSize = NSSize(
+            width: SettingsView.preferredWidth,
+            height: SettingsView.preferredHeight
+        )
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
+            contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -355,27 +356,8 @@ public final class AppCoordinator {
         window.title = appIdentity.settingsWindowTitle
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
+        window.setContentSize(contentSize)
         settingsWindow = window
-        return window
-    }
-
-    /// 「〜について」画面用の NSWindow を必要に応じて生成して返す
-    /// - Returns: 設定済みの NSWindow
-    private func ensureAboutWindow() -> NSWindow {
-        if let aboutWindow {
-            return aboutWindow
-        }
-        let hostingView = NSHostingView(rootView: AboutView(appIdentity: appIdentity))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = appIdentity.aboutMenuTitle
-        window.isReleasedWhenClosed = false
-        window.contentView = hostingView
-        aboutWindow = window
         return window
     }
 

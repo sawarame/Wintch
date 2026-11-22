@@ -389,4 +389,91 @@ struct SettingsViewModelTests {
         viewModel.cancelRecordingLauncherShortcut()
         #expect(hotKeyMonitor.isSuspendedForRecording == false)
     }
+
+    /// サイドバーの4メニュー定義の並び順・タイトル・SF Symbols アイコン名を検証する
+    @Test("SettingsTab のメニュー順序と表示タイトル・アイコン名が規定どおりである")
+    func settingsTabOrderAndMetadata() {
+        #expect(SettingsTab.allCases == [.general, .switcher, .launcher, .system])
+        #expect(SettingsTab.allCases.map(\.title) == ["一般", "スイッチャー", "ランチャー", "システム"])
+        #expect(SettingsTab.allCases.allSatisfy { !$0.systemImage.isEmpty })
+    }
+
+    /// サイドバーの初期選択、メニュー切り替え時の記録自動キャンセル・監視再開、およびエラークリアを検証する
+    @Test("タブ初期値は一般で、別タブ切替時に進行中のショートカット記録と検証エラーが安全にクリアされる")
+    @MainActor
+    func tabSelectionCancelsActiveRecordingAndClearsValidationError() {
+        let store = MockPreferencesStore()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let viewModel = SettingsViewModel(
+            preferencesStore: store,
+            hotKeyMonitor: hotKeyMonitor,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            permissionService: MockAccessibilityPermissionService()
+        )
+
+        // アプリ起動時の初期選択は「一般」
+        #expect(viewModel.selectedTab == .general)
+
+        // 通常スイッチャーのショートカット記録待機と検証エラーを発生させた状態で別タブへ切り替える
+        viewModel.selectTab(.switcher)
+        #expect(viewModel.selectedTab == .switcher)
+        viewModel.beginRecordingNormalShortcut()
+        viewModel.recordNormalShortcut(ShortcutPreference(keyCode: 40, modifiers: [.option, .shift], keyLabel: "K"))
+        #expect(viewModel.isRecordingNormalShortcut == true)
+        #expect(hotKeyMonitor.isSuspendedForRecording == true)
+        #expect(viewModel.shortcutValidationError != nil)
+        #expect(viewModel.shortcutValidationTarget == .normal)
+
+        // 同一タブの再選択では進行中の記録状態を不要に解除しない
+        viewModel.selectTab(.switcher)
+        #expect(viewModel.isRecordingNormalShortcut == true)
+        #expect(hotKeyMonitor.isSuspendedForRecording == true)
+
+        // 「ランチャー」へ切り替えると記録キャンセル・監視再開・エラークリアが行われる
+        viewModel.selectTab(.launcher)
+        #expect(viewModel.selectedTab == .launcher)
+        #expect(viewModel.isRecordingNormalShortcut == false)
+        #expect(hotKeyMonitor.isSuspendedForRecording == false)
+        #expect(viewModel.shortcutValidationError == nil)
+        #expect(viewModel.shortcutValidationTarget == nil)
+
+        // ランチャーのショートカット記録待機と検証エラーを発生させた状態で「システム」へ切り替える
+        viewModel.beginRecordingLauncherShortcut()
+        viewModel.recordLauncherShortcut(LauncherShortcutPreference(keyCode: 48, modifiers: [.option, .shift], keyLabel: "⇥"))
+        #expect(viewModel.isRecordingLauncherShortcut == true)
+        #expect(hotKeyMonitor.isSuspendedForRecording == true)
+        #expect(viewModel.shortcutValidationError != nil)
+        #expect(viewModel.shortcutValidationTarget == .launcher)
+
+        viewModel.selectTab(.system)
+        #expect(viewModel.selectedTab == .system)
+        #expect(viewModel.isRecordingLauncherShortcut == false)
+        #expect(hotKeyMonitor.isSuspendedForRecording == false)
+        #expect(viewModel.shortcutValidationError == nil)
+        #expect(viewModel.shortcutValidationTarget == nil)
+    }
+
+    /// 非キャプチャ表示形式のままシステムタブへ遷移・状態更新しても画面収録権限を確認しないことを検証する
+    @Test("リスト型・アイコン型選択中はシステムタブ表示時も画面収録権限を確認しない")
+    @MainActor
+    func systemTabDoesNotQueryScreenRecordingWhenNonCaptureSelected() {
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        let viewModel = SettingsViewModel(
+            preferencesStore: MockPreferencesStore(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            permissionService: MockAccessibilityPermissionService(),
+            screenRecordingPermissionService: screenRecordingService
+        )
+
+        viewModel.selectTab(.system)
+        viewModel.refreshStatus()
+        #expect(viewModel.usesCaptureDisplayStyle == false)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+
+        viewModel.updateNormalDisplayStyle(.icon)
+        viewModel.refreshStatus()
+        #expect(viewModel.usesCaptureDisplayStyle == false)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+    }
 }
