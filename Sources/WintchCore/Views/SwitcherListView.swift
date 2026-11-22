@@ -2,6 +2,12 @@ import SwiftUI
 
 /// 画面中央のフローティングパネル内に表示されるウィンドウ一覧（およびランチャー検索バー）のビュー
 public struct SwitcherListView: View {
+    /// ランチャーのキャプチャ表示行に配置する小型サムネイルの横幅
+    public static let captureThumbnailWidth: CGFloat = 80
+
+    /// ランチャーのキャプチャ表示行に配置する小型サムネイルの高さ
+    public static let captureThumbnailHeight: CGFloat = 50
+
     /// スイッチャーの状態管理を行う ViewModel
     private let viewModel: SwitcherViewModel
 
@@ -28,6 +34,11 @@ public struct SwitcherListView: View {
         )
     }
 
+    /// 現在の表示状態がランチャーのキャプチャ表示型かどうか
+    private var isLauncherCaptureStyle: Bool {
+        viewModel.mode == .launcher && viewModel.launcherDisplayStyle == .capture
+    }
+
     /// ビューの本体構築
     public var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +46,12 @@ public struct SwitcherListView: View {
                 searchHeaderView
                 Divider()
                     .overlay(.white.opacity(0.14))
+
+                if isLauncherCaptureStyle && !viewModel.isScreenRecordingGranted {
+                    permissionBannerView
+                    Divider()
+                        .overlay(.white.opacity(0.14))
+                }
             }
 
             if let emptyState = viewModel.emptyState {
@@ -93,6 +110,14 @@ public struct SwitcherListView: View {
         .padding(.vertical, 12)
     }
 
+    /// ランチャーのキャプチャ表示型で画面収録権限が未許可のときに表示する非インタラクティブな警告バナー
+    var permissionBannerView: some View {
+        ScreenRecordingPermissionBannerView(
+            message: SwitcherCaptureGridView.permissionBannerMessage,
+            horizontalPadding: 14
+        )
+    }
+
     /// 候補 0 件時の案内表示
     /// - Parameter state: 現在の空状態種別
     private func emptyResultView(for state: LauncherEmptyState) -> some View {
@@ -126,11 +151,22 @@ public struct SwitcherListView: View {
                     ForEach(listRows) { row in
                         switch row {
                         case let .window(index, result):
-                            SwitcherRowView(
-                                result: result,
-                                icon: viewModel.icon(for: result.entry.pid),
-                                isSelected: index == viewModel.selectedIndex
-                            )
+                            Group {
+                                if isLauncherCaptureStyle {
+                                    SwitcherCaptureRowView(
+                                        result: result,
+                                        thumbnail: viewModel.thumbnail(for: result.entry),
+                                        icon: viewModel.icon(for: result.entry.pid),
+                                        isSelected: index == viewModel.selectedIndex
+                                    )
+                                } else {
+                                    SwitcherRowView(
+                                        result: result,
+                                        icon: viewModel.icon(for: result.entry.pid),
+                                        isSelected: index == viewModel.selectedIndex
+                                    )
+                                }
+                            }
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 viewModel.selectAndActivate(at: index)
@@ -352,6 +388,115 @@ private struct SwitcherRowView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+}
+
+/// 検索ランチャーのキャプチャ表示型における1行（小型サムネイル・アプリアイコン・アプリ名・ウィンドウタイトル）を表す行ビュー
+private struct SwitcherCaptureRowView: View {
+    /// 表示対象の検索結果項目
+    let result: WindowSearchResult
+    /// メモリ上のキャプチャサムネイル（未取得・取得不能時は nil）
+    let thumbnail: NSImage?
+    /// 所有アプリのアイコン画像
+    let icon: NSImage?
+    /// 現在選択状態として強調表示するか
+    let isSelected: Bool
+
+    /// 行ビューの本体構築
+    var body: some View {
+        HStack(spacing: 12) {
+            thumbnailPreview
+                .frame(
+                    width: SwitcherListView.captureThumbnailWidth,
+                    height: SwitcherListView.captureThumbnailHeight
+                )
+                .background(Color.black.opacity(0.16))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(.white.opacity(isSelected ? 0.35 : 0.14), lineWidth: 1)
+                }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    smallAppIcon
+
+                    Text(
+                        SwitcherRowStyling.highlightedText(
+                            result.entry.applicationName,
+                            ranges: result.matchedAppNameRanges,
+                            baseWeight: .semibold,
+                            baseColor: isSelected ? .white : .primary,
+                            highlightColor: isSelected ? .white : .accentColor
+                        )
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                }
+
+                Text(
+                    SwitcherRowStyling.highlightedText(
+                        result.entry.displayTitle,
+                        ranges: result.matchedTitleRanges,
+                        baseWeight: .regular,
+                        baseColor: isSelected ? .white.opacity(0.9) : .secondary,
+                        highlightColor: isSelected ? .white : .accentColor
+                    )
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+
+    /// キャプチャサムネイルまたはアプリアイコンプレースホルダーを描画するプレビュー枠
+    @ViewBuilder
+    private var thumbnailPreview: some View {
+        if let thumbnail {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ZStack {
+                Color.clear
+                if let icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: "macwindow")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(isSelected ? .white.opacity(0.85) : .secondary)
+                }
+            }
+        }
+    }
+
+    /// アプリ名左側に配置する小型アプリアイコン
+    @ViewBuilder
+    private var smallAppIcon: some View {
+        if let icon {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 18, height: 18)
+        } else {
+            Image(systemName: "macwindow")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+                .foregroundStyle(isSelected ? .white.opacity(0.9) : .secondary)
+        }
     }
 }
 

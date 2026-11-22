@@ -232,6 +232,85 @@ struct AppCoordinatorTests {
         #expect(coordinator.switcherViewModel.normalDisplayStyle == .capture)
     }
 
+    /// 検索ランチャー表示形式のコーディネーター経由切り替え・永続化・双方向同期、
+    /// および通常／ランチャー双方のキャプチャ状態に応じたキャッシュ保持・全破棄を検証する
+    @Test("ランチャー表示形式の個別同期と通常・ランチャー双方非キャプチャ時のみのキャッシュ全破棄を検証する")
+    @MainActor
+    func coordinatorLauncherDisplayStyleSyncAndSharedCacheLifecycle() {
+        let store = MockPreferencesStore()
+        store.storedNormalDisplayStyle = .list
+        store.storedLauncherDisplayStyle = .list
+        let windowService = MockWindowService()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 201,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Docs",
+                lastActivatedAt: Date()
+            )
+        ]
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+        let presenter = MockWindowFrontPresenter()
+
+        let coordinator = AppCoordinator(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            preferencesStore: store,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            windowFrontPresenter: presenter
+        )
+
+        coordinator.start()
+        #expect(coordinator.normalDisplayStyle == .list)
+        #expect(coordinator.launcherDisplayStyle == .list)
+        #expect(coordinator.switcherViewModel.launcherDisplayStyle == .list)
+
+        // 画面収録権限未許可でランチャーをキャプチャ表示型へ切り替えても設定画面や OS 権限ダイアログは開かない
+        coordinator.updateLauncherDisplayStyle(.capture)
+        #expect(coordinator.launcherDisplayStyle == .capture)
+        #expect(coordinator.settingsViewModel.launcherDisplayStyle == .capture)
+        #expect(coordinator.switcherViewModel.launcherDisplayStyle == .capture)
+        #expect(store.storedLauncherDisplayStyle == .capture)
+        #expect(store.saveLauncherDisplayStyleCallCount == 1)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 0)
+        #expect(presenter.presentedWindows.isEmpty)
+
+        // 両方をキャプチャ表示型にし、ランチャー起動でサムネイルキャッシュを保持させた状態を作る
+        screenRecordingService.stubbedStatus = .granted
+        coordinator.updateNormalDisplayStyle(.capture)
+        captureService.cachedThumbnails[201] = NSImage(size: NSSize(width: 80, height: 50))
+        coordinator.switcherViewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(coordinator.switcherViewModel.capturedThumbnails[201] != nil)
+        coordinator.switcherViewModel.cancel()
+
+        // 通常側のみリスト型へ戻してもランチャー側がキャプチャ表示型のため共有キャッシュは維持される
+        let clearCountBeforeNormalRevert = captureService.clearCacheCallCount
+        coordinator.updateNormalDisplayStyle(.list)
+        #expect(coordinator.normalDisplayStyle == .list)
+        #expect(coordinator.launcherDisplayStyle == .capture)
+        #expect(captureService.clearCacheCallCount == clearCountBeforeNormalRevert)
+        #expect(captureService.cachedThumbnails[201] != nil)
+
+        // ランチャー側もリスト型へ戻すと双方が非キャプチャとなり即座にキャッシュが全破棄される
+        coordinator.updateLauncherDisplayStyle(.list)
+        #expect(coordinator.launcherDisplayStyle == .list)
+        #expect(coordinator.switcherViewModel.launcherDisplayStyle == .list)
+        #expect(store.storedLauncherDisplayStyle == .list)
+        #expect(store.saveLauncherDisplayStyleCallCount == 2)
+        #expect(captureService.clearCacheCallCount == clearCountBeforeNormalRevert + 1)
+        #expect(captureService.cachedThumbnails.isEmpty)
+    }
+
     /// 開発版と配布版それぞれの AppIdentity が AppCoordinator に正しく保持されることを検証する
     @Test("注入された開発版および配布版の AppIdentity を保持する")
     @MainActor

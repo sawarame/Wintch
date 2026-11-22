@@ -98,19 +98,10 @@ public struct SwitcherCaptureGridView: View {
 
     /// 画面収録権限が未許可のときに表示するコンパクトな案内バナー（ホールド操作中にクリック不能な設定リンクは設けない）
     var permissionBannerView: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.orange)
-
-            Text(Self.permissionBannerMessage)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, SwitcherGridLayout.gridPadding)
-        .padding(.vertical, 9)
+        ScreenRecordingPermissionBannerView(
+            message: Self.permissionBannerMessage,
+            horizontalPadding: SwitcherGridLayout.gridPadding
+        )
     }
 
     /// スクロール追従付きの複数行カードグリッド
@@ -254,5 +245,30 @@ private struct SwitcherCaptureCardView: View {
                 .frame(width: 16, height: 16)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// 通常スイッチャーおよび検索ランチャーのキャプチャ表示型で共通利用する、非インタラクティブな画面収録権限未許可バナー
+struct ScreenRecordingPermissionBannerView: View {
+    /// 表示する案内メッセージ
+    let message: String
+    /// バナー左右のパディング幅
+    let horizontalPadding: CGFloat
+
+    /// バナーの本体構築
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.orange)
+
+            Text(message)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, 9)
     }
 }
