@@ -183,7 +183,8 @@ struct SwitcherCaptureGridViewTests {
             iconProvider: MockIconProvider(),
             screenRecordingPermissionService: screenRecordingService,
             windowCaptureService: captureService,
-            normalDisplayStyle: .icon
+            normalDisplayStyle: .icon,
+            isNormalSwitcherGroupedByApp: false
         )
         viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
@@ -204,11 +205,26 @@ struct SwitcherCaptureGridViewTests {
         #expect(fittingSize.width == expectedWidth)
         #expect(fittingSize.height >= SwitcherGridLayout.iconTileHeight + SwitcherGridLayout.gridPadding * 2)
 
+        // グルーピング ON 時はアプリ別セクション構成となり、最大セクション件数（Safari: 2 件）基準で 2 列・2 セクション高さとなる
+        viewModel.updateNormalSwitcherGrouping(true)
+        #expect(viewModel.gridColumnCount == 2)
+        let groupedIconHosting = NSHostingView(rootView: SwitcherIconGridView(viewModel: viewModel))
+        groupedIconHosting.layoutSubtreeIfNeeded()
+        let expectedGroupedWidth = max(
+            2 * SwitcherGridLayout.iconTileWidth
+                + SwitcherGridLayout.cardSpacing
+                + SwitcherGridLayout.gridPadding * 2,
+            SwitcherGridLayout.iconGroupedMinPanelWidth
+        )
+        #expect(groupedIconHosting.fittingSize.width == expectedGroupedWidth)
+        #expect(groupedIconHosting.fittingSize.height > fittingSize.height)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+
         // SwitcherContentView が通常モード・アイコン型のときはアイコングリッド幅でレイアウトされ、
         // ランチャーモード時はアイコン型設定中でもリスト型（幅 520pt）で描画されること
         let normalContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         normalContentHosting.layoutSubtreeIfNeeded()
-        #expect(normalContentHosting.fittingSize.width == expectedWidth)
+        #expect(normalContentHosting.fittingSize.width == expectedGroupedWidth)
 
         viewModel.cancel()
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)

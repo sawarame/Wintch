@@ -68,6 +68,22 @@ public struct SettingsView: View {
         )
     }
 
+    /// 通常スイッチャーのアプリグルーピング用の双方向バインディング
+    private var normalGroupingBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isNormalSwitcherGroupedByApp },
+            set: { viewModel.updateNormalSwitcherGrouping($0) }
+        )
+    }
+
+    /// 検索ランチャーのアプリグルーピング用の双方向バインディング
+    private var launcherGroupingBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isLauncherGroupedByApp },
+            set: { viewModel.updateLauncherGrouping($0) }
+        )
+    }
+
     /// ビューの本体構築（折りたたみ不可の固定 2 ペイン構成）
     public var body: some View {
         HStack(spacing: 0) {
@@ -185,6 +201,8 @@ public struct SettingsView: View {
                 }
             }
 
+            Toggle("アプリごとにグルーピング", isOn: normalGroupingBinding)
+
             if viewModel.normalDisplayStyle == .capture {
                 if viewModel.screenRecordingStatus == .denied {
                     screenRecordingDeniedGuideView
@@ -232,6 +250,8 @@ public struct SettingsView: View {
                     Text(style.displayName).tag(style)
                 }
             }
+
+            Toggle("アプリごとにグルーピング", isOn: launcherGroupingBinding)
 
             if viewModel.launcherDisplayStyle == .capture {
                 if viewModel.screenRecordingStatus == .denied {

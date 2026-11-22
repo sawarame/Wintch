@@ -14,6 +14,12 @@ public final class PreferencesStore: PreferencesStoring {
     /// 検索ランチャー表示形式の永続化に使用する UserDefaults キー
     private static let launcherDisplayStyleKey = "dev.wintch.launcherDisplayStyle"
 
+    /// 通常スイッチャーのアプリグルーピング設定の永続化に使用する UserDefaults キー
+    private static let groupNormalSwitcherByAppKey = "dev.wintch.groupNormalSwitcherByApp"
+
+    /// 検索ランチャーのアプリグルーピング設定の永続化に使用する UserDefaults キー
+    private static let groupLauncherByAppKey = "dev.wintch.groupLauncherByApp"
+
     /// 使用する UserDefaults スイート名（nil の場合は standard）
     private let suiteName: String?
 
@@ -89,6 +95,40 @@ public final class PreferencesStore: PreferencesStoring {
     /// - Parameter style: 保存する検索ランチャー表示形式設定
     public func saveLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
         resolveDefaults().set(style.rawValue, forKey: Self.launcherDisplayStyleKey)
+    }
+
+    /// 保存されている通常スイッチャーのアプリグルーピング設定を読み込む
+    /// - Returns: 保存された設定値（キー未保存時はデフォルトの true）
+    public func loadGroupNormalSwitcherByApp() -> Bool {
+        let defaults = resolveDefaults()
+        // UserDefaults.bool(forKey:) は未保存時に false を返すため、キー存在確認でデフォルト true を保証する
+        guard defaults.object(forKey: Self.groupNormalSwitcherByAppKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: Self.groupNormalSwitcherByAppKey)
+    }
+
+    /// 通常スイッチャーのアプリグルーピング設定を保存する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func saveGroupNormalSwitcherByApp(_ enabled: Bool) {
+        resolveDefaults().set(enabled, forKey: Self.groupNormalSwitcherByAppKey)
+    }
+
+    /// 保存されている検索ランチャーのアプリグルーピング設定を読み込む
+    /// - Returns: 保存された設定値（キー未保存時はデフォルトの true）
+    public func loadGroupLauncherByApp() -> Bool {
+        let defaults = resolveDefaults()
+        // UserDefaults.bool(forKey:) は未保存時に false を返すため、キー存在確認でデフォルト true を保証する
+        guard defaults.object(forKey: Self.groupLauncherByAppKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: Self.groupLauncherByAppKey)
+    }
+
+    /// 検索ランチャーのアプリグルーピング設定を保存する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func saveGroupLauncherByApp(_ enabled: Bool) {
+        resolveDefaults().set(enabled, forKey: Self.groupLauncherByAppKey)
     }
 
     /// 設定用の UserDefaults インスタンスを解決する

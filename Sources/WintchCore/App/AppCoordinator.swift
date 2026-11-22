@@ -34,6 +34,16 @@ public final class AppCoordinator {
         settingsViewModel.launcherDisplayStyle
     }
 
+    /// 現在の通常スイッチャーのアプリグルーピング設定
+    public var isNormalSwitcherGroupedByApp: Bool {
+        settingsViewModel.isNormalSwitcherGroupedByApp
+    }
+
+    /// 現在の検索ランチャーのアプリグルーピング設定
+    public var isLauncherGroupedByApp: Bool {
+        settingsViewModel.isLauncherGroupedByApp
+    }
+
     /// ウィンドウ情報サービス
     private let windowService: any WindowServicing
     /// グローバルホットキー監視サービス
@@ -123,6 +133,8 @@ public final class AppCoordinator {
 
         let initialDisplayStyle = preferencesStore.loadNormalDisplayStyle()
         let initialLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
+        let initialNormalGrouping = preferencesStore.loadGroupNormalSwitcherByApp()
+        let initialLauncherGrouping = preferencesStore.loadGroupLauncherByApp()
         self.switcherViewModel = SwitcherViewModel(
             windowService: windowService,
             hotKeyMonitor: hotKeyMonitor,
@@ -132,7 +144,9 @@ public final class AppCoordinator {
             screenRecordingPermissionService: screenRecordingPermissionService,
             windowCaptureService: windowCaptureService,
             normalDisplayStyle: initialDisplayStyle,
-            launcherDisplayStyle: initialLauncherDisplayStyle
+            launcherDisplayStyle: initialLauncherDisplayStyle,
+            isNormalSwitcherGroupedByApp: initialNormalGrouping,
+            isLauncherGroupedByApp: initialLauncherGrouping
         )
         self.settingsViewModel = SettingsViewModel(
             preferencesStore: preferencesStore,
@@ -153,15 +167,19 @@ public final class AppCoordinator {
         guard !isStarted else { return }
         isStarted = true
 
-        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式をロードして反映する
+        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式・グルーピング設定をロードして反映する
         let savedShortcut = preferencesStore.loadShortcut()
         let savedLauncherShortcut = preferencesStore.loadLauncherShortcut()
         let savedDisplayStyle = preferencesStore.loadNormalDisplayStyle()
         let savedLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
+        let savedNormalGrouping = preferencesStore.loadGroupNormalSwitcherByApp()
+        let savedLauncherGrouping = preferencesStore.loadGroupLauncherByApp()
         hotKeyMonitor.updateShortcut(savedShortcut)
         hotKeyMonitor.updateLauncherShortcut(savedLauncherShortcut)
         switcherViewModel.updateNormalDisplayStyle(savedDisplayStyle)
         switcherViewModel.updateLauncherDisplayStyle(savedLauncherDisplayStyle)
+        switcherViewModel.updateNormalSwitcherGrouping(savedNormalGrouping)
+        switcherViewModel.updateLauncherGrouping(savedLauncherGrouping)
 
         // 初期の権限状態を確認し、監視を開始する
         updatePermissionState(permissionService.currentStatus())
@@ -206,6 +224,18 @@ public final class AppCoordinator {
     /// - Parameter style: 新しい検索ランチャー表示形式
     public func updateLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
         settingsViewModel.updateLauncherDisplayStyle(style)
+    }
+
+    /// 通常スイッチャーのアプリグルーピング設定を更新し、永続化・スイッチャー状態・設定画面を即時同期する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func updateNormalSwitcherGrouping(_ enabled: Bool) {
+        settingsViewModel.updateNormalSwitcherGrouping(enabled)
+    }
+
+    /// 検索ランチャーのアプリグルーピング設定を更新し、永続化・スイッチャー状態・設定画面を即時同期する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func updateLauncherGrouping(_ enabled: Bool) {
+        settingsViewModel.updateLauncherGrouping(enabled)
     }
 
     /// 権限状態の変化に応じて監視サービスの起動・停止および誘導画面の表示を切り替える
@@ -305,6 +335,14 @@ public final class AppCoordinator {
 
         settingsViewModel.onLauncherDisplayStyleChanged = { [weak self] newStyle in
             self?.switcherViewModel.updateLauncherDisplayStyle(newStyle)
+        }
+
+        settingsViewModel.onNormalSwitcherGroupingChanged = { [weak self] isGrouped in
+            self?.switcherViewModel.updateNormalSwitcherGrouping(isGrouped)
+        }
+
+        settingsViewModel.onLauncherGroupingChanged = { [weak self] isGrouped in
+            self?.switcherViewModel.updateLauncherGrouping(isGrouped)
         }
     }
 

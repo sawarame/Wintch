@@ -464,4 +464,44 @@ struct AppCoordinatorTests {
         #expect(contentSize.height >= requiredSize.height)
         #expect(contentSize.height > PermissionGuideView.minimumHeight)
     }
+
+    /// 通常スイッチャー・検索ランチャーのアプリグルーピング設定がコーディネーター・設定 ViewModel・スイッチャー ViewModel 間で双方向即時同期され永続化されることを検証する
+    @Test("グルーピング設定がコーディネーター・設定・スイッチャー間で個別に双方向同期・永続化される")
+    @MainActor
+    func coordinatorSyncsAppGroupingIndependently() {
+        let store = MockPreferencesStore()
+        store.storedGroupNormalSwitcherByApp = true
+        store.storedGroupLauncherByApp = false
+
+        let coordinator = AppCoordinator(
+            windowService: MockWindowService(),
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            preferencesStore: store,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService()
+        )
+
+        coordinator.start()
+        #expect(coordinator.isNormalSwitcherGroupedByApp == true)
+        #expect(coordinator.switcherViewModel.isNormalSwitcherGroupedByApp == true)
+        #expect(coordinator.isLauncherGroupedByApp == false)
+        #expect(coordinator.switcherViewModel.isLauncherGroupedByApp == false)
+
+        // メニューバー相当のコーディネーター経路から通常スイッチャーを OFF に変更
+        coordinator.updateNormalSwitcherGrouping(false)
+        #expect(coordinator.isNormalSwitcherGroupedByApp == false)
+        #expect(coordinator.settingsViewModel.isNormalSwitcherGroupedByApp == false)
+        #expect(coordinator.switcherViewModel.isNormalSwitcherGroupedByApp == false)
+        #expect(store.storedGroupNormalSwitcherByApp == false)
+        #expect(store.saveGroupNormalSwitcherByAppCallCount == 1)
+
+        // 設定画面（SettingsViewModel）経路から検索ランチャーを ON に変更
+        coordinator.settingsViewModel.updateLauncherGrouping(true)
+        #expect(coordinator.isLauncherGroupedByApp == true)
+        #expect(coordinator.switcherViewModel.isLauncherGroupedByApp == true)
+        #expect(store.storedGroupLauncherByApp == true)
+        #expect(store.saveGroupLauncherByAppCallCount == 1)
+    }
 }

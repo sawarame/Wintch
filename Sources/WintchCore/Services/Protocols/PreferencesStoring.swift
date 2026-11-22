@@ -33,4 +33,20 @@ public protocol PreferencesStoring: Sendable {
     /// 検索ランチャーの表示形式設定を保存する
     /// - Parameter style: 保存する検索ランチャー表示形式設定
     func saveLauncherDisplayStyle(_ style: LauncherDisplayStyle)
+
+    /// 保存されている通常スイッチャーのアプリグルーピング設定を読み込む
+    /// - Returns: アプリごとにグルーピングする場合は true（未保存時はデフォルト true）
+    func loadGroupNormalSwitcherByApp() -> Bool
+
+    /// 通常スイッチャーのアプリグルーピング設定を保存する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    func saveGroupNormalSwitcherByApp(_ enabled: Bool)
+
+    /// 保存されている検索ランチャーのアプリグルーピング設定を読み込む
+    /// - Returns: アプリごとにグルーピングする場合は true（未保存時はデフォルト true）
+    func loadGroupLauncherByApp() -> Bool
+
+    /// 検索ランチャーのアプリグルーピング設定を保存する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    func saveGroupLauncherByApp(_ enabled: Bool)
 }

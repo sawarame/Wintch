@@ -362,4 +362,26 @@ struct SwitcherListViewTests {
         #expect(scrollableVM.selectedIndex == 15)
         #expect(scrollView.contentView.bounds.origin.y > 200)
     }
+
+    /// グルーピング ON 時と OFF 時で SwitcherListView のアプリ見出し行の有無に応じたレイアウト高さ差と、
+    /// グルーピング ON 時の MRU 2 番目初期選択への初期スクロール追従を検証する
+    @Test("グルーピング ON/OFF でリスト見出し有無のレイアウトが切り替わり初期選択へスクロール追従する")
+    @MainActor
+    func groupedListLayoutDiffersFromFlatAndFollowsInitialSelection() throws {
+        let groupedVM = makeViewModel(windowCount: 3, appCount: 0)
+        groupedVM.handleHotKeyEvent(.launcherTriggerPressed)
+        let groupedHosting = NSHostingView(rootView: SwitcherListView(viewModel: groupedVM))
+        groupedHosting.layoutSubtreeIfNeeded()
+        let groupedSize = groupedHosting.fittingSize
+
+        groupedVM.updateLauncherGrouping(false)
+        let flatHosting = NSHostingView(rootView: SwitcherListView(viewModel: groupedVM))
+        flatHosting.layoutSubtreeIfNeeded()
+        let flatSize = flatHosting.fittingSize
+
+        // 3 アプリ各 1 ウィンドウの場合、グルーピング ON は 3 件のアプリ見出し行が追加されるためフラット時より高さが大きくなる
+        #expect(groupedSize.width == 520)
+        #expect(flatSize.width == 520)
+        #expect(groupedSize.height > flatSize.height)
+    }
 }

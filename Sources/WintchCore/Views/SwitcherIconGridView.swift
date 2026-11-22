@@ -20,9 +20,21 @@ public struct SwitcherIconGridView: View {
         self.onContentSizeChanged = onContentSizeChanged
     }
 
-    /// 現在の項目数と画面幅から算出されたグリッド列数
+    /// アプリグルーピング表示を適用するかどうか
+    private var isGrouped: Bool {
+        viewModel.isNormalSwitcherGroupedByApp && !viewModel.displayedGroups.isEmpty
+    }
+
+    /// 現在の項目数（またはグループ構成）と画面幅から算出されたグリッド列数
     private var columnsCount: Int {
-        SwitcherGridLayout.columnsCount(
+        if isGrouped {
+            return SwitcherGridLayout.groupedColumnsCount(
+                sectionCounts: viewModel.displayedGroups.map(\.results.count),
+                availableScreenWidth: viewModel.availableScreenSize.width,
+                style: .icon
+            )
+        }
+        return SwitcherGridLayout.columnsCount(
             itemCount: viewModel.displayedResults.count,
             availableScreenWidth: viewModel.availableScreenSize.width,
             style: .icon
@@ -33,7 +45,8 @@ public struct SwitcherIconGridView: View {
     private var panelWidth: CGFloat {
         let tilesWidth = CGFloat(columnsCount) * SwitcherGridLayout.iconTileWidth
             + CGFloat(max(columnsCount - 1, 0)) * SwitcherGridLayout.cardSpacing
-        return tilesWidth + SwitcherGridLayout.gridPadding * 2
+        let baseWidth = tilesWidth + SwitcherGridLayout.gridPadding * 2
+        return isGrouped ? max(baseWidth, SwitcherGridLayout.iconGroupedMinPanelWidth) : baseWidth
     }
 
     /// グリッド領域の最大スクロール高さ
@@ -82,21 +95,59 @@ public struct SwitcherIconGridView: View {
             }
     }
 
-    /// スクロール追従付きの複数行アイコンタイルグリッド
+    /// スクロール追従付きの複数行アイコンタイルグリッド（グルーピング ON 時はアプリ別セクション構成）
     private var gridScrollView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                LazyVGrid(columns: gridColumns, spacing: SwitcherGridLayout.cardSpacing) {
-                    ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
-                        SwitcherIconTileView(
-                            entry: result.entry,
-                            icon: viewModel.icon(for: result.entry.pid),
-                            isSelected: index == viewModel.selectedIndex
-                        )
-                        .id(result.id)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.selectAndActivate(at: index)
+                Group {
+                    if isGrouped {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(viewModel.displayedGroups.enumerated()), id: \.element.id) { groupIndex, group in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    SwitcherGridSectionHeaderView(
+                                        applicationName: group.applicationName,
+                                        icon: viewModel.icon(for: group.representativePID),
+                                        isFirstSection: groupIndex == 0
+                                    )
+
+                                    LazyVGrid(
+                                        columns: gridColumns,
+                                        alignment: .leading,
+                                        spacing: SwitcherGridLayout.cardSpacing
+                                    ) {
+                                        ForEach(Array(group.results.enumerated()), id: \.element.id) { offset, result in
+                                            let index = group.startIndex + offset
+                                            SwitcherIconTileView(
+                                                entry: result.entry,
+                                                icon: viewModel.icon(for: result.entry.pid),
+                                                isSelected: index == viewModel.selectedIndex,
+                                                showsApplicationName: false
+                                            )
+                                            .id(result.id)
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                viewModel.selectAndActivate(at: index)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        LazyVGrid(columns: gridColumns, spacing: SwitcherGridLayout.cardSpacing) {
+                            ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
+                                SwitcherIconTileView(
+                                    entry: result.entry,
+                                    icon: viewModel.icon(for: result.entry.pid),
+                                    isSelected: index == viewModel.selectedIndex,
+                                    showsApplicationName: true
+                                )
+                                .id(result.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewModel.selectAndActivate(at: index)
+                                }
+                            }
                         }
                     }
                 }
@@ -104,13 +155,37 @@ public struct SwitcherIconGridView: View {
             }
             .frame(maxHeight: maxScrollHeight)
             .fixedSize(horizontal: false, vertical: true)
-            .onChange(of: viewModel.selectedIndex) { _, newIndex in
-                guard viewModel.displayedResults.indices.contains(newIndex) else { return }
-                let targetID = viewModel.displayedResults[newIndex].id
-                withAnimation(.easeOut(duration: 0.08)) {
-                    proxy.scrollTo(targetID, anchor: .center)
-                }
+            .onAppear {
+                scrollToSelectedItem(using: proxy, animated: false)
             }
+            .onChange(of: viewModel.selectedIndex) { _, newIndex in
+                scrollToItem(at: newIndex, using: proxy, animated: true)
+            }
+        }
+    }
+
+    /// 現在選択中のタイルへスクロール位置を追従させる
+    /// - Parameters:
+    ///   - proxy: 制御対象の `ScrollViewProxy`
+    ///   - animated: 短いアニメーションを適用する場合は true
+    private func scrollToSelectedItem(using proxy: ScrollViewProxy, animated: Bool) {
+        scrollToItem(at: viewModel.selectedIndex, using: proxy, animated: animated)
+    }
+
+    /// 指定インデックスのタイルへスクロール位置を追従させる
+    /// - Parameters:
+    ///   - index: 対象の選択インデックス
+    ///   - proxy: 制御対象の `ScrollViewProxy`
+    ///   - animated: 短いアニメーションを適用する場合は true
+    private func scrollToItem(at index: Int, using proxy: ScrollViewProxy, animated: Bool) {
+        guard viewModel.displayedResults.indices.contains(index) else { return }
+        let targetID = viewModel.displayedResults[index].id
+        if animated {
+            withAnimation(.easeOut(duration: 0.08)) {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(targetID, anchor: .center)
         }
     }
 }
@@ -123,6 +198,8 @@ private struct SwitcherIconTileView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// タイル下部にアプリケーション名を表示するか（グルーピング ON 時は false）
+    let showsApplicationName: Bool
 
     /// タイルビューの本体構築
     var body: some View {
@@ -131,17 +208,24 @@ private struct SwitcherIconTileView: View {
                 .frame(width: 60, height: 60)
 
             VStack(spacing: 2) {
-                Text(entry.applicationName)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(isSelected ? .white : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                if showsApplicationName {
+                    Text(entry.applicationName)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(isSelected ? .white : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
 
                 Text(entry.displayTitle)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(isSelected ? .white.opacity(0.88) : .secondary)
-                    .lineLimit(1)
+                    .font(.system(size: showsApplicationName ? 10.5 : 11, weight: showsApplicationName ? .regular : .medium))
+                    .foregroundStyle(
+                        showsApplicationName
+                            ? (isSelected ? .white.opacity(0.88) : .secondary)
+                            : (isSelected ? .white : .primary)
+                    )
+                    .lineLimit(showsApplicationName ? 1 : 2)
+                    .multilineTextAlignment(.center)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .center)
             }

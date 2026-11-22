@@ -138,4 +138,104 @@ struct SwitcherListRowTests {
             ) == nil
         )
     }
+
+    /// グルーピング表示時に全アプリへ見出し行が挿入され、ウィンドウ行・アプリ起動行の統一インデックスおよび scrollTargetID が破綻しないことを検証する
+    @Test("グルーピング表示時にアプリ見出し行が挿入され全行 ID が一意かつ統一インデックスが連続する")
+    func buildRowsWithWindowGroupsInsertsHeadersAndPreservesUnifiedIndices() {
+        let windows = [
+            WindowSearchResult(
+                entry: WindowEntry(id: "s-1", pid: 10, bundleIdentifier: "com.apple.Safari", applicationName: "Safari", windowTitle: "Tab 1")
+            ),
+            WindowSearchResult(
+                entry: WindowEntry(id: "s-2", pid: 10, bundleIdentifier: "com.apple.Safari", applicationName: "Safari", windowTitle: "Tab 2")
+            ),
+            WindowSearchResult(
+                entry: WindowEntry(id: "f-1", pid: 20, bundleIdentifier: "com.apple.finder", applicationName: "Finder", windowTitle: "Desktop")
+            )
+        ]
+        let groups = WindowAppGrouping.group(windows)
+        let flattened = WindowAppGrouping.flatten(groups)
+        let apps = [
+            AppSearchResult(
+                app: LaunchableApp(
+                    id: "app-xcode",
+                    displayName: "Xcode",
+                    bundleURL: URL(fileURLWithPath: "/Applications/Xcode.app")
+                )
+            )
+        ]
+
+        let rows = SwitcherListRow.buildRows(
+            windowResults: flattened,
+            windowGroups: groups,
+            appResults: apps,
+            isShowingLaunchCandidates: true,
+            launchSectionHeaderTitle: "アプリを起動"
+        )
+
+        // 見出し 2 行 + ウィンドウ 3 行 + アプリ起動見出し 1 行 + アプリ起動 1 行 = 7 行
+        #expect(rows.count == 7)
+        #expect(Set(rows.map(\.id)).count == rows.count)
+
+        if case let .appGroupHeader(groupID, appName, _, _, isFirstGroup) = rows[0] {
+            #expect(groupID == "bundle:com.apple.Safari")
+            #expect(appName == "Safari")
+            #expect(isFirstGroup == true)
+        } else {
+            Issue.record("先頭行が appGroupHeader ではありません")
+        }
+
+        if case let .window(index, result) = rows[1] {
+            #expect(index == 0)
+            #expect(result.id == "s-1")
+        } else {
+            Issue.record("2 行目が window(0) ではありません")
+        }
+
+        if case let .window(index, result) = rows[2] {
+            #expect(index == 1)
+            #expect(result.id == "s-2")
+        } else {
+            Issue.record("3 行目が window(1) ではありません")
+        }
+
+        if case let .appGroupHeader(groupID, appName, _, _, isFirstGroup) = rows[3] {
+            #expect(groupID == "bundle:com.apple.finder")
+            #expect(appName == "Finder")
+            #expect(isFirstGroup == false)
+        } else {
+            Issue.record("4 行目が 2 番目の appGroupHeader ではありません")
+        }
+
+        if case let .window(index, result) = rows[4] {
+            #expect(index == 2)
+            #expect(result.id == "f-1")
+        } else {
+            Issue.record("5 行目が window(2) ではありません")
+        }
+
+        #expect(rows[5] == .launchSectionHeader(title: "アプリを起動", hasPrecedingWindows: true))
+        if case let .appLaunch(unifiedIndex, _) = rows[6] {
+            #expect(unifiedIndex == 3)
+        } else {
+            Issue.record("7 行目が appLaunch(3) ではありません")
+        }
+
+        #expect(
+            SwitcherListRow.scrollTargetID(
+                for: 2,
+                windowResults: flattened,
+                appResults: apps,
+                isShowingLaunchCandidates: true
+            ) == rows[4].id
+        )
+        #expect(
+            SwitcherListRow.scrollTargetID(
+                for: 3,
+                windowResults: flattened,
+                appResults: apps,
+                isShowingLaunchCandidates: true
+            ) == rows[6].id
+        )
+    }
 }

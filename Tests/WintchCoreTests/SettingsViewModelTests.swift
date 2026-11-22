@@ -476,4 +476,75 @@ struct SettingsViewModelTests {
         #expect(viewModel.usesCaptureDisplayStyle == false)
         #expect(screenRecordingService.currentStatusCallCount == 0)
     }
+
+    /// PreferencesStore が通常スイッチャー・検索ランチャーのアプリグルーピング設定を独立して永続化し、未保存時はデフォルト true を返すことを検証する
+    @Test("PreferencesStore でグルーピング設定が未保存時 true にフォールバックし個別に永続化される")
+    func preferencesStorePersistsAppGroupingIndependentlyWithTrueDefault() {
+        let suiteName = "dev.wintch.tests.appGrouping.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)
+        defaults?.removePersistentDomain(forName: suiteName)
+        defer { defaults?.removePersistentDomain(forName: suiteName) }
+
+        let store = PreferencesStore(suiteName: suiteName)
+        // キー未保存時は UserDefaults.bool の false ではなくデフォルト true を返すこと
+        #expect(store.loadGroupNormalSwitcherByApp() == true)
+        #expect(store.loadGroupLauncherByApp() == true)
+
+        // 通常スイッチャーのみ false にしてもランチャー側へ影響しない
+        store.saveGroupNormalSwitcherByApp(false)
+        #expect(store.loadGroupNormalSwitcherByApp() == false)
+        #expect(store.loadGroupLauncherByApp() == true)
+
+        // ランチャーのみ false にし、通常側を true へ戻せる
+        store.saveGroupLauncherByApp(false)
+        store.saveGroupNormalSwitcherByApp(true)
+        #expect(store.loadGroupNormalSwitcherByApp() == true)
+        #expect(store.loadGroupLauncherByApp() == false)
+    }
+
+    /// SettingsViewModel で通常スイッチャー・検索ランチャーのグルーピング設定を個別に変更・永続化・通知でき、画面収録権限を参照しないことを検証する
+    @Test("SettingsViewModel でグルーピング設定がデフォルト ON・個別永続化・通知され画面収録権限を参照しない")
+    @MainActor
+    func appGroupingTogglePersistsAndNotifiesWithoutScreenRecordingQuery() {
+        let store = MockPreferencesStore()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        let viewModel = SettingsViewModel(
+            preferencesStore: store,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            launchAtLoginService: MockLaunchAtLoginService(),
+            permissionService: MockAccessibilityPermissionService(),
+            screenRecordingPermissionService: screenRecordingService
+        )
+
+        var normalHistory: [Bool] = []
+        var launcherHistory: [Bool] = []
+        viewModel.onNormalSwitcherGroupingChanged = { normalHistory.append($0) }
+        viewModel.onLauncherGroupingChanged = { launcherHistory.append($0) }
+
+        #expect(viewModel.isNormalSwitcherGroupedByApp == true)
+        #expect(viewModel.isLauncherGroupedByApp == true)
+
+        // 同じ値を渡した場合は不要な保存・通知を行わない
+        viewModel.updateNormalSwitcherGrouping(true)
+        viewModel.updateLauncherGrouping(true)
+        #expect(store.saveGroupNormalSwitcherByAppCallCount == 0)
+        #expect(store.saveGroupLauncherByAppCallCount == 0)
+        #expect(normalHistory.isEmpty)
+        #expect(launcherHistory.isEmpty)
+
+        // 個別に変更すると永続化・通知される
+        viewModel.updateNormalSwitcherGrouping(false)
+        #expect(viewModel.isNormalSwitcherGroupedByApp == false)
+        #expect(viewModel.isLauncherGroupedByApp == true)
+        #expect(store.storedGroupNormalSwitcherByApp == false)
+        #expect(store.saveGroupNormalSwitcherByAppCallCount == 1)
+        #expect(normalHistory == [false])
+
+        viewModel.updateLauncherGrouping(false)
+        #expect(viewModel.isLauncherGroupedByApp == false)
+        #expect(store.storedGroupLauncherByApp == false)
+        #expect(store.saveGroupLauncherByAppCallCount == 1)
+        #expect(launcherHistory == [false])
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+    }
 }
