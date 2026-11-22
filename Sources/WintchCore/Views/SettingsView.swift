@@ -84,6 +84,19 @@ public struct SettingsView: View {
         )
     }
 
+    /// アプリ表示言語設定用の双方向バインディング
+    private var appLanguageBinding: Binding<AppLanguage> {
+        Binding(
+            get: { viewModel.appLanguage },
+            set: { viewModel.updateAppLanguage($0) }
+        )
+    }
+
+    /// 現在の解決済み言語に対応するローカライズ文言テーブル
+    private var strings: AppStrings {
+        viewModel.strings
+    }
+
     /// ビューの本体構築（折りたたみ不可の固定 2 ペイン構成）
     public var body: some View {
         HStack(spacing: 0) {
@@ -106,7 +119,7 @@ public struct SettingsView: View {
     /// 左ペインに固定幅で配置するサイドバーメニュー
     private var sidebarView: some View {
         List(SettingsTab.allCases, selection: selectedTabBinding) { tab in
-            Label(tab.title, systemImage: tab.systemImage)
+            Label(tab.title(in: viewModel.resolvedLanguage), systemImage: tab.systemImage)
                 .tag(tab)
         }
         .listStyle(.sidebar)
@@ -136,24 +149,33 @@ public struct SettingsView: View {
 
     /// 「一般」メニューの設定セクション
     private var generalSection: some View {
-        Section("一般") {
-            Toggle("ログイン時に自動起動", isOn: launchAtLoginBinding)
+        Section(SettingsTab.general.title(in: viewModel.resolvedLanguage)) {
+            Toggle(strings.settingsLaunchAtLogin, isOn: launchAtLoginBinding)
 
             if let errorMessage = viewModel.launchAtLoginError {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Picker(strings.settingsLanguageLabel, selection: appLanguageBinding) {
+                ForEach(AppLanguage.allCases) { languageOption in
+                    Text(languageOption.pickerDisplayName(in: viewModel.resolvedLanguage))
+                        .tag(languageOption)
+                }
             }
         }
     }
 
     /// 「スイッチャー」メニューの設定セクション
     private var switcherSection: some View {
-        Section("通常スイッチャー（ホールド式）") {
-            LabeledContent("起動ショートカット") {
+        Section(strings.settingsNormalSwitcherSectionTitle) {
+            LabeledContent(strings.settingsShortcutLabel) {
                 ShortcutRecorderView(
                     displayString: viewModel.shortcut.displayString,
                     isRecording: viewModel.isRecordingNormalShortcut,
+                    recordingPrompt: strings.shortcutRecorderPrompt,
                     onBeginRecording: {
                         viewModel.beginRecordingNormalShortcut()
                     },
@@ -166,10 +188,10 @@ public struct SettingsView: View {
                 )
             }
 
-            LabeledContent("操作方法") {
+            LabeledContent(strings.settingsControlsLabel) {
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text("次へ: \(viewModel.shortcut.displayString)")
-                    Text("前へ: \(viewModel.shortcut.reverseDisplayString)")
+                    Text(strings.controlsNext(viewModel.shortcut.displayString))
+                    Text(strings.controlsPrevious(viewModel.shortcut.reverseDisplayString))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -177,11 +199,12 @@ public struct SettingsView: View {
 
             if viewModel.shortcut.conflictsWithSystemSwitcher {
                 Label(
-                    "Command + Tab は macOS 標準のアプリスイッチャーを上書きします。",
+                    strings.settingsCommandTabWarning,
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.caption)
                 .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             if viewModel.shortcutValidationTarget == .normal,
@@ -189,27 +212,30 @@ public struct SettingsView: View {
                 Label(validationError, systemImage: "xmark.octagon.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("⌘ / ⌥ / ⌃ のいずれか1つ以上を含めて入力してください（⇧ は逆順移動用）。")
+                Text(strings.settingsNormalShortcutHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Picker("表示形式", selection: normalDisplayStyleBinding) {
+            Picker(strings.settingsDisplayStyleLabel, selection: normalDisplayStyleBinding) {
                 ForEach(SwitcherDisplayStyle.allCases, id: \.self) { style in
-                    Text(style.displayName).tag(style)
+                    Text(style.displayName(in: viewModel.resolvedLanguage)).tag(style)
                 }
             }
 
-            Toggle("アプリごとにグルーピング", isOn: normalGroupingBinding)
+            Toggle(strings.groupByAppToggle, isOn: normalGroupingBinding)
 
             if viewModel.normalDisplayStyle == .capture {
                 if viewModel.screenRecordingStatus == .denied {
                     screenRecordingDeniedGuideView
                 } else {
-                    Text("ウィンドウのサムネイルをグリッド表示します（リスト型より多くのメモリを使用する場合があります）。")
+                    Text(strings.settingsNormalCaptureDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -217,11 +243,12 @@ public struct SettingsView: View {
 
     /// 「ランチャー」メニューの設定セクション
     private var launcherSection: some View {
-        Section("検索ランチャー（トグル式）") {
-            LabeledContent("起動ショートカット") {
+        Section(strings.settingsLauncherSectionTitle) {
+            LabeledContent(strings.settingsShortcutLabel) {
                 ShortcutRecorderView(
                     displayString: viewModel.launcherShortcut.displayString,
                     isRecording: viewModel.isRecordingLauncherShortcut,
+                    recordingPrompt: strings.shortcutRecorderPrompt,
                     onBeginRecording: {
                         viewModel.beginRecordingLauncherShortcut()
                     },
@@ -239,27 +266,30 @@ public struct SettingsView: View {
                 Label(validationError, systemImage: "xmark.octagon.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("⌘ / ⌥ / ⌃ のいずれか1つ以上を含めて入力してください。")
+                Text(strings.settingsLauncherShortcutHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Picker("表示形式", selection: launcherDisplayStyleBinding) {
+            Picker(strings.settingsDisplayStyleLabel, selection: launcherDisplayStyleBinding) {
                 ForEach(LauncherDisplayStyle.allCases, id: \.self) { style in
-                    Text(style.displayName).tag(style)
+                    Text(style.displayName(in: viewModel.resolvedLanguage)).tag(style)
                 }
             }
 
-            Toggle("アプリごとにグルーピング", isOn: launcherGroupingBinding)
+            Toggle(strings.groupByAppToggle, isOn: launcherGroupingBinding)
 
             if viewModel.launcherDisplayStyle == .capture {
                 if viewModel.screenRecordingStatus == .denied {
                     screenRecordingDeniedGuideView
                 } else {
-                    Text("各ウィンドウ候補の行にサムネイルを表示します（リスト型より多くのメモリを使用する場合があります）。")
+                    Text(strings.settingsLauncherCaptureDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -267,16 +297,16 @@ public struct SettingsView: View {
 
     /// 「システム」メニュー内のシステム権限セクション
     private var systemPermissionsSection: some View {
-        Section("システム権限") {
-            LabeledContent("アクセシビリティ権限") {
+        Section(strings.settingsSystemPermissionsSectionTitle) {
+            LabeledContent(strings.settingsAccessibilityPermissionLabel) {
                 if viewModel.permissionStatus == .granted {
-                    Label("許可済み", systemImage: "checkmark.circle.fill")
+                    Label(strings.settingsPermissionGranted, systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 } else {
                     HStack(spacing: 8) {
-                        Label("未許可", systemImage: "exclamationmark.circle.fill")
+                        Label(strings.settingsPermissionDenied, systemImage: "exclamationmark.circle.fill")
                             .foregroundStyle(.orange)
-                        Button("設定を開く") {
+                        Button(strings.settingsOpenSettingsButton) {
                             viewModel.openAccessibilitySettings()
                         }
                         .buttonStyle(.link)
@@ -286,15 +316,15 @@ public struct SettingsView: View {
 
             // オプトイン原則に従い、通常スイッチャーまたは検索ランチャーでキャプチャ表示型が選択されている場合のみ画面収録権限欄を表示する
             if viewModel.usesCaptureDisplayStyle {
-                LabeledContent("画面収録権限") {
+                LabeledContent(strings.settingsScreenRecordingPermissionLabel) {
                     if viewModel.screenRecordingStatus == .granted {
-                        Label("許可済み", systemImage: "checkmark.circle.fill")
+                        Label(strings.settingsPermissionGranted, systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                     } else {
                         HStack(spacing: 8) {
-                            Label("未許可", systemImage: "exclamationmark.circle.fill")
+                            Label(strings.settingsPermissionDenied, systemImage: "exclamationmark.circle.fill")
                                 .foregroundStyle(.orange)
-                            Button("設定を開く") {
+                            Button(strings.settingsOpenSettingsButton) {
                                 viewModel.openScreenRecordingSettings()
                             }
                             .buttonStyle(.link)
@@ -307,13 +337,13 @@ public struct SettingsView: View {
 
     /// 「システム」メニュー内のアプリ情報セクション（旧「Wintchについて」から統合）
     private var appInfoSection: some View {
-        Section("アプリ情報") {
-            LabeledContent("アプリ名") {
+        Section(strings.settingsAppInfoSectionTitle) {
+            LabeledContent(strings.settingsAppNameLabel) {
                 Text(appIdentity.displayName)
             }
 
-            LabeledContent("バージョン") {
-                Text(versionInfo.displayVersionText)
+            LabeledContent(strings.settingsVersionLabel) {
+                Text(versionInfo.displayVersionText(in: viewModel.resolvedLanguage))
                     .textSelection(.enabled)
             }
         }
@@ -323,35 +353,37 @@ public struct SettingsView: View {
     private var screenRecordingDeniedGuideView: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(
-                "ウィンドウのキャプチャ表示には「画面収録」権限の許可が必要です。",
+                strings.settingsScreenRecordingRequiredMessage,
                 systemImage: "exclamationmark.triangle.fill"
             )
             .font(.caption)
             .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 12) {
-                Button("権限をリクエスト") {
+                Button(strings.settingsRequestPermissionButton) {
                     viewModel.requestScreenRecordingPermission()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
 
-                Button("システム設定を開く") {
+                Button(strings.openSystemSettingsButton) {
                     viewModel.openScreenRecordingSettings()
                 }
                 .buttonStyle(.link)
                 .font(.caption)
 
-                Button("再確認") {
+                Button(strings.recheckButton) {
                     viewModel.refreshStatus()
                 }
                 .buttonStyle(.link)
                 .font(.caption)
             }
 
-            Text("※ macOS の仕様上、権限を許可した後にアプリの再起動が必要になる場合があります。")
+            Text(strings.settingsScreenRecordingRestartNote)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

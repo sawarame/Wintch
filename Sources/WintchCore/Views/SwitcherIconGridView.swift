@@ -91,7 +91,8 @@ public struct SwitcherIconGridView: View {
                         SwitcherIconTileView(
                             entry: result.entry,
                             icon: viewModel.icon(for: result.entry.pid),
-                            isSelected: index == viewModel.selectedIndex
+                            isSelected: index == viewModel.selectedIndex,
+                            language: viewModel.resolvedLanguage
                         )
                         .id(result.id)
                         .contentShape(Rectangle())
@@ -147,6 +148,8 @@ private struct SwitcherIconTileView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 補助表示テキストに使用する解決済み言語
+    let language: ResolvedAppLanguage
 
     /// タイルビューの本体構築
     var body: some View {
@@ -155,14 +158,14 @@ private struct SwitcherIconTileView: View {
                 .frame(width: 60, height: 60)
 
             VStack(spacing: 2) {
-                Text(entry.applicationName)
+                Text(entry.displayApplicationName(in: language))
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(isSelected ? .white : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .center)
 
-                Text(entry.displayTitle)
+                Text(entry.displayTitle(in: language))
                     .font(.system(size: 10.5))
                     .foregroundStyle(isSelected ? .white.opacity(0.88) : .secondary)
                     .lineLimit(1)

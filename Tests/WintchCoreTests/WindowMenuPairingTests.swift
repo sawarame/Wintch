@@ -5,15 +5,21 @@ import Testing
 /// アプリの「ウィンドウ」メニュー項目抽出・別スペース CGWindow とのタイトル補完ペアリング・厳密照合を検証するテストスイート
 @Suite("ウィンドウメニュー補完・厳密照合テスト")
 struct WindowMenuPairingTests {
-    /// メニューバータイトル判定が日本語・英語の「ウィンドウ」メニューのみを認識することを検証する
-    @Test("メニューバー項目のウィンドウメニュー判定が日英表記を正しく識別する")
+    /// メニューバータイトル判定が日本語・英語・中国語（簡体字/繁体字）・韓国語の「ウィンドウ」メニューのみを認識することを検証する
+    @Test("メニューバー項目のウィンドウメニュー判定が日英中韓表記を正しく識別する")
     func recognizesWindowMenuTitles() {
         #expect(WindowMenuExtractor.isWindowMenuBarTitle("Window"))
         #expect(WindowMenuExtractor.isWindowMenuBarTitle(" window "))
         #expect(WindowMenuExtractor.isWindowMenuBarTitle("ウィンドウ"))
         #expect(WindowMenuExtractor.isWindowMenuBarTitle("ウインドウ"))
+        #expect(WindowMenuExtractor.isWindowMenuBarTitle("窗口"))
+        #expect(WindowMenuExtractor.isWindowMenuBarTitle(" 窗口 "))
+        #expect(WindowMenuExtractor.isWindowMenuBarTitle("視窗"))
+        #expect(WindowMenuExtractor.isWindowMenuBarTitle("윈도우"))
         #expect(!WindowMenuExtractor.isWindowMenuBarTitle("ファイル"))
         #expect(!WindowMenuExtractor.isWindowMenuBarTitle("View"))
+        #expect(!WindowMenuExtractor.isWindowMenuBarTitle("文件"))
+        #expect(!WindowMenuExtractor.isWindowMenuBarTitle("파일"))
     }
 
     /// AppKit / Electron / Chromium 標準の "makeKeyAndOrderFront:" 識別子に基づき

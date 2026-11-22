@@ -97,18 +97,26 @@ public enum TriggerKeyOption: String, CaseIterable, Codable, Equatable, Sendable
         }
     }
 
-    /// 設定画面に表示するキー名
+    /// 設定画面に表示するキー名（互換用：日本語既定）
     /// - Returns: トリガーキーの表示名
     public var displayName: String {
+        displayName(in: .japanese)
+    }
+
+    /// 指定言語でのトリガーキー表示名を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みのトリガーキー表示名
+    public func displayName(in language: ResolvedAppLanguage) -> String {
+        let strings = AppStrings(language: language)
         switch self {
         case .tab:
             return "Tab (⇥)"
         case .space:
             return "Space"
         case .grave:
-            return "` (バッククォート)"
+            return strings.text(for: .triggerKeyGraveDisplayName)
         case .backslash:
-            return "\\ (バックスラッシュ)"
+            return strings.text(for: .triggerKeyBackslashDisplayName)
         }
     }
 

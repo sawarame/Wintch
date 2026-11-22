@@ -20,6 +20,9 @@ public final class PreferencesStore: PreferencesStoring {
     /// 検索ランチャーのアプリグルーピング設定の永続化に使用する UserDefaults キー
     private static let groupLauncherByAppKey = "dev.wintch.groupLauncherByApp"
 
+    /// アプリの表示言語設定の永続化に使用する UserDefaults キー
+    private static let appLanguageKey = "dev.wintch.appLanguage"
+
     /// 使用する UserDefaults スイート名（nil の場合は standard）
     private let suiteName: String?
 
@@ -129,6 +132,22 @@ public final class PreferencesStore: PreferencesStoring {
     /// - Parameter enabled: アプリごとにグルーピングする場合は true
     public func saveGroupLauncherByApp(_ enabled: Bool) {
         resolveDefaults().set(enabled, forKey: Self.groupLauncherByAppKey)
+    }
+
+    /// 保存されているアプリの表示言語設定を読み込む
+    /// - Returns: 保存された言語設定（未保存または不正値時はデフォルトの .system）
+    public func loadAppLanguage() -> AppLanguage {
+        guard let rawValue = resolveDefaults().string(forKey: Self.appLanguageKey),
+              let language = AppLanguage(rawValue: rawValue) else {
+            return .default
+        }
+        return language
+    }
+
+    /// アプリの表示言語設定を保存する
+    /// - Parameter language: 保存する言語設定
+    public func saveAppLanguage(_ language: AppLanguage) {
+        resolveDefaults().set(language.rawValue, forKey: Self.appLanguageKey)
     }
 
     /// 設定用の UserDefaults インスタンスを解決する

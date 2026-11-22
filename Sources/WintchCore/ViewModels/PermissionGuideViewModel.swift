@@ -7,6 +7,14 @@ public final class PermissionGuideViewModel {
     /// 現在のアクセシビリティ権限状態
     public private(set) var status: AccessibilityPermissionStatus
 
+    /// 画面表示に使用する解決済み言語
+    public private(set) var resolvedLanguage: ResolvedAppLanguage
+
+    /// 現在の表示言語に対応するローカライズ文言テーブル
+    public var strings: AppStrings {
+        AppStrings(language: resolvedLanguage)
+    }
+
     /// 権限が許可された際に呼び出される通知ハンドラ
     public var onPermissionGranted: (() -> Void)?
 
@@ -14,10 +22,23 @@ public final class PermissionGuideViewModel {
     private let permissionService: any AccessibilityPermissionServicing
 
     /// 権限誘導 ViewModel を初期化する
-    /// - Parameter permissionService: アクセシビリティ権限管理サービス
-    public init(permissionService: any AccessibilityPermissionServicing) {
+    /// - Parameters:
+    ///   - permissionService: アクセシビリティ権限管理サービス
+    ///   - resolvedLanguage: 初期表示に使用する解決済み言語（既定値は日本語）
+    public init(
+        permissionService: any AccessibilityPermissionServicing,
+        resolvedLanguage: ResolvedAppLanguage = .japanese
+    ) {
         self.permissionService = permissionService
         self.status = permissionService.currentStatus()
+        self.resolvedLanguage = resolvedLanguage
+    }
+
+    /// 表示言語を即時更新する
+    /// - Parameter language: 新しい解決済み言語
+    public func updateLanguage(_ language: ResolvedAppLanguage) {
+        guard resolvedLanguage != language else { return }
+        resolvedLanguage = language
     }
 
     /// システム設定のアクセシビリティ項目を開く

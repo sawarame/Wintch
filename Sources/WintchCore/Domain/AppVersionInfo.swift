@@ -11,9 +11,16 @@ public struct AppVersionInfo: Equatable, Sendable {
     /// 著作権およびライセンス表記
     public let copyright: String
 
-    /// 画面表示用の整形済みバージョン文字列
+    /// 画面表示用の整形済みバージョン文字列（互換用：日本語既定）
     public var displayVersionText: String {
-        "バージョン \(shortVersion) (\(buildNumber))"
+        displayVersionText(in: .japanese)
+    }
+
+    /// 指定言語での画面表示用バージョン文字列を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みの整形済みバージョン文字列
+    public func displayVersionText(in language: ResolvedAppLanguage) -> String {
+        AppStrings(language: language).versionText(shortVersion: shortVersion, buildNumber: buildNumber)
     }
 
     /// バンドルの Info.plist 辞書からバージョン情報を生成する

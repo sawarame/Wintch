@@ -44,6 +44,21 @@ public final class AppCoordinator {
         settingsViewModel.isLauncherGroupedByApp
     }
 
+    /// 現在のアプリ表示言語設定
+    public var appLanguage: AppLanguage {
+        settingsViewModel.appLanguage
+    }
+
+    /// 現在の UI 描画に適用されている解決済み言語
+    public var resolvedLanguage: ResolvedAppLanguage {
+        settingsViewModel.resolvedLanguage
+    }
+
+    /// 現在の解決済み言語に対応するローカライズ文言テーブル
+    public var strings: AppStrings {
+        settingsViewModel.strings
+    }
+
     /// ウィンドウ情報サービス
     private let windowService: any WindowServicing
     /// グローバルホットキー監視サービス
@@ -105,6 +120,7 @@ public final class AppCoordinator {
     ///   - windowCaptureService: ウィンドウキャプチャサービス
     ///   - windowFrontPresenter: 標準ウィンドウ最前面表示プレゼンター
     ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
+    ///   - preferredLanguagesProvider: システム優先言語配列の提供クロージャ（既定値は `Locale.preferredLanguages`）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -116,7 +132,8 @@ public final class AppCoordinator {
         screenRecordingPermissionService: any ScreenRecordingPermissionServicing = ScreenRecordingPermissionService(),
         windowCaptureService: any WindowCaptureServicing = WindowCaptureService(),
         windowFrontPresenter: any WindowFrontPresenting = WindowFrontPresenter(),
-        appIdentity: AppIdentity = .current
+        appIdentity: AppIdentity = .current,
+        preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages }
     ) {
         self.appIdentity = appIdentity
         self.windowService = windowService
@@ -135,6 +152,16 @@ public final class AppCoordinator {
         let initialLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
         let initialNormalGrouping = preferencesStore.loadGroupNormalSwitcherByApp()
         let initialLauncherGrouping = preferencesStore.loadGroupLauncherByApp()
+        let settingsViewModel = SettingsViewModel(
+            preferencesStore: preferencesStore,
+            hotKeyMonitor: hotKeyMonitor,
+            launchAtLoginService: launchAtLoginService,
+            permissionService: permissionService,
+            screenRecordingPermissionService: screenRecordingPermissionService,
+            preferredLanguagesProvider: preferredLanguagesProvider
+        )
+        let initialResolvedLanguage = settingsViewModel.resolvedLanguage
+        self.settingsViewModel = settingsViewModel
         self.switcherViewModel = SwitcherViewModel(
             windowService: windowService,
             hotKeyMonitor: hotKeyMonitor,
@@ -146,17 +173,12 @@ public final class AppCoordinator {
             normalDisplayStyle: initialDisplayStyle,
             launcherDisplayStyle: initialLauncherDisplayStyle,
             isNormalSwitcherGroupedByApp: initialNormalGrouping,
-            isLauncherGroupedByApp: initialLauncherGrouping
-        )
-        self.settingsViewModel = SettingsViewModel(
-            preferencesStore: preferencesStore,
-            hotKeyMonitor: hotKeyMonitor,
-            launchAtLoginService: launchAtLoginService,
-            permissionService: permissionService,
-            screenRecordingPermissionService: screenRecordingPermissionService
+            isLauncherGroupedByApp: initialLauncherGrouping,
+            resolvedLanguage: initialResolvedLanguage
         )
         self.permissionGuideViewModel = PermissionGuideViewModel(
-            permissionService: permissionService
+            permissionService: permissionService,
+            resolvedLanguage: initialResolvedLanguage
         )
 
         setupBindings()
@@ -167,19 +189,22 @@ public final class AppCoordinator {
         guard !isStarted else { return }
         isStarted = true
 
-        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式・グルーピング設定をロードして反映する
+        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式・グルーピング・言語設定をロードして反映する
         let savedShortcut = preferencesStore.loadShortcut()
         let savedLauncherShortcut = preferencesStore.loadLauncherShortcut()
         let savedDisplayStyle = preferencesStore.loadNormalDisplayStyle()
         let savedLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
         let savedNormalGrouping = preferencesStore.loadGroupNormalSwitcherByApp()
         let savedLauncherGrouping = preferencesStore.loadGroupLauncherByApp()
+        let savedAppLanguage = preferencesStore.loadAppLanguage()
         hotKeyMonitor.updateShortcut(savedShortcut)
         hotKeyMonitor.updateLauncherShortcut(savedLauncherShortcut)
         switcherViewModel.updateNormalDisplayStyle(savedDisplayStyle)
         switcherViewModel.updateLauncherDisplayStyle(savedLauncherDisplayStyle)
         switcherViewModel.updateNormalSwitcherGrouping(savedNormalGrouping)
         switcherViewModel.updateLauncherGrouping(savedLauncherGrouping)
+        settingsViewModel.updateAppLanguage(savedAppLanguage)
+        applyResolvedLanguage(settingsViewModel.resolvedLanguage)
 
         // 初期の権限状態を確認し、監視を開始する
         updatePermissionState(permissionService.currentStatus())
@@ -236,6 +261,12 @@ public final class AppCoordinator {
     /// - Parameter enabled: アプリごとにグルーピングする場合は true
     public func updateLauncherGrouping(_ enabled: Bool) {
         settingsViewModel.updateLauncherGrouping(enabled)
+    }
+
+    /// アプリの表示言語設定を更新し、永続化・全 ViewModel・ウィンドウタイトルへ即時同期する
+    /// - Parameter language: 新しい言語設定
+    public func updateAppLanguage(_ language: AppLanguage) {
+        settingsViewModel.updateAppLanguage(language)
     }
 
     /// 権限状態の変化に応じて監視サービスの起動・停止および誘導画面の表示を切り替える
@@ -344,6 +375,35 @@ public final class AppCoordinator {
         settingsViewModel.onLauncherGroupingChanged = { [weak self] isGrouped in
             self?.switcherViewModel.updateLauncherGrouping(isGrouped)
         }
+
+        settingsViewModel.onAppLanguageChanged = { [weak self] _, newResolvedLanguage in
+            self?.applyResolvedLanguage(newResolvedLanguage)
+        }
+    }
+
+    /// 解決済み言語の変更を全 ViewModel・ウィンドウタイトル・権限誘導ウィンドウサイズへ即時反映する
+    /// - Parameter language: 新しい解決済み言語
+    private func applyResolvedLanguage(_ language: ResolvedAppLanguage) {
+        switcherViewModel.updateLanguage(language)
+        permissionGuideViewModel.updateLanguage(language)
+        settingsWindow?.title = appIdentity.settingsWindowTitle(in: language)
+        if let permissionWindow {
+            permissionWindow.title = appIdentity.permissionGuideWindowTitle(in: language)
+            resizePermissionWindowToFit(permissionWindow)
+        }
+    }
+
+    /// 権限誘導ウィンドウのコンテンツ必要サイズを再計測し、言語ごとの行数変化によるテキスト見切れを防ぐ
+    /// - Parameter window: 対象の権限誘導ウィンドウ
+    private func resizePermissionWindowToFit(_ window: NSWindow) {
+        guard let hostingView = window.contentView else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingSize = hostingView.fittingSize
+        let contentSize = NSSize(
+            width: max(fittingSize.width, PermissionGuideView.preferredWidth),
+            height: max(fittingSize.height, PermissionGuideView.minimumHeight)
+        )
+        window.setContentSize(contentSize)
     }
 
     /// フローティングスイッチャーパネルを必要に応じて生成して返す
@@ -391,7 +451,7 @@ public final class AppCoordinator {
             backing: .buffered,
             defer: false
         )
-        window.title = appIdentity.settingsWindowTitle
+        window.title = appIdentity.settingsWindowTitle(in: resolvedLanguage)
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
         window.setContentSize(contentSize)
@@ -421,7 +481,7 @@ public final class AppCoordinator {
             backing: .buffered,
             defer: false
         )
-        window.title = appIdentity.permissionGuideWindowTitle
+        window.title = appIdentity.permissionGuideWindowTitle(in: resolvedLanguage)
         window.isReleasedWhenClosed = false
         window.contentView = hostingView
         window.setContentSize(contentSize)

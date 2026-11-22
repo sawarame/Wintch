@@ -210,6 +210,8 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var storedGroupNormalSwitcherByApp: Bool = true
     /// メモリ上に保持している検索ランチャーのアプリグルーピング設定
     var storedGroupLauncherByApp: Bool = true
+    /// メモリ上に保持しているアプリ表示言語設定
+    var storedAppLanguage: AppLanguage = .default
     /// saveShortcut が呼ばれた回数
     var saveCallCount = 0
     /// saveLauncherShortcut が呼ばれた回数
@@ -222,6 +224,8 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var saveGroupNormalSwitcherByAppCallCount = 0
     /// saveGroupLauncherByApp が呼ばれた回数
     var saveGroupLauncherByAppCallCount = 0
+    /// saveAppLanguage が呼ばれた回数
+    var saveAppLanguageCallCount = 0
 
     /// メモリ上の通常ショートカット設定を読み込む
     /// - Returns: 保持している設定
@@ -299,6 +303,19 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     func saveGroupLauncherByApp(_ enabled: Bool) {
         storedGroupLauncherByApp = enabled
         saveGroupLauncherByAppCallCount += 1
+    }
+
+    /// メモリ上のアプリ表示言語設定を読み込む
+    /// - Returns: 保持している言語設定
+    func loadAppLanguage() -> AppLanguage {
+        storedAppLanguage
+    }
+
+    /// メモリ上のアプリ表示言語設定を保存する
+    /// - Parameter language: 保存する言語設定
+    func saveAppLanguage(_ language: AppLanguage) {
+        storedAppLanguage = language
+        saveAppLanguageCallCount += 1
     }
 }
 

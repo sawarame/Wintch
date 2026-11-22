@@ -67,8 +67,10 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       ├── Domain/
 │       │   ├── AccessibilityStatus.swift        # アクセシビリティ権限状態
 │       │   ├── AppIdentity.swift                # 配布版(Wintch) / 開発版(Wintch_dev) 識別情報解決
+│       │   ├── AppLanguage.swift                # 対応言語定義（5言語 + system）・システム優先言語解決ロジック
 │       │   ├── AppSearchEngine.swift            # アプリ起動候補のファジー検索・スコア順ソート
 │       │   ├── AppSearchResult.swift            # アプリ検索結果・ハイライト範囲モデル
+│       │   ├── AppStrings.swift                 # 型安全な 5 言語 UI ローカライズテーブル
 │       │   ├── AppVersionInfo.swift             # バンドル情報からのバージョン・著作権抽出
 │       │   ├── AppWindowProfile.swift           # バックキングウィンドウ除外・アプリ別ウィンドウプロファイル
 │       │   ├── FuzzySearchMatcher.swift         # スペース区切り AND ファジー検索・ハイライト範囲算出

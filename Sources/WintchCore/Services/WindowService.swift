@@ -370,7 +370,8 @@ public final class WindowService: WindowServicing {
         for (pid, cachedList) in cachedWindowsByPID {
             guard let app = appMap[pid] else { continue }
             let isRegular = app.activationPolicy == .regular
-            let appName = app.localizedName ?? "不明なアプリ"
+            // アプリ名が取得できない場合は空文字とし、UI 描画時に現在の表示言語に応じた不明アプリ表記へフォールバックする
+            let appName = app.localizedName ?? ""
             let profile = AppWindowProfileRegistry.profile(for: app.bundleIdentifier)
             let pidCGEntries = cgEntriesByPID[pid] ?? []
             var updatedList = cachedList
@@ -567,7 +568,7 @@ public final class WindowService: WindowServicing {
                     cgWindowID: cgInfo.windowID,
                     pid: cgInfo.pid,
                     bundleIdentifier: app.bundleIdentifier,
-                    applicationName: app.localizedName ?? "不明なアプリ",
+                    applicationName: app.localizedName ?? "",
                     title: nil,
                     cgWindowName: cgInfo.name,
                     layer: cgInfo.layer,

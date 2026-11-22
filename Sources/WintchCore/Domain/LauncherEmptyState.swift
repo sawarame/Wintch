@@ -9,15 +9,23 @@ public enum LauncherEmptyState: Equatable, Sendable {
     /// ウィンドウ 1 件以上環境で検索キーワードを入力したが、一致するウィンドウもアプリも見つからない状態
     case noMatchingCandidates
 
-    /// ユーザーへ表示する案内メッセージ文字列
+    /// ユーザーへ表示する案内メッセージ文字列（互換用：日本語既定）
     public var message: String {
+        message(in: .japanese)
+    }
+
+    /// 指定言語での空状態案内メッセージを返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みの案内メッセージ文字列
+    public func message(in language: ResolvedAppLanguage) -> String {
+        let strings = AppStrings(language: language)
         switch self {
         case .noOpenWindows:
-            return "開いているウィンドウがありません（アプリ名を入力して起動）"
+            return strings.text(for: .launcherEmptyNoOpenWindows)
         case .noMatchingApps:
-            return "一致するアプリがありません"
+            return strings.text(for: .launcherEmptyNoMatchingApps)
         case .noMatchingCandidates:
-            return "一致するウィンドウやアプリがありません"
+            return strings.text(for: .launcherEmptyNoMatchingCandidates)
         }
     }
 
