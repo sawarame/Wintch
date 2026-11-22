@@ -39,6 +39,22 @@ struct WintchApp: App {
         )
     }
 
+    /// メニューバーと設定画面で共有される通常スイッチャーのアプリグルーピング設定の双方向バインディング
+    private var normalGroupingBinding: Binding<Bool> {
+        Binding(
+            get: { appDelegate.coordinator.isNormalSwitcherGroupedByApp },
+            set: { appDelegate.coordinator.updateNormalSwitcherGrouping($0) }
+        )
+    }
+
+    /// メニューバーと設定画面で共有される検索ランチャーのアプリグルーピング設定の双方向バインディング
+    private var launcherGroupingBinding: Binding<Bool> {
+        Binding(
+            get: { appDelegate.coordinator.isLauncherGroupedByApp },
+            set: { appDelegate.coordinator.updateLauncherGrouping($0) }
+        )
+    }
+
     /// アプリケーションのルートシーン定義（メニューバー常駐アイコンとメニュー）
     var body: some Scene {
         MenuBarExtra {
@@ -59,6 +75,8 @@ struct WintchApp: App {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+
+                    Toggle("アプリごとにグルーピング", isOn: normalGroupingBinding)
                 }
 
                 Section("検索ランチャー") {
@@ -69,6 +87,8 @@ struct WintchApp: App {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+
+                    Toggle("アプリごとにグルーピング", isOn: launcherGroupingBinding)
                 }
             }
 

@@ -104,13 +104,37 @@ public struct SwitcherIconGridView: View {
             }
             .frame(maxHeight: maxScrollHeight)
             .fixedSize(horizontal: false, vertical: true)
-            .onChange(of: viewModel.selectedIndex) { _, newIndex in
-                guard viewModel.displayedResults.indices.contains(newIndex) else { return }
-                let targetID = viewModel.displayedResults[newIndex].id
-                withAnimation(.easeOut(duration: 0.08)) {
-                    proxy.scrollTo(targetID, anchor: .center)
-                }
+            .onAppear {
+                scrollToSelectedItem(using: proxy, animated: false)
             }
+            .onChange(of: viewModel.selectedIndex) { _, newIndex in
+                scrollToItem(at: newIndex, using: proxy, animated: true)
+            }
+        }
+    }
+
+    /// 現在選択中のタイルへスクロール位置を追従させる
+    /// - Parameters:
+    ///   - proxy: 制御対象の `ScrollViewProxy`
+    ///   - animated: 短いアニメーションを適用する場合は true
+    private func scrollToSelectedItem(using proxy: ScrollViewProxy, animated: Bool) {
+        scrollToItem(at: viewModel.selectedIndex, using: proxy, animated: animated)
+    }
+
+    /// 指定インデックスのタイルへスクロール位置を追従させる
+    /// - Parameters:
+    ///   - index: 対象の選択インデックス
+    ///   - proxy: 制御対象の `ScrollViewProxy`
+    ///   - animated: 短いアニメーションを適用する場合は true
+    private func scrollToItem(at index: Int, using proxy: ScrollViewProxy, animated: Bool) {
+        guard viewModel.displayedResults.indices.contains(index) else { return }
+        let targetID = viewModel.displayedResults[index].id
+        if animated {
+            withAnimation(.easeOut(duration: 0.08)) {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(targetID, anchor: .center)
         }
     }
 }

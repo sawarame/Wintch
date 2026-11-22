@@ -8,6 +8,12 @@ public struct SwitcherListView: View {
     /// ランチャーのキャプチャ表示行に配置する小型サムネイルの高さ
     public static let captureThumbnailHeight: CGFloat = 50
 
+    /// 通常スイッチャーのアイコン型（グルーピング ON）行に配置する大きなアプリアイコンの描画サイズ
+    public static let groupedIconDisplaySize: CGFloat = 46
+
+    /// 通常スイッチャーのアイコン型（グルーピング ON）行におけるアイコン領域のフレームサイズ（枠・背景なし）
+    public static let groupedIconContainerSize: CGFloat = 50
+
     /// スイッチャーの状態管理を行う ViewModel
     private let viewModel: SwitcherViewModel
 
@@ -39,6 +45,29 @@ public struct SwitcherListView: View {
         viewModel.mode == .launcher && viewModel.launcherDisplayStyle == .capture
     }
 
+    /// 現在の表示状態が通常スイッチャーのアイコン型（グルーピング ON）かどうか
+    private var isNormalIconGroupedStyle: Bool {
+        viewModel.mode == .normal
+            && viewModel.isNormalSwitcherGroupedByApp
+            && viewModel.normalDisplayStyle == .icon
+    }
+
+    /// ウィンドウ行にキャプチャサムネイル枠付き行を使用するかどうか
+    /// 検索ランチャーのキャプチャ表示型、およびグルーピング ON 時の通常スイッチャー（キャプチャ表示型）で有効
+    private var usesCaptureRowStyle: Bool {
+        if isLauncherCaptureStyle {
+            return true
+        }
+        return viewModel.mode == .normal
+            && viewModel.isNormalSwitcherGroupedByApp
+            && viewModel.normalDisplayStyle == .capture
+    }
+
+    /// 画面収録権限未許可バナーを表示すべきかどうか（実際にキャプチャ表示が有効なモードかつ未許可時のみ）
+    private var showsScreenRecordingPermissionBanner: Bool {
+        viewModel.isCaptureActiveForCurrentMode && !viewModel.isScreenRecordingGranted
+    }
+
     /// ビューの本体構築
     public var body: some View {
         VStack(spacing: 0) {
@@ -46,12 +75,12 @@ public struct SwitcherListView: View {
                 searchHeaderView
                 Divider()
                     .overlay(.white.opacity(0.14))
+            }
 
-                if isLauncherCaptureStyle && !viewModel.isScreenRecordingGranted {
-                    permissionBannerView
-                    Divider()
-                        .overlay(.white.opacity(0.14))
-                }
+            if showsScreenRecordingPermissionBanner {
+                permissionBannerView
+                Divider()
+                    .overlay(.white.opacity(0.14))
             }
 
             if let emptyState = viewModel.emptyState {
@@ -132,10 +161,16 @@ public struct SwitcherListView: View {
         .padding(.horizontal, 14)
     }
 
+    /// 現在の表示モードでアプリグルーピング表示が有効かどうか
+    private var isGrouped: Bool {
+        viewModel.isGroupingActiveForCurrentMode && !viewModel.displayedGroups.isEmpty
+    }
+
     /// 表示対象のウィンドウ候補およびアプリ起動候補を統合した単一リスト行配列
     private var listRows: [SwitcherListRow] {
         SwitcherListRow.buildRows(
             windowResults: viewModel.displayedResults,
+            windowGroups: isGrouped ? viewModel.displayedGroups : nil,
             appResults: viewModel.displayedAppResults,
             isShowingLaunchCandidates: viewModel.isShowingLaunchCandidates,
             launchSectionHeaderTitle: viewModel.launchSectionHeaderTitle
@@ -150,20 +185,38 @@ public struct SwitcherListView: View {
                     // ForEach 要素の id と ScrollViewReader の scrollTo 対象 ID を一致させるため単一モデルで描画する
                     ForEach(listRows) { row in
                         switch row {
+                        case let .appGroupHeader(_, applicationName, representativePID, matchedAppNameRanges, isFirstGroup):
+                            appGroupHeaderView(
+                                applicationName: applicationName,
+                                icon: viewModel.icon(for: representativePID),
+                                matchedRanges: matchedAppNameRanges,
+                                isFirstGroup: isFirstGroup
+                            )
+
                         case let .window(index, result):
                             Group {
-                                if isLauncherCaptureStyle {
-                                    SwitcherCaptureRowView(
+                                if isNormalIconGroupedStyle {
+                                    SwitcherGroupedIconRowView(
                                         result: result,
-                                        thumbnail: viewModel.thumbnail(for: result.entry),
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex
+                                    )
+                                } else if usesCaptureRowStyle {
+                                    SwitcherCaptureRowView(
+                                        result: result,
+                                        thumbnail: viewModel.isCaptureActiveForCurrentMode
+                                            ? viewModel.thumbnail(for: result.entry)
+                                            : nil,
+                                        icon: viewModel.icon(for: result.entry.pid),
+                                        isSelected: index == viewModel.selectedIndex,
+                                        showsAppHeader: !isGrouped
                                     )
                                 } else {
                                     SwitcherRowView(
                                         result: result,
                                         icon: viewModel.icon(for: result.entry.pid),
-                                        isSelected: index == viewModel.selectedIndex
+                                        isSelected: index == viewModel.selectedIndex,
+                                        showsAppInfo: !isGrouped
                                     )
                                 }
                             }
@@ -209,6 +262,49 @@ public struct SwitcherListView: View {
                 guard newMode != .inactive else { return }
                 scrollToSelectedRow(using: proxy, animated: false)
             }
+        }
+    }
+
+    /// グルーピング表示時のアプリ見出し行（非選択・非クリック可能）
+    /// - Parameters:
+    ///   - applicationName: グループ見出しのアプリケーション名
+    ///   - icon: アプリケーションアイコン画像
+    ///   - matchedRanges: 検索一致時のアプリ名ハイライト範囲
+    ///   - isFirstGroup: リスト先頭のグループかどうか
+    private func appGroupHeaderView(
+        applicationName: String,
+        icon: NSImage?,
+        matchedRanges: [Range<String.Index>],
+        isFirstGroup: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !isFirstGroup {
+                Divider()
+                    .overlay(.white.opacity(0.12))
+                    .padding(.vertical, 4)
+            }
+
+            HStack(spacing: 8) {
+                SwitcherRowStyling.iconView(icon: icon, fallbackSymbol: "macwindow", size: 18)
+
+                Text(
+                    SwitcherRowStyling.highlightedText(
+                        applicationName,
+                        ranges: matchedRanges,
+                        fontSize: 12,
+                        baseWeight: .semibold,
+                        baseColor: .primary,
+                        highlightColor: .accentColor
+                    )
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, isFirstGroup ? 2 : 4)
+            .padding(.bottom, 2)
         }
     }
 
@@ -286,6 +382,7 @@ private enum SwitcherRowStyling {
     /// - Parameters:
     ///   - text: 元の表示テキスト
     ///   - ranges: ハイライト対象の文字位置範囲配列
+    ///   - fontSize: フォントサイズ（既定値は 13）
     ///   - baseWeight: 非一致部分のフォントウェイト
     ///   - baseColor: 非一致部分の文字色
     ///   - highlightColor: 一致部分の文字色
@@ -293,12 +390,13 @@ private enum SwitcherRowStyling {
     static func highlightedText(
         _ text: String,
         ranges: [Range<String.Index>],
+        fontSize: CGFloat = 13,
         baseWeight: Font.Weight,
         baseColor: Color,
         highlightColor: Color
     ) -> AttributedString {
         var attributed = AttributedString(text)
-        attributed.font = .system(size: 13, weight: baseWeight)
+        attributed.font = .system(size: fontSize, weight: baseWeight)
         attributed.foregroundColor = baseColor
 
         for range in ranges {
@@ -307,7 +405,7 @@ private enum SwitcherRowStyling {
                   lower < upper else {
                 continue
             }
-            attributed[lower..<upper].font = .system(size: 13, weight: .bold)
+            attributed[lower..<upper].font = .system(size: fontSize, weight: .bold)
             attributed[lower..<upper].foregroundColor = highlightColor
         }
 
@@ -318,19 +416,20 @@ private enum SwitcherRowStyling {
     /// - Parameters:
     ///   - icon: 表示対象のアプリアイコン画像
     ///   - fallbackSymbol: アイコン未取得時の代替 SF Symbol 名
-    /// - Returns: 24x24 相当のアイコンビュー
+    ///   - size: 描画サイズ（既定値は 24）
+    /// - Returns: 指定サイズ相当のアイコンビュー
     @ViewBuilder
-    static func iconView(icon: NSImage?, fallbackSymbol: String) -> some View {
+    static func iconView(icon: NSImage?, fallbackSymbol: String, size: CGFloat = 24) -> some View {
         if let icon {
             Image(nsImage: icon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 24, height: 24)
+                .frame(width: size, height: size)
         } else {
             Image(systemName: fallbackSymbol)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 22, height: 22)
+                .frame(width: max(size - 2, 12), height: max(size - 2, 12))
                 .foregroundStyle(.secondary)
         }
     }
@@ -344,8 +443,72 @@ private enum SwitcherRowStyling {
     }
 }
 
-/// スイッチャーリスト内の1行（アプリアイコン・アプリ名・ウィンドウタイトルのみ）を表す行ビュー
+/// スイッチャーリスト内の1行（フラット時はアイコン・アプリ名・タイトル、グルーピング時はタイトルのみインデント表示）を表す行ビュー
 private struct SwitcherRowView: View {
+    /// 表示対象の検索結果項目
+    let result: WindowSearchResult
+    /// 所有アプリのアイコン画像
+    let icon: NSImage?
+    /// 現在選択状態として強調表示するか
+    let isSelected: Bool
+    /// 行内にアプリアイコンとアプリ名を表示するか（グルーピング ON 時は false）
+    let showsAppInfo: Bool
+
+    /// 行ビューの本体構築
+    var body: some View {
+        HStack(spacing: 12) {
+            if showsAppInfo {
+                SwitcherRowStyling.iconView(icon: icon, fallbackSymbol: "macwindow")
+
+                HStack(spacing: 8) {
+                    Text(
+                        SwitcherRowStyling.highlightedText(
+                            result.entry.applicationName,
+                            ranges: result.matchedAppNameRanges,
+                            baseWeight: .semibold,
+                            baseColor: isSelected ? .white : .primary,
+                            highlightColor: isSelected ? .white : .accentColor
+                        )
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+
+                    Text(
+                        SwitcherRowStyling.highlightedText(
+                            result.entry.displayTitle,
+                            ranges: result.matchedTitleRanges,
+                            baseWeight: .regular,
+                            baseColor: isSelected ? .white.opacity(0.9) : .secondary,
+                            highlightColor: isSelected ? .white : .accentColor
+                        )
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                }
+            } else {
+                Text(
+                    SwitcherRowStyling.highlightedText(
+                        result.entry.displayTitle,
+                        ranges: result.matchedTitleRanges,
+                        baseWeight: .regular,
+                        baseColor: isSelected ? .white : .primary,
+                        highlightColor: isSelected ? .white : .accentColor
+                    )
+                )
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, showsAppInfo ? 12 : 34)
+        .padding(.trailing, 12)
+        .padding(.vertical, showsAppInfo ? 8 : 6)
+        .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+}
+
+/// 通常スイッチャーのアイコン型（グルーピング ON）における1行（背景・枠線なしの大きなアプリアイコン・ウィンドウタイトル）を表す行ビュー
+private struct SwitcherGroupedIconRowView: View {
     /// 表示対象の検索結果項目
     let result: WindowSearchResult
     /// 所有アプリのアイコン画像
@@ -356,38 +519,50 @@ private struct SwitcherRowView: View {
     /// 行ビューの本体構築
     var body: some View {
         HStack(spacing: 12) {
-            SwitcherRowStyling.iconView(icon: icon, fallbackSymbol: "macwindow")
-
-            HStack(spacing: 8) {
-                Text(
-                    SwitcherRowStyling.highlightedText(
-                        result.entry.applicationName,
-                        ranges: result.matchedAppNameRanges,
-                        baseWeight: .semibold,
-                        baseColor: isSelected ? .white : .primary,
-                        highlightColor: isSelected ? .white : .accentColor
-                    )
+            largeIconView
+                .frame(
+                    width: SwitcherListView.groupedIconContainerSize,
+                    height: SwitcherListView.groupedIconContainerSize
                 )
-                .fixedSize(horizontal: true, vertical: false)
 
-                Text(
-                    SwitcherRowStyling.highlightedText(
-                        result.entry.displayTitle,
-                        ranges: result.matchedTitleRanges,
-                        baseWeight: .regular,
-                        baseColor: isSelected ? .white.opacity(0.9) : .secondary,
-                        highlightColor: isSelected ? .white : .accentColor
-                    )
+            Text(
+                SwitcherRowStyling.highlightedText(
+                    result.entry.displayTitle,
+                    ranges: result.matchedTitleRanges,
+                    baseWeight: .medium,
+                    baseColor: isSelected ? .white : .primary,
+                    highlightColor: isSelected ? .white : .accentColor
                 )
-                .lineLimit(1)
-                .truncationMode(.tail)
-            }
+            )
+            .lineLimit(2)
+            .truncationMode(.tail)
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.leading, 24)
+        .padding(.trailing, 12)
+        .padding(.vertical, 6)
         .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+
+    /// 灰色背景や枠線を持たない大きなアプリアイコン（未取得時は macwindow シンボルフォールバック）
+    @ViewBuilder
+    private var largeIconView: some View {
+        if let icon {
+            Image(nsImage: icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(
+                    width: SwitcherListView.groupedIconDisplaySize,
+                    height: SwitcherListView.groupedIconDisplaySize
+                )
+        } else {
+            Image(systemName: "macwindow")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 34, height: 34)
+                .foregroundStyle(isSelected ? .white.opacity(0.9) : .secondary)
+        }
     }
 }
 
@@ -401,6 +576,8 @@ private struct SwitcherCaptureRowView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 行内にアプリアイコン・アプリ名ヘッダ行を表示するか（グルーピング ON 時は false）
+    let showsAppHeader: Bool
 
     /// 行ビューの本体構築
     var body: some View {
@@ -418,38 +595,43 @@ private struct SwitcherCaptureRowView: View {
                 }
 
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    smallAppIcon
+                if showsAppHeader {
+                    HStack(spacing: 6) {
+                        smallAppIcon
 
-                    Text(
-                        SwitcherRowStyling.highlightedText(
-                            result.entry.applicationName,
-                            ranges: result.matchedAppNameRanges,
-                            baseWeight: .semibold,
-                            baseColor: isSelected ? .white : .primary,
-                            highlightColor: isSelected ? .white : .accentColor
+                        Text(
+                            SwitcherRowStyling.highlightedText(
+                                result.entry.applicationName,
+                                ranges: result.matchedAppNameRanges,
+                                baseWeight: .semibold,
+                                baseColor: isSelected ? .white : .primary,
+                                highlightColor: isSelected ? .white : .accentColor
+                            )
                         )
-                    )
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    }
                 }
 
                 Text(
                     SwitcherRowStyling.highlightedText(
                         result.entry.displayTitle,
                         ranges: result.matchedTitleRanges,
-                        baseWeight: .regular,
-                        baseColor: isSelected ? .white.opacity(0.9) : .secondary,
+                        baseWeight: showsAppHeader ? .regular : .medium,
+                        baseColor: showsAppHeader
+                            ? (isSelected ? .white.opacity(0.9) : .secondary)
+                            : (isSelected ? .white : .primary),
                         highlightColor: isSelected ? .white : .accentColor
                     )
                 )
-                .lineLimit(1)
+                .lineLimit(showsAppHeader ? 1 : 2)
                 .truncationMode(.tail)
             }
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, showsAppHeader ? 12 : 24)
+        .padding(.trailing, 12)
         .padding(.vertical, 6)
         .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
     }

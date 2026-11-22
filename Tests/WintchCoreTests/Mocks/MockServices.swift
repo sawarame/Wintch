@@ -206,6 +206,10 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var storedNormalDisplayStyle: SwitcherDisplayStyle = .default
     /// メモリ上に保持している検索ランチャーの表示形式設定
     var storedLauncherDisplayStyle: LauncherDisplayStyle = .default
+    /// メモリ上に保持している通常スイッチャーのアプリグルーピング設定
+    var storedGroupNormalSwitcherByApp: Bool = true
+    /// メモリ上に保持している検索ランチャーのアプリグルーピング設定
+    var storedGroupLauncherByApp: Bool = true
     /// saveShortcut が呼ばれた回数
     var saveCallCount = 0
     /// saveLauncherShortcut が呼ばれた回数
@@ -214,6 +218,10 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var saveNormalDisplayStyleCallCount = 0
     /// saveLauncherDisplayStyle が呼ばれた回数
     var saveLauncherDisplayStyleCallCount = 0
+    /// saveGroupNormalSwitcherByApp が呼ばれた回数
+    var saveGroupNormalSwitcherByAppCallCount = 0
+    /// saveGroupLauncherByApp が呼ばれた回数
+    var saveGroupLauncherByAppCallCount = 0
 
     /// メモリ上の通常ショートカット設定を読み込む
     /// - Returns: 保持している設定
@@ -265,6 +273,32 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     func saveLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
         storedLauncherDisplayStyle = style
         saveLauncherDisplayStyleCallCount += 1
+    }
+
+    /// メモリ上の通常スイッチャーのアプリグルーピング設定を読み込む
+    /// - Returns: 保持している設定値
+    func loadGroupNormalSwitcherByApp() -> Bool {
+        storedGroupNormalSwitcherByApp
+    }
+
+    /// メモリ上の通常スイッチャーのアプリグルーピング設定を保存する
+    /// - Parameter enabled: 保存する設定値
+    func saveGroupNormalSwitcherByApp(_ enabled: Bool) {
+        storedGroupNormalSwitcherByApp = enabled
+        saveGroupNormalSwitcherByAppCallCount += 1
+    }
+
+    /// メモリ上の検索ランチャーのアプリグルーピング設定を読み込む
+    /// - Returns: 保持している設定値
+    func loadGroupLauncherByApp() -> Bool {
+        storedGroupLauncherByApp
+    }
+
+    /// メモリ上の検索ランチャーのアプリグルーピング設定を保存する
+    /// - Parameter enabled: 保存する設定値
+    func saveGroupLauncherByApp(_ enabled: Bool) {
+        storedGroupLauncherByApp = enabled
+        saveGroupLauncherByAppCallCount += 1
     }
 }
 

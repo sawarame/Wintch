@@ -49,6 +49,12 @@ public final class SettingsViewModel {
     /// 検索ランチャーの表示形式設定（リスト型／キャプチャ表示型）
     public private(set) var launcherDisplayStyle: LauncherDisplayStyle
 
+    /// 通常スイッチャーでウィンドウをアプリごとにグルーピングするかどうか（初期値: true）
+    public private(set) var isNormalSwitcherGroupedByApp: Bool
+
+    /// 検索ランチャーでウィンドウをアプリごとにグルーピングするかどうか（初期値: true）
+    public private(set) var isLauncherGroupedByApp: Bool
+
     /// 画面収録権限状態（通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されている場合のみ確認対象となる）
     public private(set) var screenRecordingStatus: ScreenRecordingPermissionStatus = .denied
 
@@ -62,6 +68,12 @@ public final class SettingsViewModel {
 
     /// 検索ランチャーの表示形式が変更された際に上位コーディネーターへ通知するコールバック
     public var onLauncherDisplayStyleChanged: ((LauncherDisplayStyle) -> Void)?
+
+    /// 通常スイッチャーのアプリグルーピング設定が変更された際に上位コーディネーターへ通知するコールバック
+    public var onNormalSwitcherGroupingChanged: ((Bool) -> Void)?
+
+    /// 検索ランチャーのアプリグルーピング設定が変更された際に上位コーディネーターへ通知するコールバック
+    public var onLauncherGroupingChanged: ((Bool) -> Void)?
 
     /// 設定永続化ストア
     private let preferencesStore: any PreferencesStoring
@@ -99,6 +111,8 @@ public final class SettingsViewModel {
         let loadedLauncherStyle = preferencesStore.loadLauncherDisplayStyle()
         self.normalDisplayStyle = loadedStyle
         self.launcherDisplayStyle = loadedLauncherStyle
+        self.isNormalSwitcherGroupedByApp = preferencesStore.loadGroupNormalSwitcherByApp()
+        self.isLauncherGroupedByApp = preferencesStore.loadGroupLauncherByApp()
         self.isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         self.permissionStatus = permissionService.currentStatus()
         if loadedStyle == .capture || loadedLauncherStyle == .capture {
@@ -245,6 +259,24 @@ public final class SettingsViewModel {
         preferencesStore.saveLauncherDisplayStyle(style)
         syncScreenRecordingStatus()
         onLauncherDisplayStyleChanged?(style)
+    }
+
+    /// 通常スイッチャーのアプリグルーピング設定を変更して永続化し、上位へ即時通知する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func updateNormalSwitcherGrouping(_ enabled: Bool) {
+        guard isNormalSwitcherGroupedByApp != enabled else { return }
+        isNormalSwitcherGroupedByApp = enabled
+        preferencesStore.saveGroupNormalSwitcherByApp(enabled)
+        onNormalSwitcherGroupingChanged?(enabled)
+    }
+
+    /// 検索ランチャーのアプリグルーピング設定を変更して永続化し、上位へ即時通知する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func updateLauncherGrouping(_ enabled: Bool) {
+        guard isLauncherGroupedByApp != enabled else { return }
+        isLauncherGroupedByApp = enabled
+        preferencesStore.saveGroupLauncherByApp(enabled)
+        onLauncherGroupingChanged?(enabled)
     }
 
     /// いずれかのモードでキャプチャ表示型が選択されている場合のみ、OS の画面収録権限許可をリクエストする

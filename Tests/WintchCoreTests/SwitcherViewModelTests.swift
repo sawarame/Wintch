@@ -1005,7 +1005,8 @@ struct SwitcherViewModelTests {
             iconProvider: iconProvider,
             screenRecordingPermissionService: screenRecordingService,
             windowCaptureService: captureService,
-            normalDisplayStyle: .capture
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false
         )
         // 横幅 820pt の画面（3 列グリッド相当）としてレイアウト条件を設定する
         viewModel.updateAvailableScreenSize(CGSize(width: 820, height: 800))
@@ -1075,7 +1076,8 @@ struct SwitcherViewModelTests {
             iconProvider: iconProvider,
             screenRecordingPermissionService: screenRecordingService,
             windowCaptureService: captureService,
-            normalDisplayStyle: .capture
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false
         )
 
         // 1. 画面収録権限が未許可のとき、キャプチャ取得は呼ばずプレースホルダーのまま切り替え可能
@@ -1191,7 +1193,8 @@ struct SwitcherViewModelTests {
             iconProvider: iconProvider,
             screenRecordingPermissionService: screenRecordingService,
             windowCaptureService: captureService,
-            normalDisplayStyle: .capture
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false
         )
 
         // 1回目の起動: 初回チェック時は許可扱いで開始し、非同期キャプチャ内で失効を検知して未許可へ切り替わる
@@ -1892,7 +1895,8 @@ struct SwitcherViewModelTests {
             iconProvider: iconProvider,
             screenRecordingPermissionService: screenRecordingService,
             windowCaptureService: captureService,
-            normalDisplayStyle: .capture
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false
         )
         // 500pt 幅画面: アイコン型では 3 列（1 行目: [0, 1, 2]、2 行目: [3, 4]）に折り返される
         viewModel.updateAvailableScreenSize(CGSize(width: 500, height: 800))
@@ -2183,5 +2187,207 @@ struct SwitcherViewModelTests {
         #expect(screenRecordingService.currentStatusCallCount == 0)
         #expect(captureService.capturedRequestWindowIDs.isEmpty)
         viewModel.cancel()
+    }
+
+    /// 通常スイッチャーでグルーピング ON（デフォルト）時、アプリ単位の並び替え・MRU 2 番目ウィンドウの初期選択・
+    /// セクション付きグリッド 4 方向移動・修飾キー+Q によるクローズ後のグループ再構成が正しく動作することを検証する
+    @Test("通常スイッチャーのアプリグルーピングで MRU 2 番目初期選択・セクション移動・クローズ後再構築が動作する")
+    @MainActor
+    func normalSwitcherAppGroupingInitialSelectionSectionNavigationAndClose() async {
+        let windowService = MockWindowService()
+        let now = Date()
+        // MRU 順: chrome-1(0), term-1(1), chrome-2(2), finder-1(3)
+        // グルーピング後: [Chrome: chrome-1(0), chrome-2(1)], [Terminal: term-1(2)], [Finder: finder-1(3)]
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "chrome-1",
+                cgWindowID: 801,
+                pid: 10,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "PR #49",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "term-1",
+                cgWindowID: 802,
+                pid: 20,
+                bundleIdentifier: "com.apple.Terminal",
+                applicationName: "Terminal",
+                title: "zsh",
+                lastActivatedAt: now.addingTimeInterval(-5)
+            ),
+            RawWindowCandidate(
+                id: "chrome-2",
+                cgWindowID: 803,
+                pid: 10,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "Docs",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            ),
+            RawWindowCandidate(
+                id: "finder-1",
+                cgWindowID: 804,
+                pid: 30,
+                bundleIdentifier: "com.apple.finder",
+                applicationName: "Finder",
+                title: "Desktop",
+                lastActivatedAt: now.addingTimeInterval(-20)
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            iconProvider: MockIconProvider(),
+            normalDisplayStyle: .icon
+        )
+        viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+
+        // デフォルトでグルーピング ON、グループ順は Chrome -> Terminal -> Finder
+        #expect(viewModel.isNormalSwitcherGroupedByApp == true)
+        #expect(viewModel.isGroupingActiveForCurrentMode == true)
+        #expect(viewModel.displayedGroups.map(\.applicationName) == ["Google Chrome", "Terminal", "Finder"])
+        #expect(viewModel.entries.map(\.id) == ["chrome-1", "chrome-2", "term-1", "finder-1"])
+        // 初期選択は表示上 2 番目（chrome-2）ではなく MRU 2 番目の term-1（インデックス 2）
+        #expect(viewModel.selectedIndex == 2)
+        // アイコン型でもグルーピング ON 時は縦型リスト表示（1 列）となる
+        #expect(viewModel.usesGridLayoutForCurrentMode == false)
+        #expect(viewModel.gridColumnCount == 1)
+
+        // 縦型リスト連続移動: term-1(2) -> 上: chrome-2(1) -> 上: chrome-1(0) -> 右: chrome-2(1) -> 下: term-1(2) -> 下: finder-1(3)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
+        #expect(viewModel.selectedIndex == 1)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .right))
+        #expect(viewModel.selectedIndex == 1)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 2)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 3)
+
+        // 単一ウィンドウの Finder(3) を閉じるとアプリ終了され Finder グループごと除去される
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [30])
+        #expect(viewModel.displayedGroups.map(\.applicationName) == ["Google Chrome", "Terminal"])
+        #expect(viewModel.entries.map(\.id) == ["chrome-1", "chrome-2", "term-1"])
+        #expect(viewModel.selectedIndex == 2)
+
+        // 複数ウィンドウの Chrome から chrome-2(1) のみを閉じると Chrome グループは 1 件残る
+        viewModel.moveSelection(.left)
+        #expect(viewModel.selectedIndex == 1)
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.closedWindows.map(\.id) == ["chrome-2"])
+        #expect(viewModel.displayedGroups.map(\.applicationName) == ["Google Chrome", "Terminal"])
+        #expect(viewModel.displayedGroups[0].results.map(\.id) == ["chrome-1"])
+        #expect(viewModel.gridColumnCount == 1)
+        #expect(viewModel.selectedIndex == 1)
+
+        // そのまま修飾キー解放で term-1 がアクティブ化される
+        viewModel.handleHotKeyEvent(.modifierReleased)
+        #expect(viewModel.isPresented == false)
+        #expect(windowService.activatedWindows.map(\.id) == ["term-1"])
+    }
+
+    /// 検索ランチャーでグルーピング ON（デフォルト）時、未入力・検索中ともにアプリ単位でグルーピングされ、
+    /// アプリ起動候補への連続移動および表示中のグルーピング ON/OFF 切り替えが破綻なく動作することを検証する
+    @Test("検索ランチャーで未入力・検索中ともにグルーピングされアプリ起動候補への連続移動とリアルタイム切替が動作する")
+    @MainActor
+    func launcherAppGroupingDuringSearchLaunchNavigationAndLiveToggle() async {
+        let windowService = MockWindowService()
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "code-1",
+                cgWindowID: 901,
+                pid: 10,
+                bundleIdentifier: "com.microsoft.VSCode",
+                applicationName: "Visual Studio Code",
+                title: "Alpha.swift",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "safari-1",
+                cgWindowID: 902,
+                pid: 20,
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari",
+                title: "Alpha Docs",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            ),
+            RawWindowCandidate(
+                id: "code-2",
+                cgWindowID: 903,
+                pid: 10,
+                bundleIdentifier: "com.microsoft.VSCode",
+                applicationName: "Visual Studio Code",
+                title: "AlphaTests.swift",
+                lastActivatedAt: now.addingTimeInterval(-20)
+            )
+        ]
+
+        let installedAppService = MockInstalledAppService()
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                id: "/Applications/AlphaTool.app",
+                displayName: "AlphaTool",
+                bundleIdentifier: "com.example.alphatool",
+                bundleURL: URL(fileURLWithPath: "/Applications/AlphaTool.app")
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: installedAppService
+        )
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        // 未入力時はグルーピングされて先頭（index 0）を初期選択
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.isLauncherGroupedByApp == true)
+        #expect(viewModel.selectedIndex == 0)
+        #expect(viewModel.displayedGroups.map(\.applicationName) == ["Visual Studio Code", "Safari"])
+        #expect(viewModel.entries.map(\.id) == ["code-1", "code-2", "safari-1"])
+
+        // 検索入力中もアプリ単位でグルーピングされ、下部にアプリ起動候補が表示される
+        viewModel.updateSearchQuery("Alpha")
+        #expect(viewModel.selectedIndex == 0)
+        #expect(viewModel.displayedGroups.count == 2)
+        #expect(viewModel.entries.count == 3)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["AlphaTool"])
+
+        // ウィンドウ候補 3 件を貫通してアプリ起動候補（インデックス 3）へ移動できる
+        viewModel.moveSelection(.down) // 1
+        viewModel.moveSelection(.down) // 2 (safari-1)
+        #expect(viewModel.selectedIndex == 2)
+
+        // 表示中にグルーピングを OFF にすると safari-1 を選択維持したままフラット表示へ切り替わる
+        viewModel.updateLauncherGrouping(false)
+        #expect(viewModel.displayedGroups.isEmpty)
+        #expect(viewModel.displayedResults[viewModel.selectedIndex].id == "safari-1")
+
+        // 再び ON に戻しても safari-1 を維持し、そのまま下移動でアプリ起動候補へ到達・起動できる
+        viewModel.updateLauncherGrouping(true)
+        #expect(viewModel.displayedGroups.count == 2)
+        #expect(viewModel.displayedResults[viewModel.selectedIndex].id == "safari-1")
+
+        // safari-1（最後の 1 枚）を閉じると Safari グループが消え、VSCode の 2 件 + アプリ起動候補 1 件になる
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [20])
+        #expect(viewModel.displayedGroups.map(\.applicationName) == ["Visual Studio Code"])
+        #expect(viewModel.entries.map(\.id) == ["code-1", "code-2"])
+        #expect(viewModel.selectedIndex == 2)
+
+        // インデックス 2 はアプリ起動候補 AlphaTool なので Enter で起動される
+        viewModel.confirmSelection()
+        #expect(installedAppService.launchedApps.map(\.displayName) == ["AlphaTool"])
+        #expect(viewModel.isPresented == false)
     }
 }

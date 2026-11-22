@@ -362,4 +362,77 @@ struct SwitcherListViewTests {
         #expect(scrollableVM.selectedIndex == 15)
         #expect(scrollView.contentView.bounds.origin.y > 200)
     }
+
+    /// グルーピング ON 時と OFF 時で SwitcherListView のアプリ見出し行の有無に応じたレイアウト高さ差と、
+    /// グルーピング ON 時の MRU 2 番目初期選択への初期スクロール追従を検証する
+    @Test("グルーピング ON/OFF でリスト見出し有無のレイアウトが切り替わり初期選択へスクロール追従する")
+    @MainActor
+    func groupedListLayoutDiffersFromFlatAndFollowsInitialSelection() throws {
+        let groupedVM = makeViewModel(windowCount: 3, appCount: 0)
+        groupedVM.handleHotKeyEvent(.launcherTriggerPressed)
+        let groupedHosting = NSHostingView(rootView: SwitcherListView(viewModel: groupedVM))
+        groupedHosting.layoutSubtreeIfNeeded()
+        let groupedSize = groupedHosting.fittingSize
+
+        groupedVM.updateLauncherGrouping(false)
+        let flatHosting = NSHostingView(rootView: SwitcherListView(viewModel: groupedVM))
+        flatHosting.layoutSubtreeIfNeeded()
+        let flatSize = flatHosting.fittingSize
+
+        // 3 アプリ各 1 ウィンドウの場合、グルーピング ON は 3 件のアプリ見出し行が追加されるためフラット時より高さが大きくなる
+        #expect(groupedSize.width == 520)
+        #expect(flatSize.width == 520)
+        #expect(groupedSize.height > flatSize.height)
+    }
+
+    /// 通常スイッチャーのアイコン型・キャプチャ表示型でグルーピング ON のとき、
+    /// 検索ランチャーのキャプチャ表示型（グルーピング ON）と同じプレビュー枠付き縦型リスト（幅 520pt）になり、
+    /// アイコン型では権限未許可でも警告バナーを表示せず、キャプチャ表示型未許可時のみバナーを表示することを検証する
+    @Test("通常スイッチャーのアイコン型・キャプチャ表示型（グルーピング ON）がランチャーのキャプチャ表示型と同一の縦型リストになる")
+    @MainActor
+    func normalIconAndCaptureGroupedMatchLauncherCaptureGroupedListStyle() {
+        let normalListVM = makeViewModel(windowCount: 2, appCount: 0)
+        normalListVM.updateNormalDisplayStyle(.list)
+        normalListVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalListHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalListVM))
+        normalListHosting.layoutSubtreeIfNeeded()
+        let normalListSize = normalListHosting.fittingSize
+
+        let normalIconVM = makeViewModel(windowCount: 2, appCount: 0, screenRecordingStatus: .denied)
+        normalIconVM.updateNormalDisplayStyle(.icon)
+        normalIconVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalIconHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalIconVM))
+        normalIconHosting.layoutSubtreeIfNeeded()
+        let normalIconSize = normalIconHosting.fittingSize
+
+        let normalCaptureGrantedVM = makeViewModel(windowCount: 2, appCount: 0, screenRecordingStatus: .granted)
+        normalCaptureGrantedVM.updateNormalDisplayStyle(.capture)
+        normalCaptureGrantedVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalCaptureGrantedHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalCaptureGrantedVM))
+        normalCaptureGrantedHosting.layoutSubtreeIfNeeded()
+        let normalCaptureGrantedSize = normalCaptureGrantedHosting.fittingSize
+
+        let normalCaptureDeniedVM = makeViewModel(windowCount: 2, appCount: 0, screenRecordingStatus: .denied)
+        normalCaptureDeniedVM.updateNormalDisplayStyle(.capture)
+        normalCaptureDeniedVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalCaptureDeniedHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalCaptureDeniedVM))
+        normalCaptureDeniedHosting.layoutSubtreeIfNeeded()
+        let normalCaptureDeniedSize = normalCaptureDeniedHosting.fittingSize
+
+        // いずれも幅 520pt の縦型リストとして描画される
+        #expect(normalListSize.width == 520)
+        #expect(normalIconSize.width == 520)
+        #expect(normalCaptureGrantedSize.width == 520)
+        #expect(normalCaptureDeniedSize.width == 520)
+
+        // アイコン型（大きなアイコン 46pt・枠/背景なし・領域 50pt）とキャプチャ表示型（サムネイル高さ 50pt・権限許可）は
+        // 同じ行高さとなり、リスト型より大きい
+        #expect(SwitcherListView.groupedIconDisplaySize > 28)
+        #expect(SwitcherListView.groupedIconContainerSize == SwitcherListView.captureThumbnailHeight)
+        #expect(abs(normalIconSize.height - normalCaptureGrantedSize.height) < 0.5)
+        #expect(normalIconSize.height > normalListSize.height)
+
+        // キャプチャ表示型で権限未許可時のみ上部に警告バナーが追加され高さが増える（アイコン型は未許可でもバナー無し）
+        #expect(normalCaptureDeniedSize.height > normalCaptureGrantedSize.height)
+    }
 }

@@ -183,7 +183,8 @@ struct SwitcherCaptureGridViewTests {
             iconProvider: MockIconProvider(),
             screenRecordingPermissionService: screenRecordingService,
             windowCaptureService: captureService,
-            normalDisplayStyle: .icon
+            normalDisplayStyle: .icon,
+            isNormalSwitcherGroupedByApp: false
         )
         viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
@@ -204,11 +205,31 @@ struct SwitcherCaptureGridViewTests {
         #expect(fittingSize.width == expectedWidth)
         #expect(fittingSize.height >= SwitcherGridLayout.iconTileHeight + SwitcherGridLayout.gridPadding * 2)
 
-        // SwitcherContentView が通常モード・アイコン型のときはアイコングリッド幅でレイアウトされ、
-        // ランチャーモード時はアイコン型設定中でもリスト型（幅 520pt）で描画されること
+        // グルーピング OFF の通常モード・アイコン型はアイコングリッド幅でレイアウトされること
+        let flatContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
+        flatContentHosting.layoutSubtreeIfNeeded()
+        #expect(flatContentHosting.fittingSize.width == expectedWidth)
+
+        // グルーピング ON に切り替えると、アイコン型でも縦型リスト（幅 520pt・1 列）へ切り替わり画面収録権限を参照しないこと
+        viewModel.updateNormalSwitcherGrouping(true)
+        #expect(viewModel.usesGridLayoutForCurrentMode == false)
+        #expect(viewModel.gridColumnCount == 1)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+
         let normalContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         normalContentHosting.layoutSubtreeIfNeeded()
-        #expect(normalContentHosting.fittingSize.width == expectedWidth)
+        #expect(normalContentHosting.fittingSize.width == 520)
+
+        // キャプチャ表示型・グルーピング ON の場合も幅 520pt の縦型リストで描画され、権限未許可時はバナー付き・ボタン無しであること
+        viewModel.cancel()
+        viewModel.updateNormalDisplayStyle(.capture)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.usesGridLayoutForCurrentMode == false)
+        #expect(viewModel.isScreenRecordingGranted == false)
+        let groupedCaptureHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
+        groupedCaptureHosting.layoutSubtreeIfNeeded()
+        #expect(groupedCaptureHosting.fittingSize.width == 520)
+        #expect(collectAllSubviews(in: groupedCaptureHosting).compactMap { $0 as? NSButton }.isEmpty)
 
         viewModel.cancel()
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)

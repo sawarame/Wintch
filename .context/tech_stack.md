@@ -86,6 +86,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── SwitcherGridLayout.swift         # アイコン型・キャプチャグリッド列数算出・4 方向循環カーソル計算
 │       │   ├── SwitcherListRow.swift            # リスト表示用の統合行識別・構築ロジック
 │       │   ├── SwitcherSelection.swift          # スイッチャー／ランチャーの選択インデックス・循環計算
+│       │   ├── WindowAppGrouping.swift          # アプリ単位の安定グルーピング・MRU 2 番目初期選択解決
 │       │   ├── WindowEntry.swift                # 表示対象ウィンドウドメインモデル
 │       │   ├── WindowFilter.swift               # ノイズ除外・重複統合・画面占有判定・WindowEntry 変換
 │       │   ├── WindowMenuPairing.swift          # アプリ「ウィンドウ」メニュー項目との省略記号対応照合・補完

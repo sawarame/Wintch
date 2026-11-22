@@ -37,6 +37,9 @@ public final class SwitcherViewModel {
     /// 画面に表示する検索・ソート済みウィンドウ結果一覧
     public private(set) var displayedResults: [WindowSearchResult] = []
 
+    /// アプリグルーピング有効時に画面へ表示するアプリグループ一覧（グルーピング無効時は空配列）
+    public private(set) var displayedGroups: [WindowAppGroup] = []
+
     /// ランチャーモードでウィンドウ一覧の下に表示するアプリ起動候補一覧（表示中のウィンドウと同アプリは除外）
     public private(set) var displayedAppResults: [AppSearchResult] = []
 
@@ -45,6 +48,30 @@ public final class SwitcherViewModel {
 
     /// 検索ランチャーの現在の表示形式（リスト型／キャプチャ表示型）
     public private(set) var launcherDisplayStyle: LauncherDisplayStyle
+
+    /// 通常スイッチャーでウィンドウをアプリごとにグルーピングするかどうか
+    public private(set) var isNormalSwitcherGroupedByApp: Bool
+
+    /// 検索ランチャーでウィンドウをアプリごとにグルーピングするかどうか
+    public private(set) var isLauncherGroupedByApp: Bool
+
+    /// 現在の表示モードでアプリグルーピング表示が有効かどうか
+    public var isGroupingActiveForCurrentMode: Bool {
+        switch mode {
+        case .normal:
+            isNormalSwitcherGroupedByApp
+        case .launcher:
+            isLauncherGroupedByApp
+        case .inactive:
+            false
+        }
+    }
+
+    /// 現在の表示モード・表示形式・グルーピング設定でグリッドレイアウト（複数列表示）を使用中かどうか
+    /// アイコン型・キャプチャ表示型でもグルーピング ON 時は縦型リスト表示（1 列）となる
+    public var usesGridLayoutForCurrentMode: Bool {
+        mode == .normal && normalDisplayStyle.usesGridLayout && !isNormalSwitcherGroupedByApp
+    }
 
     /// 通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されているか
     public var usesCaptureDisplayStyle: Bool {
@@ -174,6 +201,8 @@ public final class SwitcherViewModel {
     ///   - windowCaptureService: ウィンドウキャプチャサービス（省略時は未設定）
     ///   - normalDisplayStyle: 通常スイッチャーの初期表示形式
     ///   - launcherDisplayStyle: 検索ランチャーの初期表示形式
+    ///   - isNormalSwitcherGroupedByApp: 通常スイッチャーの初期アプリグルーピング設定（既定値は true）
+    ///   - isLauncherGroupedByApp: 検索ランチャーの初期アプリグルーピング設定（既定値は true）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -183,7 +212,9 @@ public final class SwitcherViewModel {
         screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil,
         windowCaptureService: (any WindowCaptureServicing)? = nil,
         normalDisplayStyle: SwitcherDisplayStyle = .default,
-        launcherDisplayStyle: LauncherDisplayStyle = .default
+        launcherDisplayStyle: LauncherDisplayStyle = .default,
+        isNormalSwitcherGroupedByApp: Bool = true,
+        isLauncherGroupedByApp: Bool = true
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -194,6 +225,8 @@ public final class SwitcherViewModel {
         self.windowCaptureService = windowCaptureService
         self.normalDisplayStyle = normalDisplayStyle
         self.launcherDisplayStyle = launcherDisplayStyle
+        self.isNormalSwitcherGroupedByApp = isNormalSwitcherGroupedByApp
+        self.isLauncherGroupedByApp = isLauncherGroupedByApp
     }
 
     /// 指定されたプロセス ID のアプリアイコンを取得する
@@ -225,11 +258,7 @@ public final class SwitcherViewModel {
             clearCaptureState(clearServiceCache: false)
         }
         if style.usesGridLayout && !displayedResults.isEmpty {
-            gridColumnCount = SwitcherGridLayout.columnsCount(
-                itemCount: displayedResults.count,
-                availableScreenWidth: availableScreenSize.width,
-                style: style
-            )
+            recalculateGridColumnCount()
         }
     }
 
@@ -242,6 +271,66 @@ public final class SwitcherViewModel {
         } else if style != .capture && mode == .launcher {
             clearCaptureState(clearServiceCache: false)
         }
+    }
+
+    /// 通常スイッチャーのアプリグルーピング設定を更新し、通常モード表示中であれば表示順とグループ構造を即時再構築する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func updateNormalSwitcherGrouping(_ enabled: Bool) {
+        guard isNormalSwitcherGroupedByApp != enabled else { return }
+        isNormalSwitcherGroupedByApp = enabled
+        guard mode == .normal else { return }
+
+        let selectedWindowID = displayedResults.indices.contains(selectedIndex)
+            ? displayedResults[selectedIndex].entry.id
+            : nil
+        rebuildNormalDisplayedResults()
+        if let selectedWindowID,
+           let nextIndex = displayedResults.firstIndex(where: { $0.entry.id == selectedWindowID }) {
+            selectedIndex = nextIndex
+        } else {
+            selectedIndex = SwitcherSelection.indexAfterRemoval(
+                current: selectedIndex,
+                remainingCount: activeResultCount
+            )
+        }
+        if normalDisplayStyle.usesGridLayout {
+            recalculateGridColumnCount()
+        }
+        onSearchResultsUpdated?()
+    }
+
+    /// 検索ランチャーのアプリグルーピング設定を更新し、ランチャーモード表示中であれば表示順とグループ構造を即時再構築する
+    /// - Parameter enabled: アプリごとにグルーピングする場合は true
+    public func updateLauncherGrouping(_ enabled: Bool) {
+        guard isLauncherGroupedByApp != enabled else { return }
+        isLauncherGroupedByApp = enabled
+        guard mode == .launcher else { return }
+
+        let selectedWindowID = displayedResults.indices.contains(selectedIndex)
+            ? displayedResults[selectedIndex].entry.id
+            : nil
+        let selectedAppID: String?
+        if selectedWindowID == nil {
+            let appIndex = selectedIndex - displayedResults.count
+            selectedAppID = displayedAppResults.indices.contains(appIndex) ? displayedAppResults[appIndex].id : nil
+        } else {
+            selectedAppID = nil
+        }
+
+        updateLauncherSearchResults(for: searchQuery)
+        if let selectedWindowID,
+           let nextIndex = displayedResults.firstIndex(where: { $0.entry.id == selectedWindowID }) {
+            selectedIndex = nextIndex
+        } else if let selectedAppID,
+                  let appIndex = displayedAppResults.firstIndex(where: { $0.id == selectedAppID }) {
+            selectedIndex = displayedResults.count + appIndex
+        } else {
+            selectedIndex = SwitcherSelection.indexAfterRemoval(
+                current: selectedIndex,
+                remainingCount: activeResultCount
+            )
+        }
+        onSearchResultsUpdated?()
     }
 
     /// 進行中のキャプチャ取得タスクと画面保持サムネイルを破棄する
@@ -267,11 +356,34 @@ public final class SwitcherViewModel {
     public func updateAvailableScreenSize(_ size: CGSize) {
         availableScreenSize = size
         if !displayedResults.isEmpty {
+            recalculateGridColumnCount()
+        }
+    }
+
+    /// 現在の表示形式・グルーピング設定・画面幅に応じてグリッド列数を再算出する
+    private func recalculateGridColumnCount() {
+        // グルーピング ON 時はアイコン型・キャプチャ表示型も縦型リスト表示（1 列）となる
+        if isNormalSwitcherGroupedByApp || !normalDisplayStyle.usesGridLayout {
+            gridColumnCount = 1
+        } else {
             gridColumnCount = SwitcherGridLayout.columnsCount(
                 itemCount: displayedResults.count,
-                availableScreenWidth: size.width,
+                availableScreenWidth: availableScreenSize.width,
                 style: normalDisplayStyle
             )
+        }
+    }
+
+    /// 通常スイッチャー用の表示候補一覧とアプリグループ一覧を現在の全有効ウィンドウから構築する
+    private func rebuildNormalDisplayedResults() {
+        let baseResults = allEntries.map { WindowSearchResult(entry: $0) }
+        if isNormalSwitcherGroupedByApp {
+            let groups = WindowAppGrouping.group(baseResults)
+            displayedGroups = groups
+            displayedResults = WindowAppGrouping.flatten(groups)
+        } else {
+            displayedGroups = []
+            displayedResults = baseResults
         }
     }
 
@@ -365,14 +477,10 @@ public final class SwitcherViewModel {
 
         switch targetMode {
         case .normal:
-            displayedResults = allEntries.map { WindowSearchResult(entry: $0) }
+            rebuildNormalDisplayedResults()
             displayedAppResults = []
             if normalDisplayStyle.usesGridLayout {
-                gridColumnCount = SwitcherGridLayout.columnsCount(
-                    itemCount: displayedResults.count,
-                    availableScreenWidth: availableScreenSize.width,
-                    style: normalDisplayStyle
-                )
+                recalculateGridColumnCount()
             }
         case .launcher:
             // 検索キーワードを維持したまま最新の残余ウィンドウおよびアプリ起動候補を再評価する
@@ -406,7 +514,7 @@ public final class SwitcherViewModel {
         let count = activeResultCount
         guard mode != .inactive, count > 0 else { return }
 
-        if mode == .normal && normalDisplayStyle.usesGridLayout {
+        if usesGridLayoutForCurrentMode {
             selectedIndex = SwitcherGridLayout.moveIndex(
                 current: selectedIndex,
                 direction: direction,
@@ -503,19 +611,32 @@ public final class SwitcherViewModel {
         let sorted = WindowSorter.sortByMRU(filtered)
 
         // 通常スイッチャーは有効ウィンドウ 0 件時は起動せず、検索ランチャーは 0 件でもアプリ起動用に開く
-        let initial = SwitcherSelection.initialIndex(
-            count: sorted.count,
-            preferSecondItem: targetMode != .launcher
-        )
-        if initial == nil && targetMode != .launcher {
+        if sorted.isEmpty && targetMode != .launcher {
             return
         }
 
         allEntries = sorted
         searchQuery = ""
-        displayedResults = sorted.map { WindowSearchResult(entry: $0) }
+        let baseResults = sorted.map { WindowSearchResult(entry: $0) }
+        let shouldGroup = targetMode == .launcher ? isLauncherGroupedByApp : isNormalSwitcherGroupedByApp
+        if shouldGroup {
+            let groups = WindowAppGrouping.group(baseResults)
+            displayedGroups = groups
+            displayedResults = WindowAppGrouping.flatten(groups)
+        } else {
+            displayedGroups = []
+            displayedResults = baseResults
+        }
         displayedAppResults = []
-        selectedIndex = initial ?? 0
+        if targetMode == .launcher {
+            selectedIndex = 0
+        } else {
+            selectedIndex = WindowAppGrouping.resolveInitialIndexForNormalSwitcher(
+                mruSortedEntries: sorted,
+                displayedResults: displayedResults,
+                isGrouped: isNormalSwitcherGroupedByApp
+            ) ?? 0
+        }
         presentationGeneration += 1
         shouldActivateAppForCurrentSession = targetMode == .launcher || hotKeyMonitor.requiresAppActivationOnPresentation
         mode = targetMode
@@ -524,11 +645,7 @@ public final class SwitcherViewModel {
         let shouldUseCapture = (targetMode == .normal && normalDisplayStyle == .capture)
             || (targetMode == .launcher && launcherDisplayStyle == .capture)
         if targetMode == .normal && normalDisplayStyle.usesGridLayout {
-            gridColumnCount = SwitcherGridLayout.columnsCount(
-                itemCount: sorted.count,
-                availableScreenWidth: availableScreenSize.width,
-                style: normalDisplayStyle
-            )
+            recalculateGridColumnCount()
         }
         if shouldUseCapture {
             let granted: Bool
@@ -586,6 +703,7 @@ public final class SwitcherViewModel {
         allEntries = []
         searchQuery = ""
         displayedResults = []
+        displayedGroups = []
         displayedAppResults = []
         capturedThumbnails = [:]
         isScreenRecordingGranted = true
@@ -685,7 +803,15 @@ public final class SwitcherViewModel {
     /// 検索クエリを用いてウィンドウ検索結果とアプリ起動候補（表示中ウィンドウと重複するアプリを除外）を更新する
     /// - Parameter query: 適用する検索クエリ文字列
     private func updateLauncherSearchResults(for query: String) {
-        displayedResults = WindowSearchEngine.search(query: query, in: allEntries)
+        let rawResults = WindowSearchEngine.search(query: query, in: allEntries)
+        if isLauncherGroupedByApp {
+            let groups = WindowAppGrouping.group(rawResults)
+            displayedGroups = groups
+            displayedResults = WindowAppGrouping.flatten(groups)
+        } else {
+            displayedGroups = []
+            displayedResults = rawResults
+        }
         if let installedAppService {
             displayedAppResults = AppSearchEngine.search(
                 query: query,
