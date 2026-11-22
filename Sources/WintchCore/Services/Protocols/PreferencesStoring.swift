@@ -49,4 +49,12 @@ public protocol PreferencesStoring: Sendable {
     /// 検索ランチャーのアプリグルーピング設定を保存する
     /// - Parameter enabled: アプリごとにグルーピングする場合は true
     func saveGroupLauncherByApp(_ enabled: Bool)
+
+    /// 保存されているアプリの表示言語設定を読み込む
+    /// - Returns: 保存された言語設定（未保存または不正値時はデフォルトの .system）
+    func loadAppLanguage() -> AppLanguage
+
+    /// アプリの表示言語設定を保存する
+    /// - Parameter language: 保存する言語設定
+    func saveAppLanguage(_ language: AppLanguage)
 }

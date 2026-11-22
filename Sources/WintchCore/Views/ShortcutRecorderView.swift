@@ -40,6 +40,8 @@ public struct ShortcutRecorderView: View {
     private let displayString: String
     /// キー入力待機状態かどうか
     private let isRecording: Bool
+    /// キー入力待機中に表示するローカライズ済み案内文言
+    private let recordingPrompt: String
     /// 記録開始を要求するコールバック
     private let onBeginRecording: () -> Void
     /// キャプチャされたキー入力を通知するコールバック
@@ -51,18 +53,21 @@ public struct ShortcutRecorderView: View {
     /// - Parameters:
     ///   - displayString: 現在のショートカット表記（例: "⌥ + ⇥" / "⌥ + Space"）
     ///   - isRecording: 記録待機中かどうか
+    ///   - recordingPrompt: キー入力待機中に表示する案内文言
     ///   - onBeginRecording: 記録開始時のコールバック
     ///   - onCapture: キー入力確定時のコールバック
     ///   - onCancel: キャンセル時のコールバック
     public init(
         displayString: String,
         isRecording: Bool,
+        recordingPrompt: String = AppStrings.japanese.shortcutRecorderPrompt,
         onBeginRecording: @escaping () -> Void,
         onCapture: @escaping (CapturedShortcutInput) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.displayString = displayString
         self.isRecording = isRecording
+        self.recordingPrompt = recordingPrompt
         self.onBeginRecording = onBeginRecording
         self.onCapture = onCapture
         self.onCancel = onCancel
@@ -77,7 +82,7 @@ public struct ShortcutRecorderView: View {
                 onBeginRecording()
             }
         } label: {
-            Text(isRecording ? "キーを入力... (Esc でキャンセル)" : displayString)
+            Text(isRecording ? recordingPrompt : displayString)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(isRecording ? Color.accentColor : Color.primary)
                 .padding(.horizontal, 12)

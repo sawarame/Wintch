@@ -41,24 +41,52 @@ public struct AppIdentity: Equatable, Sendable {
     /// 開発用ビルドとして識別されているかどうか
     public let isDevelopment: Bool
 
-    /// メニューバーの終了ボタン文言
+    /// メニューバーの終了ボタン文言（互換用：日本語既定）
     public var quitMenuTitle: String {
-        "\(displayName) を終了"
+        quitMenuTitle(in: .japanese)
     }
 
-    /// 設定ウィンドウのタイトル文言
+    /// 指定言語でのメニューバー終了ボタン文言を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みの終了メニュー文言
+    public func quitMenuTitle(in language: ResolvedAppLanguage) -> String {
+        AppStrings(language: language).quitMenuTitle(appName: displayName)
+    }
+
+    /// 設定ウィンドウのタイトル文言（互換用：日本語既定）
     public var settingsWindowTitle: String {
-        "\(displayName) 設定"
+        settingsWindowTitle(in: .japanese)
     }
 
-    /// 権限誘導ウィンドウのタイトル文言
+    /// 指定言語での設定ウィンドウタイトル文言を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みの設定ウィンドウタイトル
+    public func settingsWindowTitle(in language: ResolvedAppLanguage) -> String {
+        AppStrings(language: language).settingsWindowTitle(appName: displayName)
+    }
+
+    /// 権限誘導ウィンドウのタイトル文言（互換用：日本語既定）
     public var permissionGuideWindowTitle: String {
-        "\(displayName) - 権限の確認"
+        permissionGuideWindowTitle(in: .japanese)
     }
 
-    /// 権限誘導画面のステップ 2 に表示するスイッチ許可案内文言
+    /// 指定言語での権限誘導ウィンドウタイトル文言を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みの権限誘導ウィンドウタイトル
+    public func permissionGuideWindowTitle(in language: ResolvedAppLanguage) -> String {
+        AppStrings(language: language).permissionGuideWindowTitle(appName: displayName)
+    }
+
+    /// 権限誘導画面のステップ 2 に表示するスイッチ許可案内文言（互換用：日本語既定）
     public var accessibilitySwitchInstruction: String {
-        "2. 一覧の「\(displayName)」のスイッチをオンにします"
+        accessibilitySwitchInstruction(in: .japanese)
+    }
+
+    /// 指定言語での権限誘導画面ステップ 2 のスイッチ許可案内文言を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みのステップ 2 案内文言
+    public func accessibilitySwitchInstruction(in language: ResolvedAppLanguage) -> String {
+        AppStrings(language: language).permissionGuideStep2(appName: displayName)
     }
 
     /// バンドルの Info.plist 辞書からアプリ識別情報を生成する

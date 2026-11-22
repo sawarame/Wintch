@@ -68,10 +68,25 @@ public struct WindowEntry: Identifiable, Equatable, Sendable {
         self.zOrderIndex = zOrderIndex
     }
 
-    /// UI 表示用のウィンドウタイトル（空文字の場合は補助テキストを返す）
+    /// UI 表示用のウィンドウタイトル（空文字の場合は補助テキストを返す・互換用：日本語既定）
     /// - Returns: リスト行に表示するタイトル文字列
     public var displayTitle: String {
+        displayTitle(in: .japanese)
+    }
+
+    /// 指定言語での UI 表示用ウィンドウタイトルを返す（空文字の場合は補助テキストを返す）
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: リスト行やカードに表示するタイトル文字列
+    public func displayTitle(in language: ResolvedAppLanguage) -> String {
         let trimmed = windowTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "(タイトルなし)" : trimmed
+        return trimmed.isEmpty ? AppStrings(language: language).untitledWindow : trimmed
+    }
+
+    /// 指定言語での UI 表示用アプリケーション名を返す（空文字の場合は不明アプリ表記を返す）
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: リスト行やカードに表示するアプリケーション名
+    public func displayApplicationName(in language: ResolvedAppLanguage) -> String {
+        let trimmed = applicationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? AppStrings(language: language).unknownApplication : trimmed
     }
 }

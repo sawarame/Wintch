@@ -4,13 +4,17 @@ import SwiftUI
 /// ランチャーモード専用の検索入力フィールド（AppKit NSTextField ラッパー）
 /// 日本語 IME 変換中のキー操作を優先しつつ、確定・キャンセル・上下移動コマンドを処理する
 public struct LauncherSearchField: NSViewRepresentable {
-    /// 検索入力欄に表示するプレースホルダー文言
-    public static let placeholderText = "ウィンドウまたはアプリを検索..."
+    /// 検索入力欄に表示する既定のプレースホルダー文言（互換用：日本語既定）
+    public static var placeholderText: String {
+        AppStrings.japanese.launcherSearchPlaceholder
+    }
 
     /// 検索文字列の双方向バインディング
     @Binding private var text: String
     /// フィールドが現在表示・フォーカス対象としてアクティブか
     private let isActive: Bool
+    /// 検索入力欄に表示するローカライズ済みプレースホルダー文言
+    private let placeholder: String
     /// 選択行を上下に移動するコールバック
     private let onMoveSelection: (ArrowDirection) -> Void
     /// Enter キーで選択項目を確定するコールバック
@@ -39,18 +43,21 @@ public struct LauncherSearchField: NSViewRepresentable {
     /// - Parameters:
     ///   - text: 検索文字列バインディング
     ///   - isActive: アクティブ表示状態かどうか
+    ///   - placeholder: プレースホルダーとして表示する文言（既定値は日本語プレースホルダー）
     ///   - onMoveSelection: 上下移動時のコールバック
     ///   - onConfirm: 確定時のコールバック
     ///   - onCancel: キャンセル時のコールバック
     public init(
         text: Binding<String>,
         isActive: Bool,
+        placeholder: String = LauncherSearchField.placeholderText,
         onMoveSelection: @escaping (ArrowDirection) -> Void,
         onConfirm: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
         self._text = text
         self.isActive = isActive
+        self.placeholder = placeholder
         self.onMoveSelection = onMoveSelection
         self.onConfirm = onConfirm
         self.onCancel = onCancel
@@ -70,7 +77,7 @@ public struct LauncherSearchField: NSViewRepresentable {
     internal func makeConfiguredTextField(delegate: NSTextFieldDelegate?) -> NSTextField {
         let textField = NSTextField()
         textField.delegate = delegate
-        textField.placeholderAttributedString = Self.makePlaceholderAttributedString()
+        textField.placeholderAttributedString = Self.makePlaceholderAttributedString(placeholder)
         textField.isBordered = false
         textField.isBezeled = false
         textField.drawsBackground = false
@@ -92,6 +99,7 @@ public struct LauncherSearchField: NSViewRepresentable {
     ///   - context: Representable コンテキスト
     public func updateNSView(_ nsView: NSTextField, context: Context) {
         context.coordinator.parent = self
+        applyPlaceholderIfNeeded(to: nsView)
 
         // 日本語 IME 変換中の未確定文字列を壊さないよう、hasMarkedText 中は上書きしない
         let hasMarkedText = (nsView.currentEditor() as? NSTextView)?.hasMarkedText() ?? false
@@ -112,6 +120,15 @@ public struct LauncherSearchField: NSViewRepresentable {
             }
         } else {
             context.coordinator.didFocusForCurrentSession = false
+        }
+    }
+
+    /// 言語切替などでプレースホルダー文言が変化した場合に NSTextField へ即時反映する
+    /// - Parameter textField: 更新対象の NSTextField
+    @MainActor
+    internal func applyPlaceholderIfNeeded(to textField: NSTextField) {
+        if textField.placeholderAttributedString?.string != placeholder {
+            textField.placeholderAttributedString = Self.makePlaceholderAttributedString(placeholder)
         }
     }
 

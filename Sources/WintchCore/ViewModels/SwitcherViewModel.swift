@@ -55,6 +55,14 @@ public final class SwitcherViewModel {
     /// 検索ランチャーでウィンドウをアプリごとにグルーピングするかどうか
     public private(set) var isLauncherGroupedByApp: Bool
 
+    /// パネル表示に使用する解決済み言語
+    public private(set) var resolvedLanguage: ResolvedAppLanguage
+
+    /// 現在の解決済み言語に対応するローカライズ文言テーブル
+    public var strings: AppStrings {
+        AppStrings(language: resolvedLanguage)
+    }
+
     /// 現在の表示モードでアプリグルーピング表示が有効かどうか
     public var isGroupingActiveForCurrentMode: Bool {
         switch mode {
@@ -126,9 +134,9 @@ public final class SwitcherViewModel {
     /// アプリ起動候補セクションに表示する見出し文言
     public var launchSectionHeaderTitle: String {
         if hasOpenWindows && displayedResults.isEmpty {
-            return "一致するウィンドウがないため、アプリを起動"
+            return strings.launcherLaunchAppFallbackSectionTitle
         }
-        return "アプリを起動"
+        return strings.launcherLaunchAppSectionTitle
     }
 
     /// 現在選択操作の対象となっている全候補（ウィンドウ＋ランチャー時はアプリ起動候補）の合計件数
@@ -203,6 +211,7 @@ public final class SwitcherViewModel {
     ///   - launcherDisplayStyle: 検索ランチャーの初期表示形式
     ///   - isNormalSwitcherGroupedByApp: 通常スイッチャーの初期アプリグルーピング設定（既定値は true）
     ///   - isLauncherGroupedByApp: 検索ランチャーの初期アプリグルーピング設定（既定値は true）
+    ///   - resolvedLanguage: パネル表示に使用する解決済み言語（既定値は日本語）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -214,7 +223,8 @@ public final class SwitcherViewModel {
         normalDisplayStyle: SwitcherDisplayStyle = .default,
         launcherDisplayStyle: LauncherDisplayStyle = .default,
         isNormalSwitcherGroupedByApp: Bool = true,
-        isLauncherGroupedByApp: Bool = true
+        isLauncherGroupedByApp: Bool = true,
+        resolvedLanguage: ResolvedAppLanguage = .japanese
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -227,6 +237,17 @@ public final class SwitcherViewModel {
         self.launcherDisplayStyle = launcherDisplayStyle
         self.isNormalSwitcherGroupedByApp = isNormalSwitcherGroupedByApp
         self.isLauncherGroupedByApp = isLauncherGroupedByApp
+        self.resolvedLanguage = resolvedLanguage
+    }
+
+    /// パネル表示に使用する解決済み言語を即時更新する
+    /// - Parameter language: 新しい解決済み言語
+    public func updateLanguage(_ language: ResolvedAppLanguage) {
+        guard resolvedLanguage != language else { return }
+        resolvedLanguage = language
+        if mode != .inactive {
+            onSearchResultsUpdated?()
+        }
     }
 
     /// 指定されたプロセス ID のアプリアイコンを取得する

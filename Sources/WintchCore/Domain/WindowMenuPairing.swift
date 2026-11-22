@@ -60,7 +60,10 @@ public enum WindowMenuExtractor {
     private static let recognizedMenuTitles: Set<String> = [
         "window",
         "ウィンドウ",
-        "ウインドウ"
+        "ウインドウ",
+        "窗口",
+        "視窗",
+        "윈도우"
     ]
 
     /// フォールバック判定時にウィンドウ以外として確実に除外する識別子

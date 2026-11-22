@@ -11,8 +11,10 @@ public struct SwitcherCaptureGridView: View {
     /// 権限未許可バナー表示時の最小パネル幅
     public static let minWidthWithBanner: CGFloat = 360
 
-    /// 画面収録権限が未許可のときに表示する案内メッセージ
-    public static let permissionBannerMessage = "画面収録権限が未許可のためプレースホルダーを表示しています"
+    /// 画面収録権限が未許可のときに表示する案内メッセージ（互換用：日本語既定）
+    public static var permissionBannerMessage: String {
+        AppStrings.japanese.screenRecordingDeniedBanner
+    }
 
     /// キャプチャグリッドビューを初期化する
     /// - Parameters:
@@ -99,7 +101,7 @@ public struct SwitcherCaptureGridView: View {
     /// 画面収録権限が未許可のときに表示するコンパクトな案内バナー（ホールド操作中にクリック不能な設定リンクは設けない）
     var permissionBannerView: some View {
         ScreenRecordingPermissionBannerView(
-            message: Self.permissionBannerMessage,
+            message: viewModel.strings.screenRecordingDeniedBanner,
             horizontalPadding: SwitcherGridLayout.gridPadding
         )
     }
@@ -114,7 +116,8 @@ public struct SwitcherCaptureGridView: View {
                             entry: result.entry,
                             thumbnail: viewModel.thumbnail(for: result.entry),
                             icon: viewModel.icon(for: result.entry.pid),
-                            isSelected: index == viewModel.selectedIndex
+                            isSelected: index == viewModel.selectedIndex,
+                            language: viewModel.resolvedLanguage
                         )
                         .id(result.id)
                         .contentShape(Rectangle())
@@ -172,6 +175,8 @@ private struct SwitcherCaptureCardView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 補助表示テキストに使用する解決済み言語
+    let language: ResolvedAppLanguage
 
     /// カードビューの本体構築
     var body: some View {
@@ -190,13 +195,13 @@ private struct SwitcherCaptureCardView: View {
                 smallAppIcon
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.applicationName)
+                    Text(entry.displayApplicationName(in: language))
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(isSelected ? .white : .primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(entry.displayTitle)
+                    Text(entry.displayTitle(in: language))
                         .font(.system(size: 10.5))
                         .foregroundStyle(isSelected ? .white.opacity(0.88) : .secondary)
                         .lineLimit(1)

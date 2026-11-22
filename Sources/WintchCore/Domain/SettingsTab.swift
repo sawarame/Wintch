@@ -14,17 +14,25 @@ public enum SettingsTab: String, CaseIterable, Identifiable, Equatable, Sendable
     /// Identifiable 準拠用の一意識別子
     public var id: String { rawValue }
 
-    /// サイドバーに表示するメニュー名
+    /// サイドバーに表示するメニュー名（互換用：日本語既定）
     public var title: String {
+        title(in: .japanese)
+    }
+
+    /// 指定言語でのサイドバーメニュー名を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みのメニュー名
+    public func title(in language: ResolvedAppLanguage) -> String {
+        let strings = AppStrings(language: language)
         switch self {
         case .general:
-            return "一般"
+            return strings.text(for: .settingsTabGeneral)
         case .switcher:
-            return "スイッチャー"
+            return strings.text(for: .settingsTabSwitcher)
         case .launcher:
-            return "ランチャー"
+            return strings.text(for: .settingsTabLauncher)
         case .system:
-            return "システム"
+            return strings.text(for: .settingsTabSystem)
         }
     }
 

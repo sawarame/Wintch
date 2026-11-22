@@ -12,15 +12,23 @@ public enum SwitcherDisplayStyle: String, Codable, CaseIterable, Equatable, Send
     /// 未設定時または不正値フォールバック時の既定表示形式
     public static let `default`: SwitcherDisplayStyle = .list
 
-    /// 設定画面の選択 UI に表示する日本語ラベル
+    /// 設定画面の選択 UI に表示するラベル（互換用：日本語既定）
     public var displayName: String {
+        displayName(in: .japanese)
+    }
+
+    /// 指定言語での表示形式ラベルを返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みの表示形式ラベル
+    public func displayName(in language: ResolvedAppLanguage) -> String {
+        let strings = AppStrings(language: language)
         switch self {
         case .list:
-            "リスト型"
+            return strings.text(for: .displayStyleList)
         case .icon:
-            "アイコン型"
+            return strings.text(for: .displayStyleIcon)
         case .capture:
-            "キャプチャ表示型"
+            return strings.text(for: .displayStyleCapture)
         }
     }
 

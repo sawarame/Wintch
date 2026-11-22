@@ -58,48 +58,51 @@ struct WintchApp: App {
     /// アプリケーションのルートシーン定義（メニューバー常駐アイコンとメニュー）
     var body: some Scene {
         MenuBarExtra {
+            let language = appDelegate.coordinator.resolvedLanguage
+            let strings = appDelegate.coordinator.strings
+
             if appDelegate.coordinator.permissionStatus == .denied {
-                Button("アクセシビリティ権限が必要です...") {
+                Button(strings.menuBarAccessibilityRequired) {
                     appDelegate.coordinator.openPermissionGuide()
                 }
 
                 Divider()
             }
 
-            Menu("表示形式") {
-                Section("通常スイッチャー") {
-                    Picker("通常スイッチャー", selection: normalDisplayStyleBinding) {
+            Menu(strings.menuBarDisplayStyle) {
+                Section(strings.menuBarNormalSwitcher) {
+                    Picker(strings.menuBarNormalSwitcher, selection: normalDisplayStyleBinding) {
                         ForEach(SwitcherDisplayStyle.allCases, id: \.self) { style in
-                            Text(style.displayName).tag(style)
+                            Text(style.displayName(in: language)).tag(style)
                         }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
 
-                    Toggle("アプリごとにグルーピング", isOn: normalGroupingBinding)
+                    Toggle(strings.groupByAppToggle, isOn: normalGroupingBinding)
                 }
 
-                Section("検索ランチャー") {
-                    Picker("検索ランチャー", selection: launcherDisplayStyleBinding) {
+                Section(strings.menuBarSearchLauncher) {
+                    Picker(strings.menuBarSearchLauncher, selection: launcherDisplayStyleBinding) {
                         ForEach(LauncherDisplayStyle.allCases, id: \.self) { style in
-                            Text(style.displayName).tag(style)
+                            Text(style.displayName(in: language)).tag(style)
                         }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
 
-                    Toggle("アプリごとにグルーピング", isOn: launcherGroupingBinding)
+                    Toggle(strings.groupByAppToggle, isOn: launcherGroupingBinding)
                 }
             }
 
-            Button("設定を開く...") {
+            Button(strings.menuBarOpenSettings) {
                 appDelegate.coordinator.openSettings()
             }
             .keyboardShortcut(",")
 
             Divider()
 
-            Button(appDelegate.coordinator.appIdentity.quitMenuTitle) {
+            Button(appDelegate.coordinator.appIdentity.quitMenuTitle(in: language)) {
                 appDelegate.coordinator.quit()
             }
             .keyboardShortcut("q")

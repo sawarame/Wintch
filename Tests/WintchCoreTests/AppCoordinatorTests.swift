@@ -375,7 +375,7 @@ struct AppCoordinatorTests {
         coordinator.openSettings()
         #expect(presenter.presentedWindows.count == 1)
         let firstSettingsWindow = presenter.presentedWindows[0]
-        #expect(firstSettingsWindow.title == coordinator.appIdentity.settingsWindowTitle)
+        #expect(firstSettingsWindow.title == coordinator.appIdentity.settingsWindowTitle(in: coordinator.resolvedLanguage))
         #expect(firstSettingsWindow.isReleasedWhenClosed == false)
         #expect(firstSettingsWindow.styleMask.contains(.resizable) == false)
         let contentSize = firstSettingsWindow.contentView?.frame.size ?? .zero
@@ -418,7 +418,7 @@ struct AppCoordinatorTests {
         permissionService.simulateStatusChange(.denied)
         #expect(presenter.presentedWindows.count == 1)
         let guideWindow = presenter.presentedWindows[0]
-        #expect(guideWindow.title == coordinator.appIdentity.permissionGuideWindowTitle)
+        #expect(guideWindow.title == coordinator.appIdentity.permissionGuideWindowTitle(in: coordinator.resolvedLanguage))
         #expect(guideWindow.isReleasedWhenClosed == false)
 
         // メニューバーから権限誘導画面を再表示した際も同一ウィンドウで最前面表示する

@@ -28,8 +28,21 @@ public final class SettingsViewModel {
     /// ランチャーショートカットレコーダーがキー入力待機中かどうか
     public private(set) var isRecordingLauncherShortcut: Bool = false
 
-    /// ショートカットの妥当性検証または重複チェックのエラーメッセージ
-    public private(set) var shortcutValidationError: String?
+    /// 現在のアプリ表示言語設定（システム設定追従または 5 言語）
+    public private(set) var appLanguage: AppLanguage
+
+    /// 現在の UI 描画に適用されている解決済み言語
+    public private(set) var resolvedLanguage: ResolvedAppLanguage
+
+    /// 現在の解決済み言語に対応するローカライズ文言テーブル
+    public var strings: AppStrings {
+        AppStrings(language: resolvedLanguage)
+    }
+
+    /// ショートカットの妥当性検証または重複チェックのエラーメッセージ（現在の表示言語で動的に生成）
+    public var shortcutValidationError: String? {
+        shortcutValidationFailure?.message(in: resolvedLanguage)
+    }
 
     /// エラーを表示すべきセクション対象
     public private(set) var shortcutValidationTarget: ShortcutValidationTarget?
@@ -37,8 +50,10 @@ public final class SettingsViewModel {
     /// ログイン時自動起動の有効状態
     public private(set) var isLaunchAtLoginEnabled: Bool
 
-    /// 自動起動設定の更新に失敗した場合のエラーメッセージ
-    public private(set) var launchAtLoginError: String?
+    /// 自動起動設定の更新に失敗した場合のエラーメッセージ（現在の表示言語で動的に生成）
+    public var launchAtLoginError: String? {
+        launchAtLoginErrorDetail.map { strings.launchAtLoginError(detail: $0) }
+    }
 
     /// 現在のアクセシビリティ権限状態
     public private(set) var permissionStatus: AccessibilityPermissionStatus
@@ -75,6 +90,9 @@ public final class SettingsViewModel {
     /// 検索ランチャーのアプリグルーピング設定が変更された際に上位コーディネーターへ通知するコールバック
     public var onLauncherGroupingChanged: ((Bool) -> Void)?
 
+    /// アプリ表示言語設定が変更された際に上位コーディネーターへ通知するコールバック
+    public var onAppLanguageChanged: ((AppLanguage, ResolvedAppLanguage) -> Void)?
+
     /// 設定永続化ストア
     private let preferencesStore: any PreferencesStoring
     /// グローバルホットキー監視サービス
@@ -85,6 +103,12 @@ public final class SettingsViewModel {
     private let permissionService: any AccessibilityPermissionServicing
     /// 画面収録権限管理サービス（キャプチャ表示型選択時のみ使用）
     private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
+    /// システム優先言語リストの取得クロージャ（テスト時に任意の言語配列を注入可能）
+    private let preferredLanguagesProvider: @Sendable () -> [String]
+    /// 現在のショートカット検証失敗理由（言語切替時に現在言語へ再評価するため構造化保持する）
+    private var shortcutValidationFailure: ShortcutValidationFailure?
+    /// 自動起動設定更新失敗時の OS エラー詳細文言（言語切替時に現在言語へ再評価するため保持する）
+    private var launchAtLoginErrorDetail: String?
 
     /// 設定 ViewModel を初期化する
     /// - Parameters:
@@ -93,20 +117,26 @@ public final class SettingsViewModel {
     ///   - launchAtLoginService: ログイン時自動起動サービス
     ///   - permissionService: アクセシビリティ権限サービス
     ///   - screenRecordingPermissionService: 画面収録権限サービス（省略時は未設定）
+    ///   - preferredLanguagesProvider: システム優先言語配列の提供クロージャ（既定値は `Locale.preferredLanguages`）
     public init(
         preferencesStore: any PreferencesStoring,
         hotKeyMonitor: any HotKeyMonitoring,
         launchAtLoginService: any LaunchAtLoginServicing,
         permissionService: any AccessibilityPermissionServicing,
-        screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil
+        screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil,
+        preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages }
     ) {
         self.preferencesStore = preferencesStore
         self.hotKeyMonitor = hotKeyMonitor
         self.launchAtLoginService = launchAtLoginService
         self.permissionService = permissionService
         self.screenRecordingPermissionService = screenRecordingPermissionService
+        self.preferredLanguagesProvider = preferredLanguagesProvider
         self.shortcut = preferencesStore.loadShortcut()
         self.launcherShortcut = preferencesStore.loadLauncherShortcut()
+        let loadedLanguage = preferencesStore.loadAppLanguage()
+        self.appLanguage = loadedLanguage
+        self.resolvedLanguage = loadedLanguage.resolved(preferredLanguages: preferredLanguagesProvider())
         let loadedStyle = preferencesStore.loadNormalDisplayStyle()
         let loadedLauncherStyle = preferencesStore.loadLauncherDisplayStyle()
         self.normalDisplayStyle = loadedStyle
@@ -145,7 +175,7 @@ public final class SettingsViewModel {
     /// 通常スイッチャーショートカットの記録待機を開始し、グローバルホットキー監視を一時停止する
     public func beginRecordingNormalShortcut() {
         isRecordingLauncherShortcut = false
-        shortcutValidationError = nil
+        shortcutValidationFailure = nil
         shortcutValidationTarget = nil
         isRecordingNormalShortcut = true
         hotKeyMonitor.isSuspendedForRecording = true
@@ -168,7 +198,7 @@ public final class SettingsViewModel {
     /// ランチャーショートカットの記録待機を開始し、グローバルホットキー監視を一時停止する
     public func beginRecordingLauncherShortcut() {
         isRecordingNormalShortcut = false
-        shortcutValidationError = nil
+        shortcutValidationFailure = nil
         shortcutValidationTarget = nil
         isRecordingLauncherShortcut = true
         hotKeyMonitor.isSuspendedForRecording = true
@@ -184,14 +214,13 @@ public final class SettingsViewModel {
     /// レコーダーから受け取ったランチャーショートカット候補を検証し、有効なら保存・反映する
     /// - Parameter candidate: 入力されたショートカット候補
     public func recordLauncherShortcut(_ candidate: LauncherShortcutPreference) {
-        let validation = ShortcutConflictValidator.validateLauncherShortcut(candidate, against: shortcut)
-        guard validation.isValid else {
-            shortcutValidationError = validation.errorMessage
+        if let failure = ShortcutConflictValidator.evaluateLauncherShortcut(candidate, against: shortcut) {
+            shortcutValidationFailure = failure
             shortcutValidationTarget = .launcher
             return
         }
 
-        shortcutValidationError = nil
+        shortcutValidationFailure = nil
         shortcutValidationTarget = nil
         launcherShortcut = candidate
         preferencesStore.saveLauncherShortcut(candidate)
@@ -212,7 +241,7 @@ public final class SettingsViewModel {
     public func selectTab(_ tab: SettingsTab) {
         guard selectedTab != tab else { return }
         cancelAllRecordings()
-        shortcutValidationError = nil
+        shortcutValidationFailure = nil
         shortcutValidationTarget = nil
         selectedTab = tab
     }
@@ -222,12 +251,22 @@ public final class SettingsViewModel {
     public func setLaunchAtLogin(_ enabled: Bool) {
         do {
             try launchAtLoginService.setEnabled(enabled)
-            launchAtLoginError = nil
+            launchAtLoginErrorDetail = nil
         } catch {
-            launchAtLoginError = "自動起動の設定変更に失敗しました（.app バンドルとして起動しているか確認してください）: \(error.localizedDescription)"
+            launchAtLoginErrorDetail = error.localizedDescription
         }
         // OS 側の実ステータスと常に同期する
         isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
+    }
+
+    /// アプリの表示言語設定を変更して永続化し、解決済み言語をアプリ全体へ即時通知する
+    /// - Parameter language: 新しい言語設定（`.system` または 5 言語）
+    public func updateAppLanguage(_ language: AppLanguage) {
+        guard appLanguage != language else { return }
+        appLanguage = language
+        preferencesStore.saveAppLanguage(language)
+        resolvedLanguage = language.resolved(preferredLanguages: preferredLanguagesProvider())
+        onAppLanguageChanged?(language, resolvedLanguage)
     }
 
     /// 外部（システム設定）での変更を UI へ再同期する
@@ -235,6 +274,14 @@ public final class SettingsViewModel {
     public func refreshStatus(permissionStatus overridePermissionStatus: AccessibilityPermissionStatus? = nil) {
         isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         permissionStatus = overridePermissionStatus ?? permissionService.currentStatus()
+        // 「システム設定に従う」選択時は OS 優先言語の変化も再評価して反映する
+        if appLanguage == .system {
+            let latestResolved = appLanguage.resolved(preferredLanguages: preferredLanguagesProvider())
+            if resolvedLanguage != latestResolved {
+                resolvedLanguage = latestResolved
+                onAppLanguageChanged?(appLanguage, latestResolved)
+            }
+        }
         // 通常スイッチャー・検索ランチャーの双方が非キャプチャの間は画面収録権限を一切確認しない（最小権限原則）
         if usesCaptureDisplayStyle {
             screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
@@ -311,14 +358,13 @@ public final class SettingsViewModel {
     /// - Returns: 検証を通過して適用された場合は true
     @discardableResult
     private func applyNormalShortcutIfValid(_ candidate: ShortcutPreference) -> Bool {
-        let validation = ShortcutConflictValidator.validateNormalShortcut(candidate, against: launcherShortcut)
-        guard validation.isValid else {
-            shortcutValidationError = validation.errorMessage
+        if let failure = ShortcutConflictValidator.evaluateNormalShortcut(candidate, against: launcherShortcut) {
+            shortcutValidationFailure = failure
             shortcutValidationTarget = .normal
             return false
         }
 
-        shortcutValidationError = nil
+        shortcutValidationFailure = nil
         shortcutValidationTarget = nil
         shortcut = candidate
         preferencesStore.saveShortcut(candidate)

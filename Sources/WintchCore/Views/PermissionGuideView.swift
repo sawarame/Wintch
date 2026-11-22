@@ -28,6 +28,8 @@ public struct PermissionGuideView: View {
 
     /// ビューの本体構築
     public var body: some View {
+        let strings = viewModel.strings
+
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 14) {
                 Image(systemName: "hand.raised.shield.fill")
@@ -35,10 +37,10 @@ public struct PermissionGuideView: View {
                     .foregroundStyle(Color.accentColor)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("アクセシビリティ権限の許可が必要です")
+                    Text(strings.permissionGuideTitle)
                         .font(.title3.bold())
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("ショートカット検知とウィンドウ切り替えの操作にのみ使用します")
+                    Text(strings.permissionGuideSubtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -46,11 +48,14 @@ public struct PermissionGuideView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Label("1. 下の「システム設定を開く」をクリックします", systemImage: "1.circle.fill")
+                Label(strings.permissionGuideStep1, systemImage: "1.circle.fill")
                     .fixedSize(horizontal: false, vertical: true)
-                Label(appIdentity.accessibilitySwitchInstruction, systemImage: "2.circle.fill")
+                Label(
+                    appIdentity.accessibilitySwitchInstruction(in: viewModel.resolvedLanguage),
+                    systemImage: "2.circle.fill"
+                )
                     .fixedSize(horizontal: false, vertical: true)
-                Label("3. 許可を検知すると自動的に利用可能になります", systemImage: "3.circle.fill")
+                Label(strings.permissionGuideStep3, systemImage: "3.circle.fill")
                     .fixedSize(horizontal: false, vertical: true)
             }
             .font(.callout)
@@ -60,19 +65,19 @@ public struct PermissionGuideView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             // 複数行折り返し時に SwiftUI による縦方向圧縮で末尾が途切れないよう固定する
-            Text("※ リスト型・アイコン型では「画面収録」権限を使用しません（スイッチャーまたは検索ランチャーでキャプチャ表示型を選択した場合のみ任意で使用します）。")
+            Text(strings.permissionGuideScreenRecordingNote)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                Button("再確認") {
+                Button(strings.recheckButton) {
                     viewModel.refreshStatus()
                 }
 
                 Spacer()
 
-                Button("システム設定を開く") {
+                Button(strings.openSystemSettingsButton) {
                     viewModel.openSystemSettings()
                 }
                 .buttonStyle(.borderedProminent)

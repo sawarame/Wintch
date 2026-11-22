@@ -123,6 +123,7 @@ public struct SwitcherListView: View {
             LauncherSearchField(
                 text: searchQueryBinding,
                 isActive: viewModel.mode == .launcher,
+                placeholder: viewModel.strings.launcherSearchPlaceholder,
                 onMoveSelection: { direction in
                     viewModel.moveSelection(direction)
                 },
@@ -142,7 +143,7 @@ public struct SwitcherListView: View {
     /// ランチャーのキャプチャ表示型で画面収録権限が未許可のときに表示する非インタラクティブな警告バナー
     var permissionBannerView: some View {
         ScreenRecordingPermissionBannerView(
-            message: SwitcherCaptureGridView.permissionBannerMessage,
+            message: viewModel.strings.screenRecordingDeniedBanner,
             horizontalPadding: 14
         )
     }
@@ -152,9 +153,11 @@ public struct SwitcherListView: View {
     private func emptyResultView(for state: LauncherEmptyState) -> some View {
         HStack {
             Spacer(minLength: 0)
-            Text(state.message)
+            Text(state.message(in: viewModel.resolvedLanguage))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 24)
             Spacer(minLength: 0)
         }
@@ -199,7 +202,8 @@ public struct SwitcherListView: View {
                                     SwitcherGroupedIconRowView(
                                         result: result,
                                         icon: viewModel.icon(for: result.entry.pid),
-                                        isSelected: index == viewModel.selectedIndex
+                                        isSelected: index == viewModel.selectedIndex,
+                                        language: viewModel.resolvedLanguage
                                     )
                                 } else if usesCaptureRowStyle {
                                     SwitcherCaptureRowView(
@@ -209,14 +213,16 @@ public struct SwitcherListView: View {
                                             : nil,
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex,
-                                        showsAppHeader: !isGrouped
+                                        showsAppHeader: !isGrouped,
+                                        language: viewModel.resolvedLanguage
                                     )
                                 } else {
                                     SwitcherRowView(
                                         result: result,
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex,
-                                        showsAppInfo: !isGrouped
+                                        showsAppInfo: !isGrouped,
+                                        language: viewModel.resolvedLanguage
                                     )
                                 }
                             }
@@ -235,7 +241,8 @@ public struct SwitcherListView: View {
                             AppLaunchRowView(
                                 result: result,
                                 icon: viewModel.icon(forAppURL: result.app.bundleURL),
-                                isSelected: unifiedIndex == viewModel.selectedIndex
+                                isSelected: unifiedIndex == viewModel.selectedIndex,
+                                launchBadgeTitle: viewModel.strings.launcherLaunchBadge
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -287,10 +294,12 @@ public struct SwitcherListView: View {
             HStack(spacing: 8) {
                 SwitcherRowStyling.iconView(icon: icon, fallbackSymbol: "macwindow", size: 18)
 
+                let trimmedName = applicationName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let displayAppName = trimmedName.isEmpty ? viewModel.strings.unknownApplication : applicationName
                 Text(
                     SwitcherRowStyling.highlightedText(
-                        applicationName,
-                        ranges: matchedRanges,
+                        displayAppName,
+                        ranges: trimmedName.isEmpty ? [] : matchedRanges,
                         fontSize: 12,
                         baseWeight: .semibold,
                         baseColor: .primary,
@@ -453,6 +462,8 @@ private struct SwitcherRowView: View {
     let isSelected: Bool
     /// 行内にアプリアイコンとアプリ名を表示するか（グルーピング ON 時は false）
     let showsAppInfo: Bool
+    /// 補助表示テキストに使用する解決済み言語
+    let language: ResolvedAppLanguage
 
     /// 行ビューの本体構築
     var body: some View {
@@ -463,7 +474,7 @@ private struct SwitcherRowView: View {
                 HStack(spacing: 8) {
                     Text(
                         SwitcherRowStyling.highlightedText(
-                            result.entry.applicationName,
+                            result.entry.displayApplicationName(in: language),
                             ranges: result.matchedAppNameRanges,
                             baseWeight: .semibold,
                             baseColor: isSelected ? .white : .primary,
@@ -474,7 +485,7 @@ private struct SwitcherRowView: View {
 
                     Text(
                         SwitcherRowStyling.highlightedText(
-                            result.entry.displayTitle,
+                            result.entry.displayTitle(in: language),
                             ranges: result.matchedTitleRanges,
                             baseWeight: .regular,
                             baseColor: isSelected ? .white.opacity(0.9) : .secondary,
@@ -487,7 +498,7 @@ private struct SwitcherRowView: View {
             } else {
                 Text(
                     SwitcherRowStyling.highlightedText(
-                        result.entry.displayTitle,
+                        result.entry.displayTitle(in: language),
                         ranges: result.matchedTitleRanges,
                         baseWeight: .regular,
                         baseColor: isSelected ? .white : .primary,
@@ -515,6 +526,8 @@ private struct SwitcherGroupedIconRowView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 補助表示テキストに使用する解決済み言語
+    let language: ResolvedAppLanguage
 
     /// 行ビューの本体構築
     var body: some View {
@@ -527,7 +540,7 @@ private struct SwitcherGroupedIconRowView: View {
 
             Text(
                 SwitcherRowStyling.highlightedText(
-                    result.entry.displayTitle,
+                    result.entry.displayTitle(in: language),
                     ranges: result.matchedTitleRanges,
                     baseWeight: .medium,
                     baseColor: isSelected ? .white : .primary,
@@ -578,6 +591,8 @@ private struct SwitcherCaptureRowView: View {
     let isSelected: Bool
     /// 行内にアプリアイコン・アプリ名ヘッダ行を表示するか（グルーピング ON 時は false）
     let showsAppHeader: Bool
+    /// 補助表示テキストに使用する解決済み言語
+    let language: ResolvedAppLanguage
 
     /// 行ビューの本体構築
     var body: some View {
@@ -601,7 +616,7 @@ private struct SwitcherCaptureRowView: View {
 
                         Text(
                             SwitcherRowStyling.highlightedText(
-                                result.entry.applicationName,
+                                result.entry.displayApplicationName(in: language),
                                 ranges: result.matchedAppNameRanges,
                                 baseWeight: .semibold,
                                 baseColor: isSelected ? .white : .primary,
@@ -615,7 +630,7 @@ private struct SwitcherCaptureRowView: View {
 
                 Text(
                     SwitcherRowStyling.highlightedText(
-                        result.entry.displayTitle,
+                        result.entry.displayTitle(in: language),
                         ranges: result.matchedTitleRanges,
                         baseWeight: showsAppHeader ? .regular : .medium,
                         baseColor: showsAppHeader
@@ -690,6 +705,8 @@ private struct AppLaunchRowView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 右端に表示するローカライズ済み「起動」バッジ文言
+    let launchBadgeTitle: String
 
     /// 行ビューの本体構築
     var body: some View {
@@ -725,9 +742,10 @@ private struct AppLaunchRowView: View {
 
             Spacer(minLength: 0)
 
-            Text("起動")
+            Text(launchBadgeTitle)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isSelected ? .white.opacity(0.95) : .secondary)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(
