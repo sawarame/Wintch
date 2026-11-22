@@ -31,6 +31,14 @@ struct WintchApp: App {
         )
     }
 
+    /// メニューバーと設定画面で共有される検索ランチャー表示形式の双方向バインディング
+    private var launcherDisplayStyleBinding: Binding<LauncherDisplayStyle> {
+        Binding(
+            get: { appDelegate.coordinator.launcherDisplayStyle },
+            set: { appDelegate.coordinator.updateLauncherDisplayStyle($0) }
+        )
+    }
+
     /// アプリケーションのルートシーン定義（メニューバー常駐アイコンとメニュー）
     var body: some Scene {
         MenuBarExtra {
@@ -49,13 +57,25 @@ struct WintchApp: App {
             Divider()
 
             Menu("表示形式") {
-                Picker("表示形式", selection: normalDisplayStyleBinding) {
-                    ForEach(SwitcherDisplayStyle.allCases, id: \.self) { style in
-                        Text(style.displayName).tag(style)
+                Section("通常スイッチャー") {
+                    Picker("通常スイッチャー", selection: normalDisplayStyleBinding) {
+                        ForEach(SwitcherDisplayStyle.allCases, id: \.self) { style in
+                            Text(style.displayName).tag(style)
+                        }
                     }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
+
+                Section("検索ランチャー") {
+                    Picker("検索ランチャー", selection: launcherDisplayStyleBinding) {
+                        ForEach(LauncherDisplayStyle.allCases, id: \.self) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
             }
 
             Button("設定を開く...") {

@@ -262,6 +262,106 @@ struct SettingsViewModelTests {
         #expect(store.loadNormalDisplayStyle() == .list)
     }
 
+    /// PreferencesStore が検索ランチャー表示形式の初期値・保存・読み込み・不正値フォールバックを通常設定と独立して行えることを検証する
+    @Test("PreferencesStore で検索ランチャー表示形式の永続化と不正値フォールバックが通常設定と独立して動作する")
+    func preferencesStorePersistsLauncherDisplayStyleIndependently() {
+        let suiteName = "dev.wintch.tests.launcherDisplayStyle.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)
+        defaults?.removePersistentDomain(forName: suiteName)
+        defer { defaults?.removePersistentDomain(forName: suiteName) }
+
+        let store = PreferencesStore(suiteName: suiteName)
+        #expect(store.loadNormalDisplayStyle() == .list)
+        #expect(store.loadLauncherDisplayStyle() == .list)
+
+        // ランチャーのみキャプチャ表示型へ変更しても通常スイッチャー設定へ影響しない
+        store.saveLauncherDisplayStyle(.capture)
+        #expect(store.loadLauncherDisplayStyle() == .capture)
+        #expect(store.loadNormalDisplayStyle() == .list)
+
+        // 通常スイッチャーをアイコン型へ変更してもランチャー設定へ影響しない
+        store.saveNormalDisplayStyle(.icon)
+        #expect(store.loadNormalDisplayStyle() == .icon)
+        #expect(store.loadLauncherDisplayStyle() == .capture)
+
+        // ランチャー非対応の "icon" や不正値が入っている場合は安全にリスト型へフォールバックする
+        defaults?.set("icon", forKey: "dev.wintch.launcherDisplayStyle")
+        #expect(store.loadLauncherDisplayStyle() == .list)
+
+        defaults?.set("unknown-style", forKey: "dev.wintch.launcherDisplayStyle")
+        #expect(store.loadLauncherDisplayStyle() == .list)
+    }
+
+    /// 検索ランチャーの表示形式を通常スイッチャーと独立して切り替えられ、
+    /// どちらか一方でもキャプチャ表示型の間のみオプトインで画面収録権限の確認・要求・設定遷移が可能になることを検証する
+    @Test("検索ランチャー表示形式の個別切り替えと双方非キャプチャ時の画面収録権限非参照を検証する")
+    @MainActor
+    func launcherDisplayStyleOptInScreenRecordingAndIndependentSwitching() {
+        let store = MockPreferencesStore()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let launchService = MockLaunchAtLoginService()
+        let permissionService = MockAccessibilityPermissionService()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+
+        let viewModel = SettingsViewModel(
+            preferencesStore: store,
+            hotKeyMonitor: hotKeyMonitor,
+            launchAtLoginService: launchService,
+            permissionService: permissionService,
+            screenRecordingPermissionService: screenRecordingService
+        )
+
+        var notifiedLauncherStyles: [LauncherDisplayStyle] = []
+        viewModel.onLauncherDisplayStyleChanged = { notifiedLauncherStyles.append($0) }
+
+        // 初期状態（通常=リスト型、ランチャー=リスト型）では画面収録権限を一切確認しない
+        #expect(viewModel.normalDisplayStyle == .list)
+        #expect(viewModel.launcherDisplayStyle == .list)
+        #expect(viewModel.usesCaptureDisplayStyle == false)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+
+        // 検索ランチャーのみキャプチャ表示型へ変更すると永続化・通知・権限確認が行われる
+        viewModel.updateLauncherDisplayStyle(.capture)
+        #expect(viewModel.normalDisplayStyle == .list)
+        #expect(viewModel.launcherDisplayStyle == .capture)
+        #expect(viewModel.usesCaptureDisplayStyle == true)
+        #expect(store.storedLauncherDisplayStyle == .capture)
+        #expect(store.saveLauncherDisplayStyleCallCount == 1)
+        #expect(notifiedLauncherStyles == [.capture])
+        #expect(screenRecordingService.currentStatusCallCount == 1)
+        #expect(viewModel.screenRecordingStatus == .denied)
+
+        // ランチャーのみキャプチャ表示型の状態でも権限リクエスト・設定遷移・再確認が機能する
+        screenRecordingService.requestPermissionResult = true
+        screenRecordingService.stubbedStatus = .granted
+        viewModel.requestScreenRecordingPermission()
+        #expect(screenRecordingService.requestPermissionCallCount == 1)
+        #expect(viewModel.screenRecordingStatus == .granted)
+
+        viewModel.openScreenRecordingSettings()
+        #expect(screenRecordingService.openSystemSettingsCallCount == 1)
+
+        // 通常側をアイコン型へ変更してもランチャー側がキャプチャのままなので usesCaptureDisplayStyle は true を維持
+        viewModel.updateNormalDisplayStyle(.icon)
+        #expect(viewModel.usesCaptureDisplayStyle == true)
+        #expect(viewModel.screenRecordingStatus == .granted)
+
+        // ランチャー側もリスト型へ戻すと双方非キャプチャとなり、以後は画面収録権限の確認・要求・設定遷移を行わない
+        let statusCallsBeforeBothNonCapture = screenRecordingService.currentStatusCallCount
+        viewModel.updateLauncherDisplayStyle(.list)
+        #expect(viewModel.usesCaptureDisplayStyle == false)
+        #expect(viewModel.screenRecordingStatus == .denied)
+        #expect(notifiedLauncherStyles == [.capture, .list])
+
+        viewModel.refreshStatus()
+        viewModel.requestScreenRecordingPermission()
+        viewModel.openScreenRecordingSettings()
+        #expect(screenRecordingService.currentStatusCallCount == statusCallsBeforeBothNonCapture)
+        #expect(screenRecordingService.requestPermissionCallCount == 1)
+        #expect(screenRecordingService.openSystemSettingsCallCount == 1)
+    }
+
     /// ショートカット記録開始〜確定・キャンセルの前後で監視サスペンド状態と更新通知が正しく同期されることを検証する
     @Test("ショートカット記録の開始と確定で監視サスペンド解除およびショートカット更新が行われる")
     @MainActor

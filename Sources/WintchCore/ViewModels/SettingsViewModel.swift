@@ -43,11 +43,22 @@ public final class SettingsViewModel {
     /// 通常スイッチャーの表示形式設定（リスト型／アイコン型／キャプチャ表示型）
     public private(set) var normalDisplayStyle: SwitcherDisplayStyle
 
-    /// 画面収録権限状態（キャプチャ表示型が選択されている場合のみ確認対象となる）
+    /// 検索ランチャーの表示形式設定（リスト型／キャプチャ表示型）
+    public private(set) var launcherDisplayStyle: LauncherDisplayStyle
+
+    /// 画面収録権限状態（通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されている場合のみ確認対象となる）
     public private(set) var screenRecordingStatus: ScreenRecordingPermissionStatus = .denied
+
+    /// 通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されているか
+    public var usesCaptureDisplayStyle: Bool {
+        normalDisplayStyle == .capture || launcherDisplayStyle == .capture
+    }
 
     /// 通常スイッチャーの表示形式が変更された際に上位コーディネーターへ通知するコールバック
     public var onNormalDisplayStyleChanged: ((SwitcherDisplayStyle) -> Void)?
+
+    /// 検索ランチャーの表示形式が変更された際に上位コーディネーターへ通知するコールバック
+    public var onLauncherDisplayStyleChanged: ((LauncherDisplayStyle) -> Void)?
 
     /// 設定永続化ストア
     private let preferencesStore: any PreferencesStoring
@@ -82,10 +93,12 @@ public final class SettingsViewModel {
         self.shortcut = preferencesStore.loadShortcut()
         self.launcherShortcut = preferencesStore.loadLauncherShortcut()
         let loadedStyle = preferencesStore.loadNormalDisplayStyle()
+        let loadedLauncherStyle = preferencesStore.loadLauncherDisplayStyle()
         self.normalDisplayStyle = loadedStyle
+        self.launcherDisplayStyle = loadedLauncherStyle
         self.isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         self.permissionStatus = permissionService.currentStatus()
-        if loadedStyle == .capture {
+        if loadedStyle == .capture || loadedLauncherStyle == .capture {
             self.screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
         }
     }
@@ -194,8 +207,8 @@ public final class SettingsViewModel {
     public func refreshStatus(permissionStatus overridePermissionStatus: AccessibilityPermissionStatus? = nil) {
         isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         permissionStatus = overridePermissionStatus ?? permissionService.currentStatus()
-        // リスト型・アイコン型選択中は画面収録権限を一切確認しない（FR-003）
-        if normalDisplayStyle == .capture {
+        // 通常スイッチャー・検索ランチャーの双方が非キャプチャの間は画面収録権限を一切確認しない（最小権限原則）
+        if usesCaptureDisplayStyle {
             screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
         }
     }
@@ -206,27 +219,40 @@ public final class SettingsViewModel {
         guard normalDisplayStyle != style else { return }
         normalDisplayStyle = style
         preferencesStore.saveNormalDisplayStyle(style)
-
-        if style == .capture {
-            screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
-        } else {
-            screenRecordingStatus = .denied
-        }
-
+        syncScreenRecordingStatus()
         onNormalDisplayStyleChanged?(style)
     }
 
-    /// キャプチャ表示型が選択されている場合のみ、OS の画面収録権限許可をリクエストする
+    /// 検索ランチャーの表示形式を変更して永続化し、関連ステータスを更新する
+    /// - Parameter style: 新しい表示形式（リスト型／キャプチャ表示型）
+    public func updateLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
+        guard launcherDisplayStyle != style else { return }
+        launcherDisplayStyle = style
+        preferencesStore.saveLauncherDisplayStyle(style)
+        syncScreenRecordingStatus()
+        onLauncherDisplayStyleChanged?(style)
+    }
+
+    /// いずれかのモードでキャプチャ表示型が選択されている場合のみ、OS の画面収録権限許可をリクエストする
     public func requestScreenRecordingPermission() {
-        guard normalDisplayStyle == .capture else { return }
+        guard usesCaptureDisplayStyle else { return }
         _ = screenRecordingPermissionService?.requestPermission()
         screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
     }
 
-    /// キャプチャ表示型が選択されている場合のみ、システム設定の画面収録ペインを開く
+    /// いずれかのモードでキャプチャ表示型が選択されている場合のみ、システム設定の画面収録ペインを開く
     public func openScreenRecordingSettings() {
-        guard normalDisplayStyle == .capture else { return }
+        guard usesCaptureDisplayStyle else { return }
         screenRecordingPermissionService?.openSystemSettings()
+    }
+
+    /// 現在の表示形式設定に応じて画面収録権限ステータスを同期する（双方非キャプチャ時は確認を行わず .denied へ戻す）
+    private func syncScreenRecordingStatus() {
+        if usesCaptureDisplayStyle {
+            screenRecordingStatus = screenRecordingPermissionService?.currentStatus() ?? .denied
+        } else {
+            screenRecordingStatus = .denied
+        }
     }
 
     /// アクセシビリティ権限設定画面を開く

@@ -28,6 +28,14 @@ public struct SettingsView: View {
         )
     }
 
+    /// 検索ランチャー表示形式用の双方向バインディング
+    private var launcherDisplayStyleBinding: Binding<LauncherDisplayStyle> {
+        Binding(
+            get: { viewModel.launcherDisplayStyle },
+            set: { viewModel.updateLauncherDisplayStyle($0) }
+        )
+    }
+
     /// ビューの本体構築
     public var body: some View {
         Form {
@@ -85,38 +93,7 @@ public struct SettingsView: View {
 
                 if viewModel.normalDisplayStyle == .capture {
                     if viewModel.screenRecordingStatus == .denied {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Label(
-                                "ウィンドウのキャプチャ表示には「画面収録」権限の許可が必要です。",
-                                systemImage: "exclamationmark.triangle.fill"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-
-                            HStack(spacing: 12) {
-                                Button("権限をリクエスト") {
-                                    viewModel.requestScreenRecordingPermission()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-
-                                Button("システム設定を開く") {
-                                    viewModel.openScreenRecordingSettings()
-                                }
-                                .buttonStyle(.link)
-                                .font(.caption)
-
-                                Button("再確認") {
-                                    viewModel.refreshStatus()
-                                }
-                                .buttonStyle(.link)
-                                .font(.caption)
-                            }
-
-                            Text("※ macOS の仕様上、権限を許可した後にアプリの再起動が必要になる場合があります。")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                        screenRecordingDeniedGuideView
                     } else {
                         Text("ウィンドウのサムネイルをグリッド表示します（リスト型より多くのメモリを使用する場合があります）。")
                             .font(.caption)
@@ -152,6 +129,22 @@ public struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                Picker("表示形式", selection: launcherDisplayStyleBinding) {
+                    ForEach(LauncherDisplayStyle.allCases, id: \.self) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+
+                if viewModel.launcherDisplayStyle == .capture {
+                    if viewModel.screenRecordingStatus == .denied {
+                        screenRecordingDeniedGuideView
+                    } else {
+                        Text("各ウィンドウ候補の行にサムネイルを表示します（リスト型より多くのメモリを使用する場合があります）。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             Section("一般") {
@@ -181,8 +174,8 @@ public struct SettingsView: View {
                     }
                 }
 
-                // オプトイン原則に従い、キャプチャ表示型が選択されている場合のみ画面収録権限欄を表示する
-                if viewModel.normalDisplayStyle == .capture {
+                // オプトイン原則に従い、通常スイッチャーまたは検索ランチャーでキャプチャ表示型が選択されている場合のみ画面収録権限欄を表示する
+                if viewModel.usesCaptureDisplayStyle {
                     LabeledContent("画面収録権限") {
                         if viewModel.screenRecordingStatus == .granted {
                             Label("許可済み", systemImage: "checkmark.circle.fill")
@@ -211,6 +204,42 @@ public struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
             viewModel.cancelAllRecordings()
+        }
+    }
+
+    /// 画面収録権限が未許可のときに表示する共通の権限案内・リクエスト導線ビュー
+    private var screenRecordingDeniedGuideView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(
+                "ウィンドウのキャプチャ表示には「画面収録」権限の許可が必要です。",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+
+            HStack(spacing: 12) {
+                Button("権限をリクエスト") {
+                    viewModel.requestScreenRecordingPermission()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                Button("システム設定を開く") {
+                    viewModel.openScreenRecordingSettings()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+
+                Button("再確認") {
+                    viewModel.refreshStatus()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
+
+            Text("※ macOS の仕様上、権限を許可した後にアプリの再起動が必要になる場合があります。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }

@@ -29,6 +29,11 @@ public final class AppCoordinator {
         settingsViewModel.normalDisplayStyle
     }
 
+    /// 現在の検索ランチャー表示形式
+    public var launcherDisplayStyle: LauncherDisplayStyle {
+        settingsViewModel.launcherDisplayStyle
+    }
+
     /// ウィンドウ情報サービス
     private let windowService: any WindowServicing
     /// グローバルホットキー監視サービス
@@ -119,6 +124,7 @@ public final class AppCoordinator {
         self.permissionStatus = permissionService.currentStatus()
 
         let initialDisplayStyle = preferencesStore.loadNormalDisplayStyle()
+        let initialLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
         self.switcherViewModel = SwitcherViewModel(
             windowService: windowService,
             hotKeyMonitor: hotKeyMonitor,
@@ -127,7 +133,8 @@ public final class AppCoordinator {
             installedAppService: installedAppService,
             screenRecordingPermissionService: screenRecordingPermissionService,
             windowCaptureService: windowCaptureService,
-            normalDisplayStyle: initialDisplayStyle
+            normalDisplayStyle: initialDisplayStyle,
+            launcherDisplayStyle: initialLauncherDisplayStyle
         )
         self.settingsViewModel = SettingsViewModel(
             preferencesStore: preferencesStore,
@@ -152,9 +159,11 @@ public final class AppCoordinator {
         let savedShortcut = preferencesStore.loadShortcut()
         let savedLauncherShortcut = preferencesStore.loadLauncherShortcut()
         let savedDisplayStyle = preferencesStore.loadNormalDisplayStyle()
+        let savedLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
         hotKeyMonitor.updateShortcut(savedShortcut)
         hotKeyMonitor.updateLauncherShortcut(savedLauncherShortcut)
         switcherViewModel.updateNormalDisplayStyle(savedDisplayStyle)
+        switcherViewModel.updateLauncherDisplayStyle(savedLauncherDisplayStyle)
 
         // 初期の権限状態を確認し、監視を開始する
         updatePermissionState(permissionService.currentStatus())
@@ -199,6 +208,12 @@ public final class AppCoordinator {
     /// - Parameter style: 新しい表示形式
     public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
         settingsViewModel.updateNormalDisplayStyle(style)
+    }
+
+    /// 検索ランチャーの表示形式を更新し、永続化・スイッチャー状態・設定画面を即時同期する
+    /// - Parameter style: 新しい検索ランチャー表示形式
+    public func updateLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
+        settingsViewModel.updateLauncherDisplayStyle(style)
     }
 
     /// 権限状態の変化に応じて監視サービスの起動・停止および誘導画面の表示を切り替える
@@ -294,6 +309,10 @@ public final class AppCoordinator {
 
         settingsViewModel.onNormalDisplayStyleChanged = { [weak self] newStyle in
             self?.switcherViewModel.updateNormalDisplayStyle(newStyle)
+        }
+
+        settingsViewModel.onLauncherDisplayStyleChanged = { [weak self] newStyle in
+            self?.switcherViewModel.updateLauncherDisplayStyle(newStyle)
         }
     }
 

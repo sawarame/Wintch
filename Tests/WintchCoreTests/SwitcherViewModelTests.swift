@@ -1963,4 +1963,225 @@ struct SwitcherViewModelTests {
         #expect(viewModel.isPresented == false)
         #expect(windowService.activatedWindows.map(\.id) == ["w1"])
     }
+
+    /// 検索ランチャーのキャプチャ表示型において、キャッシュ即時反映・非同期更新・検索絞り込み・
+    /// アプリ起動候補併用・修飾キー+Q クローズ（キャッシュ無効化および 0 件時パネル維持）が動作することを検証する
+    @Test("検索ランチャーのキャプチャ表示型でキャッシュ即時反映・非同期更新・検索・クローズが動作する")
+    @MainActor
+    func launcherCaptureStyleImmediateCacheAsyncRefreshSearchAndClose() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 501,
+                pid: 10,
+                bundleIdentifier: "com.apple.Safari",
+                applicationName: "Safari",
+                title: "Swift Docs",
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "w2",
+                cgWindowID: 502,
+                pid: 20,
+                bundleIdentifier: "com.microsoft.VSCode",
+                applicationName: "Visual Studio Code",
+                title: "Wintch",
+                lastActivatedAt: now.addingTimeInterval(-10)
+            )
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(
+                id: "/Applications/Notes.app",
+                displayName: "メモ",
+                alternateName: "Notes",
+                bundleIdentifier: "com.apple.Notes",
+                bundleURL: URL(fileURLWithPath: "/Applications/Notes.app")
+            )
+        ]
+
+        let cachedImage = NSImage(size: NSSize(width: 80, height: 50))
+        let freshImage = NSImage(size: NSSize(width: 160, height: 100))
+        captureService.cachedThumbnails[501] = cachedImage
+        captureService.stubbedAsyncThumbnails[502] = freshImage
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .list,
+            launcherDisplayStyle: .capture
+        )
+
+        // 通常スイッチャー（リスト型）起動時は画面収録権限チェックもキャプチャも一切行われない
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.mode == .normal)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+        viewModel.cancel()
+
+        // 検索ランチャー（キャプチャ表示型）起動直後はキャッシュ済みサムネイル（501）を即時反映する
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.isCaptureActiveForCurrentMode == true)
+        #expect(viewModel.isScreenRecordingGranted == true)
+        #expect(viewModel.selectedIndex == 0)
+        #expect(viewModel.capturedThumbnails[501] === cachedImage)
+        #expect(screenRecordingService.currentStatusCallCount == 1)
+
+        // バックグラウンド非同期タスク完了で未キャッシュの 502 サムネイルが差し込まれる
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(captureService.capturedRequestWindowIDs.count == 1)
+        #expect(viewModel.capturedThumbnails[502] === freshImage)
+
+        // ファジー検索で絞り込んでもサムネイル保持は維持され、アプリ起動候補とも共存する
+        viewModel.updateSearchQuery("Wintch")
+        #expect(viewModel.displayedResults.map(\.entry.id) == ["w2"])
+        #expect(viewModel.thumbnail(for: viewModel.displayedResults[0].entry) === freshImage)
+
+        // ランチャー内で修飾キー + Q により選択中ウィンドウ（w2）を閉じるとキャッシュが無効化され、パネルは開いたまま維持される
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [20])
+        #expect(captureService.invalidatedWindowIDs.contains(502))
+        #expect(viewModel.capturedThumbnails[502] == nil)
+        #expect(viewModel.capturedThumbnails[501] === cachedImage)
+        #expect(viewModel.mode == .launcher)
+
+        // 検索語をクリアして残った最後のウィンドウ（w1）も閉じると、ランチャーは閉じずにウィンドウ 0 件状態へ遷移する
+        viewModel.updateSearchQuery("")
+        #expect(viewModel.displayedResults.map(\.entry.id) == ["w1"])
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.hasOpenWindows == false)
+        #expect(viewModel.emptyState == .noOpenWindows)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+
+        // そのままアプリ名を検索してアプリ起動候補から起動できる
+        viewModel.updateSearchQuery("Notes")
+        #expect(viewModel.displayedAppResults.map(\.app.bundleIdentifier) == ["com.apple.Notes"])
+        viewModel.confirmSelection()
+        #expect(viewModel.mode == .inactive)
+        #expect(installedAppService.launchedApps.map(\.bundleIdentifier) == ["com.apple.Notes"])
+    }
+
+    /// 検索ランチャーのキャプチャ表示型で画面収録権限が未許可または取得中に失効した場合に、
+    /// バナー表示フラグが切り替わり、安全に検索・切り替え・アプリ起動を継続できることを検証する
+    @Test("検索ランチャーのキャプチャ表示型で権限未許可および取得中失効時に安全にフォールバックする")
+    @MainActor
+    func launcherCaptureStyleHandlesDeniedAndRevokedScreenRecordingPermission() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 601,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Home",
+                lastActivatedAt: Date()
+            )
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .list,
+            launcherDisplayStyle: .capture
+        )
+
+        // 1. 権限未許可状態で起動するとバナー状態となりキャプチャ処理は一切呼ばれない
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.isScreenRecordingGranted == false)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        // プレースホルダーのまま確定・切り替えは正常に実行できる
+        viewModel.confirmSelection()
+        #expect(windowService.activatedWindows.map(\.id) == ["w1"])
+
+        // 2. 権限許可状態で起動した後、非同期キャプチャ中に権限が失効した場合もランチャー表示中にバナーへ切り替わる
+        screenRecordingService.stubbedStatus = .granted
+        captureService.cachedThumbnails[601] = NSImage(size: NSSize(width: 80, height: 50))
+        captureService.captureHandler = { _, _ in
+            screenRecordingService.markAccessRevoked()
+        }
+        var resizeNotificationCount = 0
+        viewModel.onSearchResultsUpdated = { resizeNotificationCount += 1 }
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.isScreenRecordingGranted == true)
+        #expect(viewModel.capturedThumbnails[601] != nil)
+
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(viewModel.isScreenRecordingGranted == false)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+        #expect(resizeNotificationCount >= 1)
+        viewModel.cancel()
+    }
+
+    /// 検索ランチャーがリスト型のときは、通常スイッチャーがキャプチャ表示型であっても
+    /// ランチャー起動時に画面収録権限の確認・キャプチャ取得を行わないことを検証する
+    @Test("ランチャーがリスト型のときは通常側がキャプチャ表示型でもランチャー起動で画面収録権限を参照しない")
+    @MainActor
+    func launcherListStyleDoesNotTouchScreenRecordingWhenNormalIsCapture() {
+        let windowService = MockWindowService()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 701,
+                pid: 10,
+                applicationName: "Finder",
+                title: "Desktop",
+                lastActivatedAt: Date()
+            )
+        ]
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            iconProvider: MockIconProvider(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture,
+            launcherDisplayStyle: .list
+        )
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.isCaptureActiveForCurrentMode == false)
+        #expect(viewModel.isScreenRecordingGranted == true)
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        viewModel.cancel()
+    }
 }

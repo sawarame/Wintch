@@ -204,12 +204,16 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var storedLauncherShortcut: LauncherShortcutPreference = .default
     /// メモリ上に保持している通常スイッチャーの表示形式設定
     var storedNormalDisplayStyle: SwitcherDisplayStyle = .default
+    /// メモリ上に保持している検索ランチャーの表示形式設定
+    var storedLauncherDisplayStyle: LauncherDisplayStyle = .default
     /// saveShortcut が呼ばれた回数
     var saveCallCount = 0
     /// saveLauncherShortcut が呼ばれた回数
     var saveLauncherCallCount = 0
     /// saveNormalDisplayStyle が呼ばれた回数
     var saveNormalDisplayStyleCallCount = 0
+    /// saveLauncherDisplayStyle が呼ばれた回数
+    var saveLauncherDisplayStyleCallCount = 0
 
     /// メモリ上の通常ショートカット設定を読み込む
     /// - Returns: 保持している設定
@@ -248,6 +252,19 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     func saveNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
         storedNormalDisplayStyle = style
         saveNormalDisplayStyleCallCount += 1
+    }
+
+    /// メモリ上の検索ランチャー表示形式を読み込む
+    /// - Returns: 保持している検索ランチャー表示形式設定
+    func loadLauncherDisplayStyle() -> LauncherDisplayStyle {
+        storedLauncherDisplayStyle
+    }
+
+    /// メモリ上の検索ランチャー表示形式を保存する
+    /// - Parameter style: 保存する検索ランチャー表示形式設定
+    func saveLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
+        storedLauncherDisplayStyle = style
+        saveLauncherDisplayStyleCallCount += 1
     }
 }
 

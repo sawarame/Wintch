@@ -43,6 +43,26 @@ public final class SwitcherViewModel {
     /// 通常スイッチャーの現在の表示形式（リスト型／アイコン型／キャプチャ表示型）
     public private(set) var normalDisplayStyle: SwitcherDisplayStyle
 
+    /// 検索ランチャーの現在の表示形式（リスト型／キャプチャ表示型）
+    public private(set) var launcherDisplayStyle: LauncherDisplayStyle
+
+    /// 通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されているか
+    public var usesCaptureDisplayStyle: Bool {
+        normalDisplayStyle == .capture || launcherDisplayStyle == .capture
+    }
+
+    /// 現在の表示モードでキャプチャ表示が有効かどうか
+    public var isCaptureActiveForCurrentMode: Bool {
+        switch mode {
+        case .normal:
+            normalDisplayStyle == .capture
+        case .launcher:
+            launcherDisplayStyle == .capture
+        case .inactive:
+            false
+        }
+    }
+
     /// キャプチャ表示型で使用するウィンドウごとのサムネイル画像（cgWindowID キー、メモリ限定）
     public private(set) var capturedThumbnails: [UInt32: NSImage] = [:]
 
@@ -153,6 +173,7 @@ public final class SwitcherViewModel {
     ///   - screenRecordingPermissionService: 画面収録権限サービス（省略時は未設定）
     ///   - windowCaptureService: ウィンドウキャプチャサービス（省略時は未設定）
     ///   - normalDisplayStyle: 通常スイッチャーの初期表示形式
+    ///   - launcherDisplayStyle: 検索ランチャーの初期表示形式
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -161,7 +182,8 @@ public final class SwitcherViewModel {
         installedAppService: (any InstalledAppServicing)? = nil,
         screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil,
         windowCaptureService: (any WindowCaptureServicing)? = nil,
-        normalDisplayStyle: SwitcherDisplayStyle = .default
+        normalDisplayStyle: SwitcherDisplayStyle = .default,
+        launcherDisplayStyle: LauncherDisplayStyle = .default
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -171,6 +193,7 @@ public final class SwitcherViewModel {
         self.screenRecordingPermissionService = screenRecordingPermissionService
         self.windowCaptureService = windowCaptureService
         self.normalDisplayStyle = normalDisplayStyle
+        self.launcherDisplayStyle = launcherDisplayStyle
     }
 
     /// 指定されたプロセス ID のアプリアイコンを取得する
@@ -192,16 +215,14 @@ public final class SwitcherViewModel {
         scheduleInstalledAppsRefresh()
     }
 
-    /// 通常スイッチャーの表示形式を更新し、キャプチャ表示型以外へ切り替わった場合は一時キャプチャキャッシュを即時破棄する
+    /// 通常スイッチャーの表示形式を更新し、通常・ランチャーの双方が非キャプチャとなった場合は一時キャプチャキャッシュを即時破棄する
     /// - Parameter style: 新しい表示形式
     public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
         normalDisplayStyle = style
-        if style != .capture {
-            captureRefreshTask?.cancel()
-            captureRefreshTask = nil
-            capturedThumbnails.removeAll()
-            isScreenRecordingGranted = true
-            windowCaptureService?.clearCache()
+        if !usesCaptureDisplayStyle {
+            clearCaptureState(clearServiceCache: true)
+        } else if style != .capture && mode == .normal {
+            clearCaptureState(clearServiceCache: false)
         }
         if style.usesGridLayout && !displayedResults.isEmpty {
             gridColumnCount = SwitcherGridLayout.columnsCount(
@@ -209,6 +230,29 @@ public final class SwitcherViewModel {
                 availableScreenWidth: availableScreenSize.width,
                 style: style
             )
+        }
+    }
+
+    /// 検索ランチャーの表示形式を更新し、通常・ランチャーの双方が非キャプチャとなった場合は一時キャプチャキャッシュを即時破棄する
+    /// - Parameter style: 新しい検索ランチャー表示形式
+    public func updateLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
+        launcherDisplayStyle = style
+        if !usesCaptureDisplayStyle {
+            clearCaptureState(clearServiceCache: true)
+        } else if style != .capture && mode == .launcher {
+            clearCaptureState(clearServiceCache: false)
+        }
+    }
+
+    /// 進行中のキャプチャ取得タスクと画面保持サムネイルを破棄する
+    /// - Parameter clearServiceCache: キャプチャサービス側の共有メモリキャッシュも全破棄する場合は true
+    private func clearCaptureState(clearServiceCache: Bool) {
+        captureRefreshTask?.cancel()
+        captureRefreshTask = nil
+        capturedThumbnails.removeAll()
+        isScreenRecordingGranted = true
+        if clearServiceCache {
+            windowCaptureService?.clearCache()
         }
     }
 
@@ -477,7 +521,8 @@ public final class SwitcherViewModel {
         mode = targetMode
         hotKeyMonitor.activeMode = targetMode == .launcher ? .launcher : .normal
 
-        let shouldUseCapture = targetMode == .normal && normalDisplayStyle == .capture
+        let shouldUseCapture = (targetMode == .normal && normalDisplayStyle == .capture)
+            || (targetMode == .launcher && launcherDisplayStyle == .capture)
         if targetMode == .normal && normalDisplayStyle.usesGridLayout {
             gridColumnCount = SwitcherGridLayout.columnsCount(
                 itemCount: sorted.count,
@@ -561,6 +606,7 @@ public final class SwitcherViewModel {
         )
         guard !targetIDs.isEmpty else { return }
 
+        let capturedMode = mode
         let capturedGeneration = presentationGeneration
         let maxPixelSize = CGSize(width: 432, height: 270)
 
@@ -571,8 +617,8 @@ public final class SwitcherViewModel {
             ) { [weak self] windowID, image in
                 guard let self,
                       !Task.isCancelled,
-                      self.mode == .normal,
-                      self.normalDisplayStyle == .capture,
+                      self.mode == capturedMode,
+                      self.isCaptureActiveForCurrentMode,
                       self.presentationGeneration == capturedGeneration,
                       self.allEntries.contains(where: { $0.cgWindowID == windowID }) else {
                     return
@@ -583,8 +629,8 @@ public final class SwitcherViewModel {
             // 非同期キャプチャ中に権限拒否・失効を検知した場合は、現在表示中のパネルにも即座に未許可バナーへ切り替える
             guard let self,
                   !Task.isCancelled,
-                  self.mode == .normal,
-                  self.normalDisplayStyle == .capture,
+                  self.mode == capturedMode,
+                  self.isCaptureActiveForCurrentMode,
                   self.presentationGeneration == capturedGeneration,
                   let screenRecordingPermissionService = self.screenRecordingPermissionService,
                   screenRecordingPermissionService.currentStatus() != .granted else {
@@ -592,6 +638,9 @@ public final class SwitcherViewModel {
             }
             self.isScreenRecordingGranted = false
             self.capturedThumbnails.removeAll()
+            if capturedMode == .launcher {
+                self.onSearchResultsUpdated?()
+            }
         }
     }
 

@@ -25,4 +25,12 @@ public protocol PreferencesStoring: Sendable {
     /// 通常スイッチャーの表示形式設定を保存する
     /// - Parameter style: 保存する表示形式設定
     func saveNormalDisplayStyle(_ style: SwitcherDisplayStyle)
+
+    /// 保存されている検索ランチャーの表示形式設定を読み込む
+    /// - Returns: 保存された検索ランチャー表示形式設定（未保存または不正値時はデフォルトのリスト型）
+    func loadLauncherDisplayStyle() -> LauncherDisplayStyle
+
+    /// 検索ランチャーの表示形式設定を保存する
+    /// - Parameter style: 保存する検索ランチャー表示形式設定
+    func saveLauncherDisplayStyle(_ style: LauncherDisplayStyle)
 }

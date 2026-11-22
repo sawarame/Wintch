@@ -74,6 +74,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── FuzzySearchMatcher.swift         # スペース区切り AND ファジー検索・ハイライト範囲算出
 │       │   ├── HotKeyFallbackSupport.swift      # Carbon 代替ホットキー計画・重複発火防止・解放ウォッチドッグ判定
 │       │   ├── LaunchableApp.swift              # 起動可能アプリケーションモデル（別名含む）
+│       │   ├── LauncherDisplayStyle.swift       # 検索ランチャー表示形式（リスト型 / キャプチャ表示型）
 │       │   ├── LauncherEmptyState.swift         # ランチャー 0 件時の空状態種別と文言判定
 │       │   ├── LauncherShortcutPreference.swift # 検索ランチャーショートカット設定・キーラベル解決
 │       │   ├── RawWindowCandidate.swift         # フィルタリング前の生ウィンドウ候補モデル

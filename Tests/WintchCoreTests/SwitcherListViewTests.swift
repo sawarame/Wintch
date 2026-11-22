@@ -14,7 +14,10 @@ struct SwitcherListViewTests {
     @MainActor
     private func makeViewModel(
         windowCount: Int,
-        appCount: Int
+        appCount: Int,
+        launcherDisplayStyle: LauncherDisplayStyle = .list,
+        screenRecordingStatus: ScreenRecordingPermissionStatus = .granted,
+        windowCaptureService: MockWindowCaptureService = MockWindowCaptureService()
     ) -> SwitcherViewModel {
         let windowService = MockWindowService()
         let now = Date()
@@ -52,13 +55,19 @@ struct SwitcherListViewTests {
         }
         installedAppService.stubbedApps = apps
 
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = screenRecordingStatus
+
         return SwitcherViewModel(
             windowService: windowService,
             hotKeyMonitor: MockHotKeyMonitor(),
             permissionService: MockAccessibilityPermissionService(),
             iconProvider: MockIconProvider(),
             installedAppService: installedAppService,
-            normalDisplayStyle: .list
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: windowCaptureService,
+            normalDisplayStyle: .list,
+            launcherDisplayStyle: launcherDisplayStyle
         )
     }
 
@@ -267,5 +276,90 @@ struct SwitcherListViewTests {
             pumpMainRunLoop(for: 0.04)
             #expect(scrollView.contentView.bounds.origin.y == 0)
         }
+    }
+
+    /// 検索ランチャーのキャプチャ表示型で縦型リスト（幅 520pt）とサムネイル付き行高さ・
+    /// 画面収録権限未許可時の非インタラクティブ警告バナー・自動スクロール追従が正しく動作することを検証する
+    @Test("検索ランチャーのキャプチャ表示型でサムネイル行レイアウト・権限未許可バナー・自動スクロール追従が動作する")
+    @MainActor
+    func launcherCaptureStyleLayoutPermissionBannerAndScroll() throws {
+        // 1. 同一 2 件候補で、キャプチャ表示型はリスト型より行高さが大きく幅 520pt を維持する
+        let listViewModel = makeViewModel(windowCount: 2, appCount: 0, launcherDisplayStyle: .list)
+        listViewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        let listHosting = NSHostingView(rootView: SwitcherListView(viewModel: listViewModel))
+        listHosting.layoutSubtreeIfNeeded()
+        let listSize = listHosting.fittingSize
+
+        let captureService = MockWindowCaptureService()
+        captureService.cachedThumbnails[1000] = NSImage(size: NSSize(width: 160, height: 100))
+        let captureGrantedVM = makeViewModel(
+            windowCount: 2,
+            appCount: 0,
+            launcherDisplayStyle: .capture,
+            screenRecordingStatus: .granted,
+            windowCaptureService: captureService
+        )
+        captureGrantedVM.handleHotKeyEvent(.launcherTriggerPressed)
+        let captureGrantedHosting = NSHostingView(rootView: SwitcherListView(viewModel: captureGrantedVM))
+        captureGrantedHosting.layoutSubtreeIfNeeded()
+        let captureGrantedSize = captureGrantedHosting.fittingSize
+
+        #expect(listSize.width == 520)
+        #expect(captureGrantedSize.width == 520)
+        #expect(captureGrantedSize.height > listSize.height)
+
+        // 2. 画面収録権限未許可時は検索ヘッダ下に非インタラクティブな警告バナーが追加表示され、NSButton を含まない
+        let captureDeniedVM = makeViewModel(
+            windowCount: 2,
+            appCount: 0,
+            launcherDisplayStyle: .capture,
+            screenRecordingStatus: .denied
+        )
+        captureDeniedVM.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(captureDeniedVM.isScreenRecordingGranted == false)
+
+        let deniedView = SwitcherListView(viewModel: captureDeniedVM)
+        let deniedHosting = NSHostingView(rootView: deniedView)
+        deniedHosting.layoutSubtreeIfNeeded()
+        let deniedSize = deniedHosting.fittingSize
+
+        #expect(deniedSize.width == 520)
+        #expect(deniedSize.height > captureGrantedSize.height)
+
+        let bannerHosting = NSHostingView(rootView: deniedView.permissionBannerView.frame(width: 520))
+        bannerHosting.layoutSubtreeIfNeeded()
+        #expect(bannerHosting.fittingSize.height >= 30)
+        func collectSubviews(_ root: NSView) -> [NSView] {
+            [root] + root.subviews.flatMap(collectSubviews)
+        }
+        #expect(collectSubviews(bannerHosting).compactMap { $0 as? NSButton }.isEmpty)
+
+        // 3. 多数の候補＋アプリ起動候補がある状態でもキャプチャ表示型ランチャーでスクロール追従が機能する
+        let scrollableVM = makeViewModel(
+            windowCount: 12,
+            appCount: 10,
+            launcherDisplayStyle: .capture,
+            screenRecordingStatus: .granted
+        )
+        scrollableVM.handleHotKeyEvent(.launcherTriggerPressed)
+        scrollableVM.updateSearchQuery("Sample")
+        #expect(scrollableVM.displayedResults.count == 12)
+        #expect(scrollableVM.displayedAppResults.count == 10)
+
+        let (panel, hostingView) = try makeHostedPanel(for: scrollableVM)
+        defer { panel.hidePanel(restorePreviousApp: false) }
+
+        let scrollView = try #require(findScrollView(in: hostingView))
+        #expect(scrollView.frame.height <= 420.5)
+        #expect((scrollView.documentView?.frame.height ?? 0) > scrollView.frame.height + 100)
+
+        for _ in 0..<15 {
+            scrollableVM.moveSelection(.down)
+            pumpMainRunLoop(for: 0.03)
+        }
+        pumpMainRunLoop(for: 0.2)
+
+        #expect(scrollableVM.selectedIndex == 15)
+        #expect(scrollView.contentView.bounds.origin.y > 200)
     }
 }
