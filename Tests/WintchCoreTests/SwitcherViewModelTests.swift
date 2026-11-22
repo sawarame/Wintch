@@ -2254,10 +2254,13 @@ struct SwitcherViewModelTests {
         #expect(viewModel.entries.map(\.id) == ["chrome-1", "chrome-2", "term-1", "finder-1"])
         // 初期選択は表示上 2 番目（chrome-2）ではなく MRU 2 番目の term-1（インデックス 2）
         #expect(viewModel.selectedIndex == 2)
-        // 最大セクション件数は Chrome の 2 件なので 2 列
-        #expect(viewModel.gridColumnCount == 2)
+        // アイコン型でもグルーピング ON 時は縦型リスト表示（1 列）となる
+        #expect(viewModel.usesGridLayoutForCurrentMode == false)
+        #expect(viewModel.gridColumnCount == 1)
 
-        // セクション跨ぎ 4 方向移動: term-1(2) -> 上: chrome-1(0) -> 右: chrome-2(1) -> 下: term-1(2: 列不足丸め) -> 下: finder-1(3)
+        // 縦型リスト連続移動: term-1(2) -> 上: chrome-2(1) -> 上: chrome-1(0) -> 右: chrome-2(1) -> 下: term-1(2) -> 下: finder-1(3)
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
+        #expect(viewModel.selectedIndex == 1)
         viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
         #expect(viewModel.selectedIndex == 0)
         viewModel.handleHotKeyEvent(.arrowPressed(direction: .right))
@@ -2274,7 +2277,7 @@ struct SwitcherViewModelTests {
         #expect(viewModel.entries.map(\.id) == ["chrome-1", "chrome-2", "term-1"])
         #expect(viewModel.selectedIndex == 2)
 
-        // 複数ウィンドウの Chrome から chrome-2(1) のみを閉じると Chrome グループは 1 件残り、列数も 1 へ再計算される
+        // 複数ウィンドウの Chrome から chrome-2(1) のみを閉じると Chrome グループは 1 件残る
         viewModel.moveSelection(.left)
         #expect(viewModel.selectedIndex == 1)
         await viewModel.closeSelectedWindow()

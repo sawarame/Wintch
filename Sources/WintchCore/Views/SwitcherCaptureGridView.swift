@@ -26,21 +26,9 @@ public struct SwitcherCaptureGridView: View {
         self.onContentSizeChanged = onContentSizeChanged
     }
 
-    /// アプリグルーピング表示を適用するかどうか
-    private var isGrouped: Bool {
-        viewModel.isNormalSwitcherGroupedByApp && !viewModel.displayedGroups.isEmpty
-    }
-
-    /// 現在の項目数（またはグループ構成）と画面幅から算出されたグリッド列数
+    /// 現在の項目数と画面幅から算出されたグリッド列数
     private var columnsCount: Int {
-        if isGrouped {
-            return SwitcherGridLayout.groupedColumnsCount(
-                sectionCounts: viewModel.displayedGroups.map(\.results.count),
-                availableScreenWidth: viewModel.availableScreenSize.width,
-                style: .capture
-            )
-        }
-        return SwitcherGridLayout.columnsCount(
+        SwitcherGridLayout.columnsCount(
             itemCount: viewModel.displayedResults.count,
             availableScreenWidth: viewModel.availableScreenSize.width
         )
@@ -116,61 +104,22 @@ public struct SwitcherCaptureGridView: View {
         )
     }
 
-    /// スクロール追従付きの複数行カードグリッド（グルーピング ON 時はアプリ別セクション構成）
+    /// スクロール追従付きの複数行カードグリッド
     private var gridScrollView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                Group {
-                    if isGrouped {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(Array(viewModel.displayedGroups.enumerated()), id: \.element.id) { groupIndex, group in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    SwitcherGridSectionHeaderView(
-                                        applicationName: group.applicationName,
-                                        icon: viewModel.icon(for: group.representativePID),
-                                        isFirstSection: groupIndex == 0
-                                    )
-
-                                    LazyVGrid(
-                                        columns: gridColumns,
-                                        alignment: .leading,
-                                        spacing: SwitcherGridLayout.cardSpacing
-                                    ) {
-                                        ForEach(Array(group.results.enumerated()), id: \.element.id) { offset, result in
-                                            let index = group.startIndex + offset
-                                            SwitcherCaptureCardView(
-                                                entry: result.entry,
-                                                thumbnail: viewModel.thumbnail(for: result.entry),
-                                                icon: viewModel.icon(for: result.entry.pid),
-                                                isSelected: index == viewModel.selectedIndex,
-                                                showsApplicationName: false
-                                            )
-                                            .id(result.id)
-                                            .contentShape(Rectangle())
-                                            .onTapGesture {
-                                                viewModel.selectAndActivate(at: index)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        LazyVGrid(columns: gridColumns, spacing: SwitcherGridLayout.cardSpacing) {
-                            ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
-                                SwitcherCaptureCardView(
-                                    entry: result.entry,
-                                    thumbnail: viewModel.thumbnail(for: result.entry),
-                                    icon: viewModel.icon(for: result.entry.pid),
-                                    isSelected: index == viewModel.selectedIndex,
-                                    showsApplicationName: true
-                                )
-                                .id(result.id)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewModel.selectAndActivate(at: index)
-                                }
-                            }
+                LazyVGrid(columns: gridColumns, spacing: SwitcherGridLayout.cardSpacing) {
+                    ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
+                        SwitcherCaptureCardView(
+                            entry: result.entry,
+                            thumbnail: viewModel.thumbnail(for: result.entry),
+                            icon: viewModel.icon(for: result.entry.pid),
+                            isSelected: index == viewModel.selectedIndex
+                        )
+                        .id(result.id)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            viewModel.selectAndActivate(at: index)
                         }
                     }
                 }
@@ -223,8 +172,6 @@ private struct SwitcherCaptureCardView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
-    /// カード下部にアプリアイコンとアプリ名を表示するか（グルーピング ON 時は false）
-    let showsApplicationName: Bool
 
     /// カードビューの本体構築
     var body: some View {
@@ -240,27 +187,19 @@ private struct SwitcherCaptureCardView: View {
                 }
 
             HStack(spacing: 6) {
-                if showsApplicationName {
-                    smallAppIcon
+                smallAppIcon
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(entry.applicationName)
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(isSelected ? .white : .primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-
-                        Text(entry.displayTitle)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(isSelected ? .white.opacity(0.88) : .secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                } else {
-                    Text(entry.displayTitle)
-                        .font(.system(size: 11.5, weight: .medium))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.applicationName)
+                        .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(isSelected ? .white : .primary)
-                        .lineLimit(2)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Text(entry.displayTitle)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(isSelected ? .white.opacity(0.88) : .secondary)
+                        .lineLimit(1)
                         .truncationMode(.tail)
                 }
 
@@ -355,48 +294,5 @@ struct ScreenRecordingPermissionBannerView: View {
         }
         .padding(.horizontal, horizontalPadding)
         .padding(.vertical, 9)
-    }
-}
-
-/// アイコン型・キャプチャ表示型グリッドでグルーピング有効時に共通利用するアプリ別セクション見出しビュー
-struct SwitcherGridSectionHeaderView: View {
-    /// セクション見出しに表示するアプリケーション名
-    let applicationName: String
-    /// アプリケーションアイコン画像
-    let icon: NSImage?
-    /// 先頭のセクションかどうか（2 つ目以降は上部に区切り線を表示する）
-    let isFirstSection: Bool
-
-    /// 見出しビューの本体構築
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !isFirstSection {
-                Divider()
-                    .overlay(.white.opacity(0.14))
-            }
-
-            HStack(spacing: 6) {
-                if let icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 18, height: 18)
-                } else {
-                    Image(systemName: "macwindow")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 16, height: 16)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(applicationName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 0)
-            }
-        }
     }
 }

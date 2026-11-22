@@ -25,15 +25,10 @@ public struct SwitcherContentView: View {
     /// 現在のモードと表示形式に応じて表示ビューを切り替える本体構築
     public var body: some View {
         Group {
-            if viewModel.mode == .normal {
+            // グルーピング ON 時は通常スイッチャーのアイコン型・キャプチャ表示型も
+            // 検索ランチャーのキャプチャ表示型と同一の縦型リストビュー（幅 520pt）で表示する
+            if viewModel.usesGridLayoutForCurrentMode {
                 switch viewModel.normalDisplayStyle {
-                case .list:
-                    SwitcherListView(
-                        viewModel: viewModel,
-                        onContentHeightChanged: { newHeight in
-                            onContentSizeChanged?(CGSize(width: 520, height: newHeight))
-                        }
-                    )
                 case .icon:
                     SwitcherIconGridView(
                         viewModel: viewModel,
@@ -43,6 +38,13 @@ public struct SwitcherContentView: View {
                     SwitcherCaptureGridView(
                         viewModel: viewModel,
                         onContentSizeChanged: onContentSizeChanged
+                    )
+                case .list:
+                    SwitcherListView(
+                        viewModel: viewModel,
+                        onContentHeightChanged: { newHeight in
+                            onContentSizeChanged?(CGSize(width: 520, height: newHeight))
+                        }
                     )
                 }
             } else {

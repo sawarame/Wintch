@@ -39,6 +39,22 @@ public struct SwitcherListView: View {
         viewModel.mode == .launcher && viewModel.launcherDisplayStyle == .capture
     }
 
+    /// ウィンドウ行に小型プレビュー枠付き行（ランチャーのキャプチャ表示型と同一デザイン）を使用するかどうか
+    /// 検索ランチャーのキャプチャ表示型、およびグルーピング ON 時の通常スイッチャー（アイコン型・キャプチャ表示型）で有効
+    private var usesPreviewRowStyle: Bool {
+        if isLauncherCaptureStyle {
+            return true
+        }
+        return viewModel.mode == .normal
+            && viewModel.isNormalSwitcherGroupedByApp
+            && (viewModel.normalDisplayStyle == .capture || viewModel.normalDisplayStyle == .icon)
+    }
+
+    /// 画面収録権限未許可バナーを表示すべきかどうか（実際にキャプチャ表示が有効なモードかつ未許可時のみ）
+    private var showsScreenRecordingPermissionBanner: Bool {
+        viewModel.isCaptureActiveForCurrentMode && !viewModel.isScreenRecordingGranted
+    }
+
     /// ビューの本体構築
     public var body: some View {
         VStack(spacing: 0) {
@@ -46,12 +62,12 @@ public struct SwitcherListView: View {
                 searchHeaderView
                 Divider()
                     .overlay(.white.opacity(0.14))
+            }
 
-                if isLauncherCaptureStyle && !viewModel.isScreenRecordingGranted {
-                    permissionBannerView
-                    Divider()
-                        .overlay(.white.opacity(0.14))
-                }
+            if showsScreenRecordingPermissionBanner {
+                permissionBannerView
+                Divider()
+                    .overlay(.white.opacity(0.14))
             }
 
             if let emptyState = viewModel.emptyState {
@@ -166,10 +182,12 @@ public struct SwitcherListView: View {
 
                         case let .window(index, result):
                             Group {
-                                if isLauncherCaptureStyle {
+                                if usesPreviewRowStyle {
                                     SwitcherCaptureRowView(
                                         result: result,
-                                        thumbnail: viewModel.thumbnail(for: result.entry),
+                                        thumbnail: viewModel.isCaptureActiveForCurrentMode
+                                            ? viewModel.thumbnail(for: result.entry)
+                                            : nil,
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex,
                                         showsAppHeader: !isGrouped

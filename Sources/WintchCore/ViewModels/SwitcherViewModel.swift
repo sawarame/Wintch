@@ -67,6 +67,12 @@ public final class SwitcherViewModel {
         }
     }
 
+    /// 現在の表示モード・表示形式・グルーピング設定でグリッドレイアウト（複数列表示）を使用中かどうか
+    /// アイコン型・キャプチャ表示型でもグルーピング ON 時は縦型リスト表示（1 列）となる
+    public var usesGridLayoutForCurrentMode: Bool {
+        mode == .normal && normalDisplayStyle.usesGridLayout && !isNormalSwitcherGroupedByApp
+    }
+
     /// 通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されているか
     public var usesCaptureDisplayStyle: Bool {
         normalDisplayStyle == .capture || launcherDisplayStyle == .capture
@@ -356,12 +362,9 @@ public final class SwitcherViewModel {
 
     /// 現在の表示形式・グルーピング設定・画面幅に応じてグリッド列数を再算出する
     private func recalculateGridColumnCount() {
-        if isNormalSwitcherGroupedByApp && !displayedGroups.isEmpty {
-            gridColumnCount = SwitcherGridLayout.groupedColumnsCount(
-                sectionCounts: displayedGroups.map(\.results.count),
-                availableScreenWidth: availableScreenSize.width,
-                style: normalDisplayStyle
-            )
+        // グルーピング ON 時はアイコン型・キャプチャ表示型も縦型リスト表示（1 列）となる
+        if isNormalSwitcherGroupedByApp || !normalDisplayStyle.usesGridLayout {
+            gridColumnCount = 1
         } else {
             gridColumnCount = SwitcherGridLayout.columnsCount(
                 itemCount: displayedResults.count,
@@ -511,22 +514,13 @@ public final class SwitcherViewModel {
         let count = activeResultCount
         guard mode != .inactive, count > 0 else { return }
 
-        if mode == .normal && normalDisplayStyle.usesGridLayout {
-            if isNormalSwitcherGroupedByApp && !displayedGroups.isEmpty {
-                selectedIndex = SwitcherGridLayout.moveIndex(
-                    current: selectedIndex,
-                    direction: direction,
-                    sectionCounts: displayedGroups.map(\.results.count),
-                    columns: gridColumnCount
-                )
-            } else {
-                selectedIndex = SwitcherGridLayout.moveIndex(
-                    current: selectedIndex,
-                    direction: direction,
-                    count: count,
-                    columns: gridColumnCount
-                )
-            }
+        if usesGridLayoutForCurrentMode {
+            selectedIndex = SwitcherGridLayout.moveIndex(
+                current: selectedIndex,
+                direction: direction,
+                count: count,
+                columns: gridColumnCount
+            )
             return
         }
 

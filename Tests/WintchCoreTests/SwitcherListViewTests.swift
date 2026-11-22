@@ -384,4 +384,52 @@ struct SwitcherListViewTests {
         #expect(flatSize.width == 520)
         #expect(groupedSize.height > flatSize.height)
     }
+
+    /// 通常スイッチャーのアイコン型・キャプチャ表示型でグルーピング ON のとき、
+    /// 検索ランチャーのキャプチャ表示型（グルーピング ON）と同じプレビュー枠付き縦型リスト（幅 520pt）になり、
+    /// アイコン型では権限未許可でも警告バナーを表示せず、キャプチャ表示型未許可時のみバナーを表示することを検証する
+    @Test("通常スイッチャーのアイコン型・キャプチャ表示型（グルーピング ON）がランチャーのキャプチャ表示型と同一の縦型リストになる")
+    @MainActor
+    func normalIconAndCaptureGroupedMatchLauncherCaptureGroupedListStyle() {
+        let normalListVM = makeViewModel(windowCount: 2, appCount: 0)
+        normalListVM.updateNormalDisplayStyle(.list)
+        normalListVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalListHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalListVM))
+        normalListHosting.layoutSubtreeIfNeeded()
+        let normalListSize = normalListHosting.fittingSize
+
+        let normalIconVM = makeViewModel(windowCount: 2, appCount: 0, screenRecordingStatus: .denied)
+        normalIconVM.updateNormalDisplayStyle(.icon)
+        normalIconVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalIconHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalIconVM))
+        normalIconHosting.layoutSubtreeIfNeeded()
+        let normalIconSize = normalIconHosting.fittingSize
+
+        let normalCaptureGrantedVM = makeViewModel(windowCount: 2, appCount: 0, screenRecordingStatus: .granted)
+        normalCaptureGrantedVM.updateNormalDisplayStyle(.capture)
+        normalCaptureGrantedVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalCaptureGrantedHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalCaptureGrantedVM))
+        normalCaptureGrantedHosting.layoutSubtreeIfNeeded()
+        let normalCaptureGrantedSize = normalCaptureGrantedHosting.fittingSize
+
+        let normalCaptureDeniedVM = makeViewModel(windowCount: 2, appCount: 0, screenRecordingStatus: .denied)
+        normalCaptureDeniedVM.updateNormalDisplayStyle(.capture)
+        normalCaptureDeniedVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let normalCaptureDeniedHosting = NSHostingView(rootView: SwitcherContentView(viewModel: normalCaptureDeniedVM))
+        normalCaptureDeniedHosting.layoutSubtreeIfNeeded()
+        let normalCaptureDeniedSize = normalCaptureDeniedHosting.fittingSize
+
+        // いずれも幅 520pt の縦型リストとして描画される
+        #expect(normalListSize.width == 520)
+        #expect(normalIconSize.width == 520)
+        #expect(normalCaptureGrantedSize.width == 520)
+        #expect(normalCaptureDeniedSize.width == 520)
+
+        // アイコン型・キャプチャ表示型（権限許可）は同一のプレビュー枠付き行（80x50pt）のため高さが一致し、リスト型より大きい
+        #expect(abs(normalIconSize.height - normalCaptureGrantedSize.height) < 0.5)
+        #expect(normalIconSize.height > normalListSize.height)
+
+        // キャプチャ表示型で権限未許可時のみ上部に警告バナーが追加され高さが増える（アイコン型は未許可でもバナー無し）
+        #expect(normalCaptureDeniedSize.height > normalCaptureGrantedSize.height)
+    }
 }
