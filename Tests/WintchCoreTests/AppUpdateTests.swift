@@ -530,7 +530,8 @@ struct AppUpdateTests {
             permissionService: MockAccessibilityPermissionService(),
             updateService: updateService,
             appIdentity: Self.makeReleaseIdentity(),
-            versionInfo: Self.makeVersionInfo("0.3.0")
+            versionInfo: Self.makeVersionInfo("0.3.0"),
+            preferredLanguagesProvider: { ["ja-JP"] }
         )
 
         // 初期値は OFF
@@ -588,7 +589,8 @@ struct AppUpdateTests {
             permissionService: MockAccessibilityPermissionService(),
             updateService: devUpdateService,
             appIdentity: Self.makeDevIdentity(),
-            versionInfo: Self.makeVersionInfo("0.3.0")
+            versionInfo: Self.makeVersionInfo("0.3.0"),
+            preferredLanguagesProvider: { ["ja-JP"] }
         )
         devViewModel.checkForUpdatesManually()
         await Self.waitUntil { !devViewModel.isCheckingForUpdates }

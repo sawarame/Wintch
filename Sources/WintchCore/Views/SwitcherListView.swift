@@ -262,8 +262,11 @@ public struct SwitcherListView: View {
                 scrollToRow(at: newIndex, using: proxy, animated: true)
             }
             .onChange(of: viewModel.searchQuery) { _, _ in
-                // 手動スクロール後に selectedIndex が 0 のまま検索更新された場合も、上部余白ごと先頭候補が見える位置へ戻す
+                // 手動スクロール後に selectedIndex が 0 のまま検索更新された場合も、上部余白・先頭見出しごと見える位置へ戻す
                 scrollToSelectedRow(using: proxy, animated: false)
+                DispatchQueue.main.async {
+                    scrollToSelectedRow(using: proxy, animated: false)
+                }
             }
             .onChange(of: viewModel.mode) { _, newMode in
                 guard newMode != .inactive else { return }
@@ -362,7 +365,16 @@ public struct SwitcherListView: View {
         using proxy: ScrollViewProxy,
         animated: Bool
     ) {
-        guard let targetID = scrollTargetID(for: index) else { return }
+        // 先頭候補（index == 0）へ戻る際は、グルーピング見出し行と上部余白を含めて確実に最上部（y == 0）へクランプさせる
+        let targetID: String
+        if index == 0, let firstRowID = listRows.first?.id {
+            targetID = firstRowID
+        } else if let resolvedID = scrollTargetID(for: index) {
+            targetID = resolvedID
+        } else {
+            return
+        }
+
         if animated {
             withAnimation(.easeOut(duration: 0.08)) {
                 proxy.scrollTo(targetID, anchor: .center)
