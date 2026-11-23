@@ -212,6 +212,10 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var storedGroupLauncherByApp: Bool = true
     /// メモリ上に保持しているアプリ表示言語設定
     var storedAppLanguage: AppLanguage = .default
+    /// メモリ上に保持しているバージョンアップ自動チェック設定
+    var storedAutoCheckForUpdates: Bool = false
+    /// メモリ上に保持しているスキップ対象バージョン
+    var storedSkippedUpdateVersion: String? = nil
     /// saveShortcut が呼ばれた回数
     var saveCallCount = 0
     /// saveLauncherShortcut が呼ばれた回数
@@ -226,6 +230,10 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var saveGroupLauncherByAppCallCount = 0
     /// saveAppLanguage が呼ばれた回数
     var saveAppLanguageCallCount = 0
+    /// saveAutoCheckForUpdates が呼ばれた回数
+    var saveAutoCheckForUpdatesCallCount = 0
+    /// saveSkippedUpdateVersion が呼ばれた回数
+    var saveSkippedUpdateVersionCallCount = 0
 
     /// メモリ上の通常ショートカット設定を読み込む
     /// - Returns: 保持している設定
@@ -316,6 +324,33 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     func saveAppLanguage(_ language: AppLanguage) {
         storedAppLanguage = language
         saveAppLanguageCallCount += 1
+    }
+
+    /// メモリ上のバージョンアップ自動チェック設定を読み込む
+    /// - Returns: 保持している設定値
+    func loadAutoCheckForUpdates() -> Bool {
+        storedAutoCheckForUpdates
+    }
+
+    /// メモリ上のバージョンアップ自動チェック設定を保存する
+    /// - Parameter enabled: 保存する設定値
+    func saveAutoCheckForUpdates(_ enabled: Bool) {
+        storedAutoCheckForUpdates = enabled
+        saveAutoCheckForUpdatesCallCount += 1
+    }
+
+    /// メモリ上のスキップ対象バージョンを読み込む
+    /// - Returns: 保持しているバージョン文字列
+    func loadSkippedUpdateVersion() -> String? {
+        storedSkippedUpdateVersion
+    }
+
+    /// メモリ上のスキップ対象バージョンを保存する
+    /// - Parameter version: 保存するバージョン文字列
+    func saveSkippedUpdateVersion(_ version: String?) {
+        let trimmed = version?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        storedSkippedUpdateVersion = trimmed.isEmpty ? nil : trimmed
+        saveSkippedUpdateVersionCallCount += 1
     }
 }
 
@@ -536,5 +571,74 @@ final class MockWindowFrontPresenter: WindowFrontPresenting {
     /// - Parameter window: 表示対象の NSWindow
     func presentFrontmost(_ window: NSWindow) {
         presentedWindows.append(window)
+    }
+}
+
+/// テスト用のアプリアップデートサービスモック
+final class MockAppUpdateService: AppUpdateServicing, @unchecked Sendable {
+    /// fetchLatestStableRelease の返却結果スタブ
+    var stubbedReleaseResult: Result<AppReleaseInfo, Error> = .failure(AppUpdateError.noStableRelease)
+    /// fetchLatestStableRelease のカスタム非同期ハンドラ
+    var fetchHandler: (() async throws -> AppReleaseInfo)?
+    /// evaluateInstallEligibility の返却スタブ
+    var stubbedEligibility: UpdateInstallEligibility = .eligible
+    /// downloadVerifyAndScheduleInstall のカスタム非同期ハンドラ
+    var installHandler: ((AppReleaseInfo, @escaping @Sendable (UpdateProgressPhase) -> Void) async throws -> Void)?
+    /// fetchLatestStableRelease が呼ばれた回数
+    var fetchCallCount = 0
+    /// downloadVerifyAndScheduleInstall が呼ばれた回数
+    var installCallCount = 0
+    /// openReleasePage で開かれた URL 履歴
+    var openedURLs: [URL] = []
+
+    /// スタブまたはハンドラに従って最新安定版リリース情報を返す
+    /// - Returns: スタブ設定されたリリース情報
+    func fetchLatestStableRelease() async throws -> AppReleaseInfo {
+        fetchCallCount += 1
+        if let fetchHandler {
+            return try await fetchHandler()
+        }
+        return try stubbedReleaseResult.get()
+    }
+
+    /// スタブ設定された差し替え可否を返す
+    /// - Parameters:
+    ///   - appIdentity: 実行中アプリ識別情報
+    ///   - versionInfo: 実行中アプリバージョン情報
+    /// - Returns: スタブ設定された差し替え可否
+    func evaluateInstallEligibility(
+        appIdentity: AppIdentity,
+        versionInfo: AppVersionInfo
+    ) -> UpdateInstallEligibility {
+        stubbedEligibility
+    }
+
+    /// アップデート実行要求を記録し、ハンドラまたは進捗シミュレーションを実行する
+    /// - Parameters:
+    ///   - release: 適用対象リリース
+    ///   - appIdentity: 実行中アプリ識別情報
+    ///   - versionInfo: 実行中アプリバージョン情報
+    ///   - onProgress: 進捗通知コールバック
+    func downloadVerifyAndScheduleInstall(
+        release: AppReleaseInfo,
+        appIdentity: AppIdentity,
+        versionInfo: AppVersionInfo,
+        onProgress: @escaping @Sendable (UpdateProgressPhase) -> Void
+    ) async throws {
+        installCallCount += 1
+        if let installHandler {
+            try await installHandler(release, onProgress)
+            return
+        }
+        onProgress(.downloading(fractionCompleted: 0.5))
+        onProgress(.extracting)
+        onProgress(.verifying)
+        onProgress(.installing)
+    }
+
+    /// ブラウザ誘導先 URL を記録する
+    /// - Parameter url: 開く対象 URL
+    func openReleasePage(url: URL) {
+        openedURLs.append(url)
     }
 }

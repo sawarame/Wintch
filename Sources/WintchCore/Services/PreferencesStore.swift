@@ -23,6 +23,12 @@ public final class PreferencesStore: PreferencesStoring {
     /// アプリの表示言語設定の永続化に使用する UserDefaults キー
     private static let appLanguageKey = "dev.wintch.appLanguage"
 
+    /// 起動時のバージョンアップ自動チェック設定の永続化に使用する UserDefaults キー
+    private static let autoCheckForUpdatesKey = "dev.wintch.autoCheckForUpdates"
+
+    /// スキップ済みアップデートバージョンの永続化に使用する UserDefaults キー
+    private static let skippedUpdateVersionKey = "dev.wintch.skippedUpdateVersion"
+
     /// 使用する UserDefaults スイート名（nil の場合は standard）
     private let suiteName: String?
 
@@ -148,6 +154,40 @@ public final class PreferencesStore: PreferencesStoring {
     /// - Parameter language: 保存する言語設定
     public func saveAppLanguage(_ language: AppLanguage) {
         resolveDefaults().set(language.rawValue, forKey: Self.appLanguageKey)
+    }
+
+    /// 保存されている起動時のバージョンアップ自動チェック設定を読み込む
+    /// - Returns: 自動チェックを有効にする場合は true（未保存時はオプトイン原則に従いデフォルト false）
+    public func loadAutoCheckForUpdates() -> Bool {
+        resolveDefaults().bool(forKey: Self.autoCheckForUpdatesKey)
+    }
+
+    /// 起動時のバージョンアップ自動チェック設定を保存する
+    /// - Parameter enabled: 自動チェックを有効にする場合は true
+    public func saveAutoCheckForUpdates(_ enabled: Bool) {
+        resolveDefaults().set(enabled, forKey: Self.autoCheckForUpdatesKey)
+    }
+
+    /// 保存されているスキップ対象バージョン文字列を読み込む
+    /// - Returns: スキップ設定されているバージョン文字列（未保存・空文字時は nil）
+    public func loadSkippedUpdateVersion() -> String? {
+        guard let value = resolveDefaults().string(forKey: Self.skippedUpdateVersionKey) else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// スキップ対象バージョン文字列を保存する（nil または空文字の場合はキーを削除）
+    /// - Parameter version: スキップするバージョン文字列
+    public func saveSkippedUpdateVersion(_ version: String?) {
+        let defaults = resolveDefaults()
+        let trimmed = version?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            defaults.removeObject(forKey: Self.skippedUpdateVersionKey)
+        } else {
+            defaults.set(trimmed, forKey: Self.skippedUpdateVersionKey)
+        }
     }
 
     /// 設定用の UserDefaults インスタンスを解決する

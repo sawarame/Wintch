@@ -110,6 +110,15 @@ struct AppLocalizationTests {
             #expect(strings.shortcutConflictWithNormalSwitcher(forward: "⌥ + ⇥", reverse: "⌥ + ⇧ + ⇥").contains("⌥ + ⇥"))
             #expect(strings.shortcutConflictWithNormalSwitcher(forward: "⌥ + ⇥", reverse: "⌥ + ⇧ + ⇥").contains("⌥ + ⇧ + ⇥"))
             #expect(strings.shortcutConflictWithLauncher(shortcut: "⌥ + Space").contains("⌥ + Space"))
+            #expect(strings.updateWindowTitle(appName: "Wintch").contains("Wintch"))
+            #expect(strings.settingsUpdateAvailableMessage(version: "0.4.0").contains("0.4.0"))
+            #expect(strings.updateDevelopmentBuildNotice(latestVersion: "0.4.0").contains("0.4.0"))
+            #expect(!strings.updateDevelopmentBuildNotice(latestVersion: nil).isEmpty)
+            #expect(strings.updateInstallEligibilityReason(for: .eligible) == nil)
+            #expect(strings.updateInstallEligibilityReason(for: .appTranslocated) != nil)
+            #expect(strings.updateInstallEligibilityReason(for: .readOnlyOrUnwritable) != nil)
+            #expect(!strings.updateErrorMessage(for: .rateLimited).isEmpty)
+            #expect(!strings.updateErrorMessage(for: .teamIdentifierMismatch).isEmpty)
 
             // ドメイン列挙型の表示文言も全言語で非空であること
             for tab in SettingsTab.allCases {
