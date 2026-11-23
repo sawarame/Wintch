@@ -130,6 +130,41 @@ public enum AppStringKey: String, CaseIterable, Equatable, Sendable {
     case triggerKeyGraveDisplayName
     /// トリガーキー互換表示: バックスラッシュ
     case triggerKeyBackslashDisplayName
+
+    /// 設定一般: バージョンアップを自動チェックトグル
+    case settingsAutoCheckForUpdates
+    /// 設定一般: バージョンアップを自動チェック補足キャプション
+    case settingsAutoCheckForUpdatesCaption
+    /// 設定システム: アップデートを確認ボタン
+    case settingsCheckForUpdatesButton
+    /// 設定システム: アップデート確認中インジケータ文言
+    case settingsCheckingForUpdates
+    /// 設定システム: 最新バージョン利用中メッセージ
+    case settingsUpToDateMessage
+    /// 共通ボタン: GitHub Releases を開く
+    case settingsOpenGitHubReleasesButton
+    /// 更新ダイアログ: 見出し
+    case updateDialogTitle
+    /// 更新ダイアログ: 変更内容セクション見出し
+    case updateReleaseNotesSectionTitle
+    /// 更新ダイアログ: リリースノート未記載時の案内
+    case updateReleaseNotesEmpty
+    /// 更新ダイアログ: GitHub で変更内容を見るリンク
+    case updateViewOnGitHubButton
+    /// 更新ダイアログ: 今すぐアップデートボタン
+    case updateNowButton
+    /// 更新ダイアログ: 後でボタン
+    case updateLaterButton
+    /// 更新ダイアログ: このバージョンをスキップボタン
+    case updateSkipVersionButton
+    /// 更新ダイアログ: ダウンロード中ステータス
+    case updateStatusDownloading
+    /// 更新ダイアログ: 展開中ステータス
+    case updateStatusExtracting
+    /// 更新ダイアログ: 検証中ステータス
+    case updateStatusVerifying
+    /// 更新ダイアログ: 適用・再起動中ステータス
+    case updateStatusInstalling
 }
 
 /// 5 言語の翻訳セットを 1 項目としてまとめる内部値型（コンパイル時に翻訳漏れを検出する）
@@ -683,6 +718,144 @@ public struct AppStrings: Equatable, Sendable {
                 zhHant: "\\ (反斜線)",
                 ko: "\\ (백슬래시)"
             )
+
+        // MARK: - 自動バージョンアップ・手動確認
+        case .settingsAutoCheckForUpdates:
+            LocalizedEntry(
+                ja: "バージョンアップを自動チェック",
+                en: "Automatically check for updates",
+                zhHans: "自动检查更新",
+                zhHant: "自動檢查更新",
+                ko: "자동으로 업데이트 확인"
+            )
+        case .settingsAutoCheckForUpdatesCaption:
+            LocalizedEntry(
+                ja: "アプリ起動時に新しいバージョンがあるか自動でバックグラウンド確認します。",
+                en: "Checks in the background for a new version when the app launches.",
+                zhHans: "应用启动时在后台自动检查是否有新版本。",
+                zhHant: "應用程式啟動時在背景自動檢查是否有新版本。",
+                ko: "앱 실행 시 백그라운드에서 새 버전이 있는지 자동으로 확인합니다."
+            )
+        case .settingsCheckForUpdatesButton:
+            LocalizedEntry(
+                ja: "アップデートを確認",
+                en: "Check for Updates",
+                zhHans: "检查更新",
+                zhHant: "檢查更新",
+                ko: "업데이트 확인"
+            )
+        case .settingsCheckingForUpdates:
+            LocalizedEntry(
+                ja: "確認中...",
+                en: "Checking...",
+                zhHans: "正在检查...",
+                zhHant: "正在檢查...",
+                ko: "확인 중..."
+            )
+        case .settingsUpToDateMessage:
+            LocalizedEntry(
+                ja: "最新バージョンを使用しています。",
+                en: "You're up to date.",
+                zhHans: "当前已是最新版本。",
+                zhHant: "目前已是最新版本。",
+                ko: "최신 버전을 사용하고 있습니다."
+            )
+        case .settingsOpenGitHubReleasesButton:
+            LocalizedEntry(
+                ja: "GitHub Releases を開く",
+                en: "Open GitHub Releases",
+                zhHans: "打开 GitHub Releases",
+                zhHant: "開啟 GitHub Releases",
+                ko: "GitHub Releases 열기"
+            )
+        case .updateDialogTitle:
+            LocalizedEntry(
+                ja: "新しいバージョンが利用可能です",
+                en: "A New Version Is Available",
+                zhHans: "有新版本可用",
+                zhHant: "有新版本可用",
+                ko: "새 버전을 사용할 수 있습니다"
+            )
+        case .updateReleaseNotesSectionTitle:
+            LocalizedEntry(
+                ja: "変更内容",
+                en: "Release Notes",
+                zhHans: "更新内容",
+                zhHant: "更新內容",
+                ko: "변경 사항"
+            )
+        case .updateReleaseNotesEmpty:
+            LocalizedEntry(
+                ja: "リリースノートは記載されていません。",
+                en: "No release notes provided.",
+                zhHans: "未提供更新说明。",
+                zhHant: "未提供更新說明。",
+                ko: "릴리스 노트가 제공되지 않았습니다."
+            )
+        case .updateViewOnGitHubButton:
+            LocalizedEntry(
+                ja: "GitHub で変更内容を見る",
+                en: "View Release on GitHub",
+                zhHans: "在 GitHub 上查看更新内容",
+                zhHant: "在 GitHub 上查看更新內容",
+                ko: "GitHub에서 변경 사항 보기"
+            )
+        case .updateNowButton:
+            LocalizedEntry(
+                ja: "今すぐアップデート",
+                en: "Update Now",
+                zhHans: "立即更新",
+                zhHant: "立即更新",
+                ko: "지금 업데이트"
+            )
+        case .updateLaterButton:
+            LocalizedEntry(
+                ja: "後で",
+                en: "Later",
+                zhHans: "稍后",
+                zhHant: "稍後",
+                ko: "나중에"
+            )
+        case .updateSkipVersionButton:
+            LocalizedEntry(
+                ja: "このバージョンをスキップ",
+                en: "Skip This Version",
+                zhHans: "跳过此版本",
+                zhHant: "略過此版本",
+                ko: "이 버전 건너뛰기"
+            )
+        case .updateStatusDownloading:
+            LocalizedEntry(
+                ja: "アップデートをダウンロードしています...",
+                en: "Downloading update...",
+                zhHans: "正在下载更新...",
+                zhHant: "正在下載更新...",
+                ko: "업데이트를 다운로드하는 중..."
+            )
+        case .updateStatusExtracting:
+            LocalizedEntry(
+                ja: "アップデートを展開しています...",
+                en: "Extracting update...",
+                zhHans: "正在解压更新...",
+                zhHant: "正在解壓縮更新...",
+                ko: "업데이트 압축을 푸는 중..."
+            )
+        case .updateStatusVerifying:
+            LocalizedEntry(
+                ja: "署名と整合性を検証しています...",
+                en: "Verifying signature and integrity...",
+                zhHans: "正在验证签名和完整性...",
+                zhHant: "正在驗證簽章與完整性...",
+                ko: "서명 및 무결성을 확인하는 중..."
+            )
+        case .updateStatusInstalling:
+            LocalizedEntry(
+                ja: "アップデートを適用して再起動しています...",
+                en: "Installing update and restarting...",
+                zhHans: "正在应用更新并重启...",
+                zhHant: "正在套用更新並重新啟動...",
+                ko: "업데이트를 적용하고 재시작하는 중..."
+            )
         }
     }
 
@@ -780,6 +953,40 @@ public struct AppStrings: Equatable, Sendable {
     public var untitledWindow: String { text(for: .untitledWindow) }
     /// ウィンドウ表示補助: 不明アプリ
     public var unknownApplication: String { text(for: .unknownApplication) }
+    /// 設定一般: バージョンアップを自動チェック
+    public var settingsAutoCheckForUpdates: String { text(for: .settingsAutoCheckForUpdates) }
+    /// 設定一般: バージョンアップを自動チェック補足
+    public var settingsAutoCheckForUpdatesCaption: String { text(for: .settingsAutoCheckForUpdatesCaption) }
+    /// 設定システム: アップデートを確認ボタン
+    public var settingsCheckForUpdatesButton: String { text(for: .settingsCheckForUpdatesButton) }
+    /// 設定システム: アップデート確認中
+    public var settingsCheckingForUpdates: String { text(for: .settingsCheckingForUpdates) }
+    /// 設定システム: 最新バージョン利用中メッセージ
+    public var settingsUpToDateMessage: String { text(for: .settingsUpToDateMessage) }
+    /// 共通ボタン: GitHub Releases を開く
+    public var settingsOpenGitHubReleasesButton: String { text(for: .settingsOpenGitHubReleasesButton) }
+    /// 更新ダイアログ: 見出し
+    public var updateDialogTitle: String { text(for: .updateDialogTitle) }
+    /// 更新ダイアログ: 変更内容見出し
+    public var updateReleaseNotesSectionTitle: String { text(for: .updateReleaseNotesSectionTitle) }
+    /// 更新ダイアログ: リリースノート未記載時案内
+    public var updateReleaseNotesEmpty: String { text(for: .updateReleaseNotesEmpty) }
+    /// 更新ダイアログ: GitHub で変更内容を見る
+    public var updateViewOnGitHubButton: String { text(for: .updateViewOnGitHubButton) }
+    /// 更新ダイアログ: 今すぐアップデート
+    public var updateNowButton: String { text(for: .updateNowButton) }
+    /// 更新ダイアログ: 後で
+    public var updateLaterButton: String { text(for: .updateLaterButton) }
+    /// 更新ダイアログ: このバージョンをスキップ
+    public var updateSkipVersionButton: String { text(for: .updateSkipVersionButton) }
+    /// 更新ダイアログ: ダウンロード中
+    public var updateStatusDownloading: String { text(for: .updateStatusDownloading) }
+    /// 更新ダイアログ: 展開中
+    public var updateStatusExtracting: String { text(for: .updateStatusExtracting) }
+    /// 更新ダイアログ: 検証中
+    public var updateStatusVerifying: String { text(for: .updateStatusVerifying) }
+    /// 更新ダイアログ: 適用・再起動中
+    public var updateStatusInstalling: String { text(for: .updateStatusInstalling) }
 
     // MARK: - 動的パラメータ付き文言
 
@@ -929,6 +1136,295 @@ public struct AppStrings: Equatable, Sendable {
             "與搜尋啟動器快速鍵（\(shortcut)）衝突，無法設定。"
         case .korean:
             "검색 런처 단축키(\(shortcut))와 중복되어 설정할 수 없습니다."
+        }
+    }
+
+    /// アップデート確認ウィンドウのタイトルバー文言を生成する
+    /// - Parameter appName: アプリケーション表示名
+    /// - Returns: ローカライズ済みアップデートウィンドウタイトル
+    public func updateWindowTitle(appName: String) -> String {
+        switch language {
+        case .japanese: "\(appName) のアップデート"
+        case .english: "Update \(appName)"
+        case .simplifiedChinese: "更新 \(appName)"
+        case .traditionalChinese: "更新 \(appName)"
+        case .korean: "\(appName) 업데이트"
+        }
+    }
+
+    /// 新バージョン検出時の設定画面通知文言を生成する
+    /// - Parameter version: 検出された新バージョン文字列
+    /// - Returns: ローカライズ済み通知文言
+    public func settingsUpdateAvailableMessage(version: String) -> String {
+        switch language {
+        case .japanese: "新しいバージョン（v\(version)）が利用可能です。"
+        case .english: "A new version (v\(version)) is available."
+        case .simplifiedChinese: "有新版本（v\(version)）可用。"
+        case .traditionalChinese: "有新版本（v\(version)）可用。"
+        case .korean: "새 버전(v\(version))을 사용할 수 있습니다."
+        }
+    }
+
+    /// ローカル開発版での手動アップデート確認時に表示する案内文言を生成する
+    /// - Parameter latestVersion: 取得できた最新安定版バージョン文字列（未取得時は nil）
+    /// - Returns: ローカライズ済み開発版案内文言
+    public func updateDevelopmentBuildNotice(latestVersion: String?) -> String {
+        if let latestVersion {
+            switch language {
+            case .japanese:
+                "開発版を実行中のためアプリ内自動アップデートは無効です（最新安定版: v\(latestVersion)）。"
+            case .english:
+                "In-app updates are disabled in development builds (latest stable: v\(latestVersion))."
+            case .simplifiedChinese:
+                "开发版本已禁用应用内自动更新（最新稳定版：v\(latestVersion)）。"
+            case .traditionalChinese:
+                "開發版本已停用應用程式內自動更新（最新穩定版：v\(latestVersion)）。"
+            case .korean:
+                "개발 빌드에서는 앱 내 자동 업데이트가 비활성화되어 있습니다(최신 안정 버전: v\(latestVersion))."
+            }
+        } else {
+            switch language {
+            case .japanese:
+                "開発版を実行中のためアプリ内自動アップデートは無効です。"
+            case .english:
+                "In-app updates are disabled in development builds."
+            case .simplifiedChinese:
+                "开发版本已禁用应用内自动更新。"
+            case .traditionalChinese:
+                "開發版本已停用應用程式內自動更新。"
+            case .korean:
+                "개발 빌드에서는 앱 내 자동 업데이트가 비활성화되어 있습니다."
+            }
+        }
+    }
+
+    /// アプリ内自動差し替えが利用できない環境における理由説明文言を生成する
+    /// - Parameter eligibility: 差し替え可否判定結果
+    /// - Returns: ローカライズ済み理由説明（`.eligible` 時は nil）
+    public func updateInstallEligibilityReason(for eligibility: UpdateInstallEligibility) -> String? {
+        switch eligibility {
+        case .eligible:
+            return nil
+        case .developmentBuild:
+            return updateDevelopmentBuildNotice(latestVersion: nil)
+        case .appTranslocated:
+            return switch language {
+            case .japanese:
+                "アプリが隔離環境（App Translocation）から起動されているため自動差し替えできません。アプリケーションフォルダへ移動するか、GitHub Releases から手動で更新してください。"
+            case .english:
+                "Automatic replacement is unavailable while running from App Translocation. Move the app to Applications or update manually from GitHub Releases."
+            case .simplifiedChinese:
+                "应用正在隔离环境（App Translocation）中运行，无法自动替换。请将应用移至“应用程序”文件夹，或从 GitHub Releases 手动更新。"
+            case .traditionalChinese:
+                "應用程式正在隔離環境（App Translocation）中執行，無法自動取代。請將應用程式移至「應用程式」資料夾，或從 GitHub Releases 手動更新。"
+            case .korean:
+                "앱이 App Translocation 격리 환경에서 실행 중이어서 자동 교체를 수행할 수 없습니다. 응용 프로그램 폴더로 이동하거나 GitHub Releases에서 수동으로 업데이트해 주세요."
+            }
+        case .notAppBundle:
+            return switch language {
+            case .japanese:
+                ".app バンドルとして実行されていないため自動差し替えできません。GitHub Releases から手動で更新してください。"
+            case .english:
+                "Automatic replacement requires running from a .app bundle. Please update manually from GitHub Releases."
+            case .simplifiedChinese:
+                "当前未作为 .app 应用包运行，无法自动替换。请从 GitHub Releases 手动更新。"
+            case .traditionalChinese:
+                "目前未作為 .app 應用程式套件執行，無法自動取代。請從 GitHub Releases 手動更新。"
+            case .korean:
+                ".app 번들로 실행 중이 아니어서 자동 교체를 수행할 수 없습니다. GitHub Releases에서 수동으로 업데이트해 주세요."
+            }
+        case .readOnlyOrUnwritable:
+            return switch language {
+            case .japanese:
+                "現在の配置先に書き込み権限がないか読み取り専用ボリューム上のため、自動差し替えできません。GitHub Releases から手動で更新してください。"
+            case .english:
+                "Automatic replacement is unavailable because the app location is read-only or not writable. Please update manually from GitHub Releases."
+            case .simplifiedChinese:
+                "当前位置位于只读卷或缺少写入权限，无法自动替换。请从 GitHub Releases 手动更新。"
+            case .traditionalChinese:
+                "目前位置位於唯讀磁碟區或缺少寫入權限，無法自動取代。請從 GitHub Releases 手動更新。"
+            case .korean:
+                "현재 위치가 읽기 전용 볼륨이거나 쓰기 권한이 없어 자동 교체를 수행할 수 없습니다. GitHub Releases에서 수동으로 업데이트해 주세요."
+            }
+        }
+    }
+
+    /// アップデート処理エラーに対応するユーザー向けメッセージを生成する
+    /// - Parameter error: 発生したアップデートエラー
+    /// - Returns: ローカライズ済みエラーメッセージ
+    public func updateErrorMessage(for error: AppUpdateError) -> String {
+        switch error {
+        case .rateLimited:
+            switch language {
+            case .japanese:
+                "GitHub API のアクセス上限に達しました。しばらく時間をおいてから再試行してください。"
+            case .english:
+                "GitHub API rate limit reached. Please try again later."
+            case .simplifiedChinese:
+                "已达到 GitHub API 访问限制，请稍后再试。"
+            case .traditionalChinese:
+                "已達到 GitHub API 存取上限，請稍後再試。"
+            case .korean:
+                "GitHub API 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요."
+            }
+        case let .invalidHTTPStatus(code):
+            switch language {
+            case .japanese:
+                "アップデートの確認に失敗しました（HTTP \(code)）。"
+            case .english:
+                "Failed to check for updates (HTTP \(code))."
+            case .simplifiedChinese:
+                "检查更新失败（HTTP \(code)）。"
+            case .traditionalChinese:
+                "檢查更新失敗（HTTP \(code)）。"
+            case .korean:
+                "업데이트 확인에 실패했습니다(HTTP \(code))."
+            }
+        case let .networkError(detail):
+            switch language {
+            case .japanese:
+                "通信エラーが発生しました: \(detail)"
+            case .english:
+                "Network error: \(detail)"
+            case .simplifiedChinese:
+                "发生网络错误：\(detail)"
+            case .traditionalChinese:
+                "發生網路錯誤：\(detail)"
+            case .korean:
+                "네트워크 오류가 발생했습니다: \(detail)"
+            }
+        case .invalidResponse:
+            switch language {
+            case .japanese:
+                "リリース情報の解析に失敗しました。"
+            case .english:
+                "Failed to parse release information."
+            case .simplifiedChinese:
+                "解析发布信息失败。"
+            case .traditionalChinese:
+                "解析發佈資訊失敗。"
+            case .korean:
+                "릴리스 정보를 해석하지 못했습니다."
+            }
+        case .noStableRelease:
+            switch language {
+            case .japanese:
+                "利用可能な安定版リリースが見つかりませんでした。"
+            case .english:
+                "No stable release was found."
+            case .simplifiedChinese:
+                "未找到可用的稳定版本。"
+            case .traditionalChinese:
+                "找不到可用的穩定版本。"
+            case .korean:
+                "사용 가능한 안정 버전을 찾을 수 없습니다."
+            }
+        case let .missingReleaseAsset(expectedName):
+            switch language {
+            case .japanese:
+                "配布用ファイル（\(expectedName)）がリリースに見つかりませんでした。"
+            case .english:
+                "Release asset (\(expectedName)) was not found."
+            case .simplifiedChinese:
+                "在发布中未找到分发文件（\(expectedName)）。"
+            case .traditionalChinese:
+                "在發佈中找不到發佈檔案（\(expectedName)）。"
+            case .korean:
+                "릴리스에서 배포 파일(\(expectedName))을 찾을 수 없습니다."
+            }
+        case .untrustedDownloadURL:
+            switch language {
+            case .japanese:
+                "信頼できないダウンロード URL が検出されたため処理を中止しました。"
+            case .english:
+                "Update aborted because an untrusted download URL was detected."
+            case .simplifiedChinese:
+                "检测到不受信任的下载链接，已中止更新。"
+            case .traditionalChinese:
+                "偵測到不受信任的下載網址，已中止更新。"
+            case .korean:
+                "신뢰할 수 없는 다운로드 URL이 감지되어 업데이트를 중단했습니다."
+            }
+        case .checksumMismatch:
+            switch language {
+            case .japanese:
+                "ダウンロードファイルのチェックサム検証に失敗したため更新を中止しました。"
+            case .english:
+                "Update aborted because the downloaded file checksum did not match."
+            case .simplifiedChinese:
+                "下载文件校验和验证失败，已中止更新。"
+            case .traditionalChinese:
+                "下載檔案雜湊值驗證失敗，已中止更新。"
+            case .korean:
+                "다운로드한 파일의 체크섬 검증에 실패하여 업데이트를 중단했습니다."
+            }
+        case let .extractionFailed(detail):
+            switch language {
+            case .japanese:
+                "アップデートファイルの展開に失敗しました: \(detail)"
+            case .english:
+                "Failed to extract the update archive: \(detail)"
+            case .simplifiedChinese:
+                "解压更新文件失败：\(detail)"
+            case .traditionalChinese:
+                "解壓縮更新檔案失敗：\(detail)"
+            case .korean:
+                "업데이트 파일 압축 해제에 실패했습니다: \(detail)"
+            }
+        case let .invalidBundleMetadata(detail):
+            switch language {
+            case .japanese:
+                "ダウンロードされたアプリのバンドル情報検証に失敗しました（\(detail)）。"
+            case .english:
+                "Downloaded app bundle metadata verification failed (\(detail))."
+            case .simplifiedChinese:
+                "已下载应用的包信息验证失败（\(detail)）。"
+            case .traditionalChinese:
+                "已下載應用程式的套件資訊驗證失敗（\(detail)）。"
+            case .korean:
+                "다운로드한 앱 번들 메타데이터 검증에 실패했습니다(\(detail))."
+            }
+        case let .codeSignatureInvalid(detail):
+            switch language {
+            case .japanese:
+                "コード署名の検証に失敗したため更新を中止しました（\(detail)）。"
+            case .english:
+                "Update aborted because code signature verification failed (\(detail))."
+            case .simplifiedChinese:
+                "代码签名验证失败，已中止更新（\(detail)）。"
+            case .traditionalChinese:
+                "程式碼簽章驗證失敗，已中止更新（\(detail)）。"
+            case .korean:
+                "코드 서명 검증에 실패하여 업데이트를 중단했습니다(\(detail))."
+            }
+        case .teamIdentifierMismatch:
+            switch language {
+            case .japanese:
+                "署名者（Developer ID）の一致を確認できなかったため更新を中止しました。"
+            case .english:
+                "Update aborted because the Developer ID Team Identifier could not be matched."
+            case .simplifiedChinese:
+                "无法确认签名者（Developer ID）一致，已中止更新。"
+            case .traditionalChinese:
+                "無法確認簽署者（Developer ID）一致，已中止更新。"
+            case .korean:
+                "서명자(Developer ID) 일치를 확인할 수 없어 업데이트를 중단했습니다."
+            }
+        case let .installNotEligible(eligibility):
+            updateInstallEligibilityReason(for: eligibility) ?? updateDevelopmentBuildNotice(latestVersion: nil)
+        case let .helperLaunchFailed(detail):
+            switch language {
+            case .japanese:
+                "アップデート適用プロセスの起動に失敗しました: \(detail)"
+            case .english:
+                "Failed to launch the update installer helper: \(detail)"
+            case .simplifiedChinese:
+                "启动更新安装助手失败：\(detail)"
+            case .traditionalChinese:
+                "啟動更新安裝輔助程式失敗：\(detail)"
+            case .korean:
+                "업데이트 적용 프로세스 시작에 실패했습니다: \(detail)"
+            }
         }
     }
 }

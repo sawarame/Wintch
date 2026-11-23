@@ -52,6 +52,14 @@ public struct SettingsView: View {
         )
     }
 
+    /// バージョンアップ自動チェック用の双方向バインディング
+    private var autoCheckForUpdatesBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isAutoCheckForUpdatesEnabled },
+            set: { viewModel.setAutoCheckForUpdates($0) }
+        )
+    }
+
     /// 通常スイッチャー表示形式用の双方向バインディング
     private var normalDisplayStyleBinding: Binding<SwitcherDisplayStyle> {
         Binding(
@@ -156,6 +164,15 @@ public struct SettingsView: View {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(strings.settingsAutoCheckForUpdates, isOn: autoCheckForUpdatesBinding)
+
+                Text(strings.settingsAutoCheckForUpdatesCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -345,6 +362,68 @@ public struct SettingsView: View {
             LabeledContent(strings.settingsVersionLabel) {
                 Text(versionInfo.displayVersionText(in: viewModel.resolvedLanguage))
                     .textSelection(.enabled)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Button(strings.settingsCheckForUpdatesButton) {
+                        viewModel.checkForUpdatesManually()
+                    }
+                    .disabled(viewModel.isCheckingForUpdates)
+
+                    if viewModel.isCheckingForUpdates {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(strings.settingsCheckingForUpdates)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let statusMessage = viewModel.manualUpdateStatusMessage {
+                    manualUpdateFeedbackView(message: statusMessage)
+                }
+            }
+        }
+    }
+
+    /// 手動アップデート確認の結果メッセージと必要に応じた GitHub Releases 導線を表示する
+    /// - Parameter message: ローカライズ済み状態メッセージ
+    /// - Returns: 状態に応じたフィードバックビュー
+    @ViewBuilder
+    private func manualUpdateFeedbackView(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            switch viewModel.manualUpdateCheckState {
+            case .upToDate:
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .updateAvailable:
+                Label(message, systemImage: "arrow.down.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .developmentBuild:
+                Label(message, systemImage: "info.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .failed:
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .idle, .checking:
+                EmptyView()
+            }
+
+            if viewModel.shouldShowOpenReleasesLink {
+                Button(strings.settingsOpenGitHubReleasesButton) {
+                    viewModel.openUpdateReleasePage()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
             }
         }
     }

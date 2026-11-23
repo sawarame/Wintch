@@ -18,6 +18,7 @@ Wintch プロジェクトで使用されている技術スタック、アーキ�
   - **Carbon (`RegisterEventHotKey`, `InstallEventHandler`)**: セキュア入力保護下での代替ホットキー検知
   - **ScreenCaptureKit (`SCShareableContent`, `SCScreenshotManager`)**: 「キャプチャ表示型」オプトイン選択時の非同期ウィンドウサムネイル取得
   - **ServiceManagement (`SMAppService`)**: ログイン時自動起動の登録・解除
+  - **Security / CryptoKit / Foundation (`URLSession`, `SecStaticCode`, `SHA256`)**: GitHub Releases API からの安定版確認・配布 ZIP ダウンロード・SHA-256／コード署名／Team ID 検証・分離ヘルパーによる安全な `.app` 差し替え再起動
 - **テストフレームワーク**: Swift Testing（`import Testing`）
 
 ---
@@ -71,6 +72,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── AppSearchEngine.swift            # アプリ起動候補のファジー検索・スコア順ソート
 │       │   ├── AppSearchResult.swift            # アプリ検索結果・ハイライト範囲モデル
 │       │   ├── AppStrings.swift                 # 型安全な 5 言語 UI ローカライズテーブル
+│       │   ├── AppUpdateModels.swift            # リリースモデル・GitHub API 解析・URL検証・更新/差し替え可否判定
 │       │   ├── AppVersionInfo.swift             # バンドル情報からのバージョン・著作権抽出
 │       │   ├── AppWindowProfile.swift           # バックキングウィンドウ除外・アプリ別ウィンドウプロファイル
 │       │   ├── FuzzySearchMatcher.swift         # スペース区切り AND ファジー検索・ハイライト範囲算出
@@ -81,6 +83,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── LauncherShortcutPreference.swift # 検索ランチャーショートカット設定・キーラベル解決
 │       │   ├── RawWindowCandidate.swift         # フィルタリング前の生ウィンドウ候補モデル
 │       │   ├── ScreenRecordingPermissionStatus.swift # 画面収録権限状態
+│       │   ├── SemanticVersion.swift            # SemVer 2.0 解析・優先順位比較ロジック
 │       │   ├── SettingsTab.swift                # 設定画面左サイドバーの4メニュー定義
 │       │   ├── ShortcutConflictValidator.swift  # 通常スイッチャー・ランチャー間の双方向競合検証
 │       │   ├── ShortcutPreference.swift         # 通常スイッチャーショートカット設定（旧形式マイグレーション含む）
@@ -99,6 +102,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       ├── Services/
 │       │   ├── Protocols/                       # テスト用モック差し替えのためのプロトコル群
 │       │   ├── AccessibilityPermissionService.swift
+│       │   ├── AppUpdateService.swift           # GitHub Releases 確認・ZIP ダウンロード・署名検証・安全差し替え再起動
 │       │   ├── HotKeyMonitorService.swift
 │       │   ├── IconProviderService.swift
 │       │   ├── InstalledAppService.swift
@@ -110,18 +114,20 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   └── WindowService.swift
 │       ├── ViewModels/
 │       │   ├── PermissionGuideViewModel.swift   # 権限誘導画面の状態・アクション管理
-│       │   ├── SettingsViewModel.swift          # 設定画面の選択メニュー・ショートカット記録・検証・権限管理
-│       │   └── SwitcherViewModel.swift          # スイッチャー／ランチャー表示・検索・終了操作・キャプチャ統括
+│       │   ├── SettingsViewModel.swift          # 設定画面の選択メニュー・ショートカット記録・検証・権限・手動更新管理
+│       │   ├── SwitcherViewModel.swift          # スイッチャー／ランチャー表示・検索・終了操作・キャプチャ統括
+│       │   └── UpdateViewModel.swift            # 更新確認・進捗・スキップ・差し替えフォールバック制御
 │       └── Views/
 │           ├── LauncherSearchField.swift        # IME 優先 NSTextField ラッパー検索入力欄
 │           ├── PermissionGuideView.swift        # アクセシビリティ権限誘導画面
-│           ├── SettingsView.swift               # 左サイドバー付き設定画面（バージョン情報統合）
+│           ├── SettingsView.swift               # 左サイドバー付き設定画面（バージョン情報・手動更新統合）
 │           ├── ShortcutRecorderView.swift       # ショートカットキー入力キャプチャビュー
 │           ├── SwitcherCaptureGridView.swift    # キャプチャ表示型グリッドビュー
 │           ├── SwitcherContentView.swift        # モード・表示形式に応じたコンテナ分岐ビュー
 │           ├── SwitcherIconGridView.swift       # アイコン型グリッドビュー
 │           ├── SwitcherListView.swift           # リスト型スイッチャー＆検索ランチャー統合ビュー
-│           └── SwitcherPanel.swift              # 非アクティブ表示対応フローティング NSPanel ラッパー
+│           ├── SwitcherPanel.swift              # 非アクティブ表示対応フローティング NSPanel ラッパー
+│           └── UpdatePromptView.swift           # 新バージョン更新確認・進捗・フォールバックダイアログ
 └── Tests/
     └── WintchCoreTests/                         # Swift Testing ユニットテストおよび Mocks/
 ```

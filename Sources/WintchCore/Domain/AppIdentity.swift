@@ -77,6 +77,13 @@ public struct AppIdentity: Equatable, Sendable {
         AppStrings(language: language).permissionGuideWindowTitle(appName: displayName)
     }
 
+    /// 指定言語でのアップデート確認ウィンドウタイトル文言を返す
+    /// - Parameter language: 表示対象の解決済み言語
+    /// - Returns: ローカライズ済みのアップデートウィンドウタイトル
+    public func updateWindowTitle(in language: ResolvedAppLanguage) -> String {
+        AppStrings(language: language).updateWindowTitle(appName: displayName)
+    }
+
     /// 権限誘導画面のステップ 2 に表示するスイッチ許可案内文言（互換用：日本語既定）
     public var accessibilitySwitchInstruction: String {
         accessibilitySwitchInstruction(in: .japanese)

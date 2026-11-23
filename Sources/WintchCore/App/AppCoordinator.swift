@@ -1,19 +1,29 @@
 import AppKit
 import Observation
+import OSLog
 import SwiftUI
 
 /// アプリケーション全体の依存関係、権限監視、メニューバー、各種ウィンドウ表示を統括するコーディネーター
 @MainActor
 @Observable
 public final class AppCoordinator {
+    /// 診断ログ出力用ロガー
+    private static let logger = Logger(subsystem: "dev.wintch.Wintch", category: "AppCoordinator")
+
     /// 現在のアクセシビリティ権限状態
     public private(set) var permissionStatus: AccessibilityPermissionStatus
 
     /// 権限未許可時の誘導画面を表示すべきかどうか
     public var isPermissionGuidePresented: Bool = false
 
+    /// 更新確認ダイアログを表示中かどうか
+    public private(set) var isUpdatePromptPresented: Bool = false
+
     /// 実行中アプリケーションの表示名・識別情報
     public let appIdentity: AppIdentity
+
+    /// 実行中アプリケーションのバージョン情報
+    public let versionInfo: AppVersionInfo
 
     /// スイッチャーパネルの状態管理 ViewModel
     public let switcherViewModel: SwitcherViewModel
@@ -23,6 +33,9 @@ public final class AppCoordinator {
 
     /// 権限誘導画面の状態管理 ViewModel
     public let permissionGuideViewModel: PermissionGuideViewModel
+
+    /// 更新確認ダイアログの状態管理 ViewModel
+    public let updateViewModel: UpdateViewModel
 
     /// 現在の通常スイッチャー表示形式
     public var normalDisplayStyle: SwitcherDisplayStyle {
@@ -79,6 +92,8 @@ public final class AppCoordinator {
     private let windowCaptureService: any WindowCaptureServicing
     /// 標準ウィンドウ最前面表示プレゼンター
     private let windowFrontPresenter: any WindowFrontPresenting
+    /// アップデート確認・適用サービス
+    private let updateService: any AppUpdateServicing
 
     /// フローティングスイッチャーパネル（遅延生成）
     private var switcherPanel: SwitcherPanel?
@@ -86,6 +101,12 @@ public final class AppCoordinator {
     private var settingsWindow: NSWindow?
     /// 権限誘導画面ウィンドウ（遅延生成）
     private var permissionWindow: NSWindow?
+    /// 更新確認ダイアログウィンドウ（遅延生成）
+    private var updateWindow: NSWindow?
+    /// 権限誘導画面の表示中に保留された自動チェック検出アップデート情報
+    private var pendingAutomaticUpdate: (release: AppReleaseInfo, currentVersion: SemanticVersion)?
+    /// 起動時自動アップデート確認タスク
+    private var automaticUpdateCheckTask: Task<Void, Never>?
     /// 開始済みフラグ
     private var isStarted = false
 
@@ -119,7 +140,9 @@ public final class AppCoordinator {
     ///   - screenRecordingPermissionService: 画面収録権限サービス
     ///   - windowCaptureService: ウィンドウキャプチャサービス
     ///   - windowFrontPresenter: 標準ウィンドウ最前面表示プレゼンター
+    ///   - updateService: アップデート確認・適用サービス
     ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
+    ///   - versionInfo: アプリバージョン情報（既定値はメインバンドルから取得）
     ///   - preferredLanguagesProvider: システム優先言語配列の提供クロージャ（既定値は `Locale.preferredLanguages`）
     public init(
         windowService: any WindowServicing,
@@ -132,10 +155,13 @@ public final class AppCoordinator {
         screenRecordingPermissionService: any ScreenRecordingPermissionServicing = ScreenRecordingPermissionService(),
         windowCaptureService: any WindowCaptureServicing = WindowCaptureService(),
         windowFrontPresenter: any WindowFrontPresenting = WindowFrontPresenter(),
+        updateService: any AppUpdateServicing = AppUpdateService(),
         appIdentity: AppIdentity = .current,
+        versionInfo: AppVersionInfo = .current,
         preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages }
     ) {
         self.appIdentity = appIdentity
+        self.versionInfo = versionInfo
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
         self.permissionService = permissionService
@@ -146,6 +172,7 @@ public final class AppCoordinator {
         self.screenRecordingPermissionService = screenRecordingPermissionService
         self.windowCaptureService = windowCaptureService
         self.windowFrontPresenter = windowFrontPresenter
+        self.updateService = updateService
         self.permissionStatus = permissionService.currentStatus()
 
         let initialDisplayStyle = preferencesStore.loadNormalDisplayStyle()
@@ -158,6 +185,9 @@ public final class AppCoordinator {
             launchAtLoginService: launchAtLoginService,
             permissionService: permissionService,
             screenRecordingPermissionService: screenRecordingPermissionService,
+            updateService: updateService,
+            appIdentity: appIdentity,
+            versionInfo: versionInfo,
             preferredLanguagesProvider: preferredLanguagesProvider
         )
         let initialResolvedLanguage = settingsViewModel.resolvedLanguage
@@ -178,6 +208,13 @@ public final class AppCoordinator {
         )
         self.permissionGuideViewModel = PermissionGuideViewModel(
             permissionService: permissionService,
+            resolvedLanguage: initialResolvedLanguage
+        )
+        self.updateViewModel = UpdateViewModel(
+            updateService: updateService,
+            preferencesStore: preferencesStore,
+            appIdentity: appIdentity,
+            versionInfo: versionInfo,
             resolvedLanguage: initialResolvedLanguage
         )
 
@@ -214,6 +251,75 @@ public final class AppCoordinator {
 
         // 初回ランチャー検索から即時応答できるようインストール済みアプリ一覧をバックグラウンドで事前収集する
         switcherViewModel.preloadInstalledApps()
+
+        // オプトイン設定が有効な配布版のみ、起動・ホットキー監視をブロックせず非同期で最新バージョンを確認する
+        scheduleAutomaticUpdateCheckIfNeeded()
+    }
+
+    /// 起動時の自動アップデート確認を必要に応じて非同期バックグラウンド実行する
+    private func scheduleAutomaticUpdateCheckIfNeeded() {
+        let isAutoCheckEnabled = preferencesStore.loadAutoCheckForUpdates()
+        guard UpdateCheckPolicy.shouldPerformAutomaticCheck(
+            isAutoCheckEnabled: isAutoCheckEnabled,
+            appIdentity: appIdentity,
+            versionInfo: versionInfo
+        ) else {
+            return
+        }
+
+        automaticUpdateCheckTask?.cancel()
+        let updateService = self.updateService
+        let appIdentity = self.appIdentity
+        let versionInfo = self.versionInfo
+        let skippedVersion = preferencesStore.loadSkippedUpdateVersion()
+
+        automaticUpdateCheckTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let release = try await updateService.fetchLatestStableRelease()
+                guard !Task.isCancelled else { return }
+
+                let decision = UpdateCheckPolicy.evaluate(
+                    release: release,
+                    currentVersionInfo: versionInfo,
+                    appIdentity: appIdentity,
+                    skippedVersion: skippedVersion,
+                    trigger: .automatic
+                )
+                guard case let .updateAvailable(currentVersion, availableRelease) = decision else {
+                    return
+                }
+
+                // アクセシビリティ権限誘導画面の表示中は重複表示を避け、権限許可後に提示する
+                if self.isPermissionGuidePresented {
+                    self.pendingAutomaticUpdate = (availableRelease, currentVersion)
+                } else {
+                    self.presentUpdatePrompt(release: availableRelease, currentVersion: currentVersion)
+                }
+            } catch {
+                // 起動時自動チェックの通信エラーやレート制限はログ出力のみでサイレント終了する
+                Self.logger.info("起動時自動アップデート確認をスキップしました: \(error.localizedDescription, privacy: .public)")
+            }
+            self.automaticUpdateCheckTask = nil
+        }
+    }
+
+    /// 更新確認ダイアログを最前面に表示する
+    /// - Parameters:
+    ///   - release: 提示対象の新リリース情報
+    ///   - currentVersion: 現在のアプリバージョン
+    public func presentUpdatePrompt(release: AppReleaseInfo, currentVersion: SemanticVersion) {
+        pendingAutomaticUpdate = nil
+        updateViewModel.present(release: release, currentVersion: currentVersion)
+        isUpdatePromptPresented = true
+        let window = ensureUpdateWindow()
+        windowFrontPresenter.presentFrontmost(window)
+    }
+
+    /// 更新確認ダイアログを閉じる
+    public func closeUpdatePromptWindow() {
+        isUpdatePromptPresented = false
+        updateWindow?.orderOut(nil)
     }
 
     /// 設定画面を最前面に表示する
@@ -233,6 +339,7 @@ public final class AppCoordinator {
 
     /// アプリケーションを安全に終了する
     public func quit() {
+        automaticUpdateCheckTask?.cancel()
         hotKeyMonitor.stopMonitoring()
         windowService.stopObserving()
         permissionService.stopMonitoring()
@@ -285,6 +392,10 @@ public final class AppCoordinator {
             isPermissionGuidePresented = false
             permissionWindow?.orderOut(nil)
             windowService.startObserving()
+            // 権限誘導画面の表示中に保留していた起動時自動チェックの更新通知があればここで提示する
+            if let pending = pendingAutomaticUpdate {
+                presentUpdatePrompt(release: pending.release, currentVersion: pending.currentVersion)
+            }
         case .denied:
             transitionToDeniedState()
         }
@@ -379,6 +490,18 @@ public final class AppCoordinator {
         settingsViewModel.onAppLanguageChanged = { [weak self] _, newResolvedLanguage in
             self?.applyResolvedLanguage(newResolvedLanguage)
         }
+
+        settingsViewModel.onUpdateAvailable = { [weak self] release, currentVersion in
+            self?.presentUpdatePrompt(release: release, currentVersion: currentVersion)
+        }
+
+        updateViewModel.onCloseRequested = { [weak self] in
+            self?.closeUpdatePromptWindow()
+        }
+
+        updateViewModel.onQuitForRestartRequested = { [weak self] in
+            self?.quit()
+        }
     }
 
     /// 解決済み言語の変更を全 ViewModel・ウィンドウタイトル・権限誘導ウィンドウサイズへ即時反映する
@@ -386,7 +509,9 @@ public final class AppCoordinator {
     private func applyResolvedLanguage(_ language: ResolvedAppLanguage) {
         switcherViewModel.updateLanguage(language)
         permissionGuideViewModel.updateLanguage(language)
+        updateViewModel.updateLanguage(language)
         settingsWindow?.title = appIdentity.settingsWindowTitle(in: language)
+        updateWindow?.title = appIdentity.updateWindowTitle(in: language)
         if let permissionWindow {
             permissionWindow.title = appIdentity.permissionGuideWindowTitle(in: language)
             resizePermissionWindowToFit(permissionWindow)
@@ -438,7 +563,8 @@ public final class AppCoordinator {
         let hostingView = NSHostingView(
             rootView: SettingsView(
                 viewModel: settingsViewModel,
-                appIdentity: appIdentity
+                appIdentity: appIdentity,
+                versionInfo: versionInfo
             )
         )
         let contentSize = NSSize(
@@ -486,6 +612,36 @@ public final class AppCoordinator {
         window.contentView = hostingView
         window.setContentSize(contentSize)
         permissionWindow = window
+        return window
+    }
+
+    /// 更新確認ダイアログ用の NSWindow を必要に応じて生成して返す
+    /// - Returns: 設定済みの NSWindow
+    private func ensureUpdateWindow() -> NSWindow {
+        if let updateWindow {
+            return updateWindow
+        }
+        let hostingView = NSHostingView(
+            rootView: UpdatePromptView(
+                viewModel: updateViewModel,
+                appIdentity: appIdentity
+            )
+        )
+        let contentSize = NSSize(
+            width: UpdatePromptView.preferredWidth,
+            height: UpdatePromptView.preferredHeight
+        )
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = appIdentity.updateWindowTitle(in: resolvedLanguage)
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.setContentSize(contentSize)
+        updateWindow = window
         return window
     }
 }

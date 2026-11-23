@@ -57,4 +57,20 @@ public protocol PreferencesStoring: Sendable {
     /// アプリの表示言語設定を保存する
     /// - Parameter language: 保存する言語設定
     func saveAppLanguage(_ language: AppLanguage)
+
+    /// 保存されている起動時のバージョンアップ自動チェック設定を読み込む
+    /// - Returns: 自動チェックを有効にする場合は true（未保存時はデフォルト false）
+    func loadAutoCheckForUpdates() -> Bool
+
+    /// 起動時のバージョンアップ自動チェック設定を保存する
+    /// - Parameter enabled: 自動チェックを有効にする場合は true
+    func saveAutoCheckForUpdates(_ enabled: Bool)
+
+    /// 保存されているスキップ対象バージョン文字列を読み込む
+    /// - Returns: スキップ設定されているバージョン文字列（未保存時は nil）
+    func loadSkippedUpdateVersion() -> String?
+
+    /// スキップ対象バージョン文字列を保存する（nil または空文字で解除）
+    /// - Parameter version: スキップするバージョン文字列
+    func saveSkippedUpdateVersion(_ version: String?)
 }
