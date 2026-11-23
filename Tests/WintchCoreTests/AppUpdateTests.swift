@@ -63,19 +63,26 @@ struct AppUpdateTests {
     }
 
     /// 非同期条件が満たされるまで短時間ポーリング待機するテストヘルパー
+    /// 並列実行される他テストの `@MainActor` 占有で 1 回の待機中に実経過時間が伸びても誤タイムアウトしないよう、
+    /// 最低試行回数と十分なタイムアウト時間を併用する
     /// - Parameters:
-    ///   - timeoutNanoseconds: 最大待機ナノ秒（既定 1 秒）
+    ///   - timeoutNanoseconds: 最大待機ナノ秒（既定 15 秒）
+    ///   - minimumAttempts: 実時間に関わらず最低限保証する再試行回数（既定 50 回）
     ///   - condition: 終了条件クロージャ
     @MainActor
     private static func waitUntil(
-        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        timeoutNanoseconds: UInt64 = 15_000_000_000,
+        minimumAttempts: Int = 50,
         condition: @MainActor () -> Bool
     ) async {
         let start = DispatchTime.now().uptimeNanoseconds
+        var attempts = 0
         while !condition() {
-            if DispatchTime.now().uptimeNanoseconds - start >= timeoutNanoseconds {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start
+            if attempts >= minimumAttempts && elapsed >= timeoutNanoseconds {
                 break
             }
+            attempts += 1
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
@@ -754,7 +761,7 @@ struct AppUpdateTests {
         )
 
         coordinator.start()
-        await Self.waitUntil { coordinator.isUpdatePromptPresented }
+        await Self.waitUntil { !coordinator.isAutomaticUpdateCheckRunning }
         #expect(service.fetchCallCount == 1)
         #expect(coordinator.isUpdatePromptPresented == true)
         #expect(coordinator.updateViewModel.release == release)
@@ -780,8 +787,8 @@ struct AppUpdateTests {
             versionInfo: Self.makeVersionInfo("0.3.0")
         )
         skippedCoordinator.start()
-        await Self.waitUntil { skippedService.fetchCallCount == 1 }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await Self.waitUntil { !skippedCoordinator.isAutomaticUpdateCheckRunning }
+        #expect(skippedService.fetchCallCount == 1)
         #expect(skippedCoordinator.isUpdatePromptPresented == false)
 
         // 3. 通信エラー → サイレント終了（ダイアログ非表示）
@@ -803,8 +810,8 @@ struct AppUpdateTests {
             versionInfo: Self.makeVersionInfo("0.3.0")
         )
         errorCoordinator.start()
-        await Self.waitUntil { errorService.fetchCallCount == 1 }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await Self.waitUntil { !errorCoordinator.isAutomaticUpdateCheckRunning }
+        #expect(errorService.fetchCallCount == 1)
         #expect(errorCoordinator.isUpdatePromptPresented == false)
     }
 
@@ -836,8 +843,8 @@ struct AppUpdateTests {
         )
 
         coordinator.start()
-        await Self.waitUntil { service.fetchCallCount == 1 }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await Self.waitUntil { !coordinator.isAutomaticUpdateCheckRunning }
+        #expect(service.fetchCallCount == 1)
 
         // 権限誘導画面表示中は更新確認ダイアログを重複表示しない
         #expect(coordinator.isPermissionGuidePresented == true)

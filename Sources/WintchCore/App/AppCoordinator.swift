@@ -107,6 +107,10 @@ public final class AppCoordinator {
     private var pendingAutomaticUpdate: (release: AppReleaseInfo, currentVersion: SemanticVersion)?
     /// 起動時自動アップデート確認タスク
     private var automaticUpdateCheckTask: Task<Void, Never>?
+    /// 起動時自動アップデート確認タスクが実行中かどうか（テストでの確定完了待機用）
+    internal var isAutomaticUpdateCheckRunning: Bool {
+        automaticUpdateCheckTask != nil
+    }
     /// 開始済みフラグ
     private var isStarted = false
 
@@ -275,6 +279,7 @@ public final class AppCoordinator {
 
         automaticUpdateCheckTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.automaticUpdateCheckTask = nil }
             do {
                 let release = try await updateService.fetchLatestStableRelease()
                 guard !Task.isCancelled else { return }
@@ -300,7 +305,6 @@ public final class AppCoordinator {
                 // 起動時自動チェックの通信エラーやレート制限はログ出力のみでサイレント終了する
                 Self.logger.info("起動時自動アップデート確認をスキップしました: \(error.localizedDescription, privacy: .public)")
             }
-            self.automaticUpdateCheckTask = nil
         }
     }
 

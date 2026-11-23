@@ -990,12 +990,14 @@ struct SwitcherViewModelTests {
 
         var captureStartedContinuation: CheckedContinuation<Void, Never>?
         var captureResumeContinuation: CheckedContinuation<Void, Never>?
+        var captureCompletedContinuation: CheckedContinuation<Void, Never>?
         captureService.captureHandler = { _, onCaptured in
             captureStartedContinuation?.resume()
             await withCheckedContinuation { cont in
                 captureResumeContinuation = cont
             }
             onCaptured(102, freshImage2)
+            captureCompletedContinuation?.resume()
         }
 
         let viewModel = SwitcherViewModel(
@@ -1023,10 +1025,11 @@ struct SwitcherViewModelTests {
         #expect(viewModel.thumbnail(for: viewModel.entries[0]) === cachedImage1)
         #expect(viewModel.thumbnail(for: viewModel.entries[1]) == nil)
 
-        // 非同期キャプチャ完了で w2 のサムネイルが反映される
-        captureResumeContinuation?.resume()
-        await Task.yield()
-        await Task.yield()
+        // 非同期キャプチャ完了で w2 のサムネイルが反映されるまで確定待機する
+        await withCheckedContinuation { cont in
+            captureCompletedContinuation = cont
+            captureResumeContinuation?.resume()
+        }
         #expect(viewModel.thumbnail(for: viewModel.entries[1]) === freshImage2)
 
         // 3列×4件グリッドで4方向移動を検証（現在 index 1 -> 右:2 -> 下:3(最終行末尾) -> 上:0 -> 左:3）
@@ -1113,6 +1116,8 @@ struct SwitcherViewModelTests {
         screenRecordingService.stubbedStatus = .granted
         var session1Continuation: CheckedContinuation<Void, Never>?
         var session1Started: CheckedContinuation<Void, Never>?
+        var session1Completed: CheckedContinuation<Void, Never>?
+        var session2Completed: CheckedContinuation<Void, Never>?
         var callIndex = 0
         let staleImage = NSImage(size: NSSize(width: 50, height: 50))
         let freshImage = NSImage(size: NSSize(width: 80, height: 80))
@@ -1126,8 +1131,10 @@ struct SwitcherViewModelTests {
                 }
                 // 古いセッション側の遅延結果として別画像を通知する
                 onCaptured(201, staleImage)
+                session1Completed?.resume()
             } else {
                 onCaptured(202, freshImage)
+                session2Completed?.resume()
             }
         }
 
@@ -1136,12 +1143,16 @@ struct SwitcherViewModelTests {
             viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
         }
         viewModel.cancel()
-        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
-        await Task.yield()
+        await withCheckedContinuation { cont in
+            session2Completed = cont
+            viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        }
 
         // 古いセッションを完了させても世代不一致により 201 には誤反映されない
-        session1Continuation?.resume()
-        await Task.yield()
+        await withCheckedContinuation { cont in
+            session1Completed = cont
+            session1Continuation?.resume()
+        }
         #expect(viewModel.capturedThumbnails[201] == nil)
         #expect(viewModel.capturedThumbnails[202] === freshImage)
 
@@ -1199,8 +1210,9 @@ struct SwitcherViewModelTests {
 
         // 1回目の起動: 初回チェック時は許可扱いで開始し、非同期キャプチャ内で失効を検知して未許可へ切り替わる
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
-        await Task.yield()
-        await Task.yield()
+        for _ in 0..<200 where viewModel.isScreenRecordingGranted {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
 
         #expect(viewModel.isPresented == true)
         #expect(viewModel.isScreenRecordingGranted == false)
