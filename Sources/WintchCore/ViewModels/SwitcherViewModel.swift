@@ -81,6 +81,16 @@ public final class SwitcherViewModel {
         mode == .normal && normalDisplayStyle.usesGridLayout && !isNormalSwitcherGroupedByApp
     }
 
+    /// 現在の表示モード・表示形式・グルーピング設定に応じたパネルの垂直配置スタイル
+    /// 通常スイッチャーのグルーピング OFF かつキャプチャ表示型のみ従来通り画面中央に配置し、それ以外は上寄せ配置とする
+    public var panelVerticalPlacement: SwitcherPanelVerticalPlacement {
+        SwitcherPanelLayout.verticalPlacement(
+            mode: mode,
+            normalDisplayStyle: normalDisplayStyle,
+            isNormalSwitcherGroupedByApp: isNormalSwitcherGroupedByApp
+        )
+    }
+
     /// 通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されているか
     public var usesCaptureDisplayStyle: Bool {
         normalDisplayStyle == .capture || launcherDisplayStyle == .capture

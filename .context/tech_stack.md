@@ -90,6 +90,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── SwitcherDisplayStyle.swift       # 表示形式（リスト型 / アイコン型 / キャプチャ表示型）
 │       │   ├── SwitcherGridLayout.swift         # アイコン型・キャプチャグリッド列数算出・4 方向循環カーソル計算
 │       │   ├── SwitcherListRow.swift            # リスト表示用の統合行識別・構築ロジック
+│       │   ├── SwitcherPanelLayout.swift        # パネル垂直配置スタイル判定・座標計算・一覧最大高さ算出
 │       │   ├── SwitcherSelection.swift          # スイッチャー／ランチャーの選択インデックス・循環計算
 │       │   ├── WindowAppGrouping.swift          # アプリ単位の安定グルーピング・MRU 2 番目初期選択解決
 │       │   ├── WindowEntry.swift                # 表示対象ウィンドウドメインモデル
