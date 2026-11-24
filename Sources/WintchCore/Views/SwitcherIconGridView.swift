@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 画面中央のフローティングパネル内に表示される macOS Command+Tab 風のウィンドウアイコングリッドビュー
+/// フローティングパネル内に表示される macOS Command+Tab 風のウィンドウアイコングリッドビュー
 public struct SwitcherIconGridView: View {
     /// スイッチャーの状態管理を行う ViewModel
     private let viewModel: SwitcherViewModel
@@ -36,9 +36,11 @@ public struct SwitcherIconGridView: View {
         return tilesWidth + SwitcherGridLayout.gridPadding * 2
     }
 
-    /// グリッド領域の最大スクロール高さ
+    /// グリッド領域の最大スクロール高さ（上寄せ配置に合わせてディスプレイ有効高さから動的に算出する）
     private var maxScrollHeight: CGFloat {
-        min(max(viewModel.availableScreenSize.height * 0.72, 220), 560)
+        SwitcherPanelLayout.maxIconGridScrollHeight(
+            availableScreenHeight: viewModel.availableScreenSize.height
+        )
     }
 
     /// LazyVGrid に渡す固定幅カラム配列

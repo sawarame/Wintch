@@ -97,11 +97,16 @@ public final class SwitcherPanel: NSPanel {
         }
     }
 
-    /// 指定モードに応じて現在アクティブなディスプレイの中央にパネルを配置して前面表示する
+    /// 指定モードおよび垂直配置スタイルに応じて現在アクティブなディスプレイへパネルを配置して前面表示する
     /// - Parameters:
     ///   - mode: 表示するスイッチャーモード（.normal または .launcher）
     ///   - activateApp: 表示時に自アプリを一時アクティブ化するか（nil 時は .launcher のみ true）
-    public func show(mode: SwitcherMode, activateApp: Bool? = nil) {
+    ///   - verticalPlacement: パネルの垂直配置スタイル（既定値はディスプレイ上部寄りの上端固定 `.upperAnchored`）
+    public func show(
+        mode: SwitcherMode,
+        activateApp: Bool? = nil,
+        verticalPlacement: SwitcherPanelVerticalPlacement = .upperAnchored
+    ) {
         currentMode = mode
         let shouldActivate = activateApp ?? (mode == .launcher)
         didActivateAppForCurrentSession = shouldActivate
@@ -136,9 +141,12 @@ public final class SwitcherPanel: NSPanel {
         }
 
         if let screenFrame = targetScreen?.visibleFrame {
-            let originX = screenFrame.midX - (frame.width / 2.0)
-            let originY = screenFrame.midY - (frame.height / 2.0)
-            setFrameOrigin(NSPoint(x: originX, y: originY))
+            let origin = SwitcherPanelLayout.panelOrigin(
+                panelSize: frame.size,
+                in: screenFrame,
+                placement: verticalPlacement
+            )
+            setFrameOrigin(origin)
         } else {
             center()
         }
@@ -158,7 +166,7 @@ public final class SwitcherPanel: NSPanel {
 
     /// 通常スイッチャー用の従来互換メソッド（画面中央表示）
     public func showCentered() {
-        show(mode: .normal)
+        show(mode: .normal, verticalPlacement: .centered)
     }
 
     /// 表示中に上端位置を固定したままコンテンツ高さの変化に応じて下方向へリサイズする

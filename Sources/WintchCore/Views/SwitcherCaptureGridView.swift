@@ -44,9 +44,11 @@ public struct SwitcherCaptureGridView: View {
         return viewModel.isScreenRecordingGranted ? baseWidth : max(baseWidth, Self.minWidthWithBanner)
     }
 
-    /// グリッド領域の最大スクロール高さ
+    /// グリッド領域の最大スクロール高さ（中央配置のキャプチャ表示板は従来の上限を維持する）
     private var maxScrollHeight: CGFloat {
-        min(max(viewModel.availableScreenSize.height * 0.72, 220), 560)
+        SwitcherPanelLayout.maxCenteredCaptureGridScrollHeight(
+            availableScreenHeight: viewModel.availableScreenSize.height
+        )
     }
 
     /// LazyVGrid に渡す固定幅カラム配列

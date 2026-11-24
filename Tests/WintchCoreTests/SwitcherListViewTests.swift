@@ -129,8 +129,15 @@ struct SwitcherListViewTests {
 
         let scrollView = try #require(findScrollView(in: hostingView))
         let documentHeight = scrollView.documentView?.frame.height ?? 0
-        // 最大高さ（420pt）を超えてスクロール可能なコンテンツが存在すること
-        #expect(scrollView.frame.height <= 420.5)
+        let expectedMaxHeight = SwitcherPanelLayout.maxListScrollHeight(
+            availableScreenHeight: viewModel.availableScreenSize.height,
+            hasSearchHeader: true,
+            hasPermissionBanner: false
+        )
+        // ディスプレイ高さに応じた最大高さ（従来の 420pt より拡大）まで広がり、かつスクロール可能であること
+        #expect(expectedMaxHeight > 420)
+        #expect(scrollView.frame.height > 420)
+        #expect(scrollView.frame.height <= expectedMaxHeight + 0.5)
         #expect(documentHeight > scrollView.frame.height + 100)
         #expect(scrollView.contentView.bounds.origin.y == 0)
 
@@ -233,7 +240,14 @@ struct SwitcherListViewTests {
         defer { panel.hidePanel(restorePreviousApp: false) }
 
         let scrollView = try #require(findScrollView(in: hostingView))
-        #expect(scrollView.frame.height <= 420.5)
+        let expectedMaxHeight = SwitcherPanelLayout.maxListScrollHeight(
+            availableScreenHeight: viewModel.availableScreenSize.height,
+            hasSearchHeader: false,
+            hasPermissionBanner: false
+        )
+        #expect(expectedMaxHeight > 420)
+        #expect(scrollView.frame.height > 420)
+        #expect(scrollView.frame.height <= expectedMaxHeight + 0.5)
         #expect((scrollView.documentView?.frame.height ?? 0) > scrollView.frame.height + 100)
 
         // Option + Tab 連続押下相当で下方のウィンドウ（インデックス 18）まで移動する
@@ -268,7 +282,12 @@ struct SwitcherListViewTests {
         defer { panel.hidePanel(restorePreviousApp: false) }
 
         let scrollView = try #require(findScrollView(in: hostingView))
-        #expect(scrollView.frame.height < 420)
+        let expectedMaxHeight = SwitcherPanelLayout.maxListScrollHeight(
+            availableScreenHeight: viewModel.availableScreenSize.height,
+            hasSearchHeader: true,
+            hasPermissionBanner: false
+        )
+        #expect(scrollView.frame.height < expectedMaxHeight)
         #expect(scrollView.contentView.bounds.origin.y == 0)
 
         for _ in 0..<3 {
@@ -350,7 +369,14 @@ struct SwitcherListViewTests {
         defer { panel.hidePanel(restorePreviousApp: false) }
 
         let scrollView = try #require(findScrollView(in: hostingView))
-        #expect(scrollView.frame.height <= 420.5)
+        let expectedMaxHeight = SwitcherPanelLayout.maxListScrollHeight(
+            availableScreenHeight: scrollableVM.availableScreenSize.height,
+            hasSearchHeader: true,
+            hasPermissionBanner: false
+        )
+        #expect(expectedMaxHeight > 420)
+        #expect(scrollView.frame.height > 420)
+        #expect(scrollView.frame.height <= expectedMaxHeight + 0.5)
         #expect((scrollView.documentView?.frame.height ?? 0) > scrollView.frame.height + 100)
 
         for _ in 0..<15 {
@@ -434,5 +460,46 @@ struct SwitcherListViewTests {
 
         // キャプチャ表示型で権限未許可時のみ上部に警告バナーが追加され高さが増える（アイコン型は未許可でもバナー無し）
         #expect(normalCaptureDeniedSize.height > normalCaptureGrantedSize.height)
+    }
+
+    /// 画面サイズ拡大に伴い SwitcherListView の表示範囲が広がること、および SwitcherPanel の上寄せ配置が
+    /// 中央配置より上方に配置されることを実ビューおよび実パネルで検証する
+    @Test("ディスプレイ高さに応じてリスト表示範囲が拡大し上寄せ配置パネルが中央配置より上に表示される")
+    @MainActor
+    func listDisplayHeightScalesWithScreenAndPanelPlacesHigherWhenUpperAnchored() throws {
+        let viewModel = makeViewModel(windowCount: 30, appCount: 0)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+
+        // 小さい画面（720pt）と大きい画面（1080pt）でリストの最大表示高さが変化し、いずれも 420pt より大きいこと
+        viewModel.updateAvailableScreenSize(CGSize(width: 1280, height: 720))
+        let smallScreenHosting = NSHostingView(rootView: SwitcherListView(viewModel: viewModel))
+        smallScreenHosting.layoutSubtreeIfNeeded()
+        let smallScreenHeight = smallScreenHosting.fittingSize.height
+
+        viewModel.updateAvailableScreenSize(CGSize(width: 1920, height: 1080))
+        let largeScreenHosting = NSHostingView(rootView: SwitcherListView(viewModel: viewModel))
+        largeScreenHosting.layoutSubtreeIfNeeded()
+        let largeScreenHeight = largeScreenHosting.fittingSize.height
+
+        #expect(smallScreenHeight > 420)
+        #expect(largeScreenHeight > smallScreenHeight + 200)
+
+        // 実 SwitcherPanel で上寄せ配置と中央配置を比較（ディスプレイが取得可能な環境で上端位置を確認）
+        let compactVM = makeViewModel(windowCount: 3, appCount: 0)
+        compactVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        let panel = SwitcherPanel(contentView: SwitcherContentView(viewModel: compactVM))
+        panel.alphaValue = 0
+        panel.ignoresMouseEvents = true
+        defer { panel.hidePanel(restorePreviousApp: false) }
+
+        panel.show(mode: .normal, activateApp: false, verticalPlacement: .centered)
+        let centeredOriginY = panel.frame.origin.y
+
+        panel.show(mode: .normal, activateApp: false, verticalPlacement: .upperAnchored)
+        let upperOriginY = panel.frame.origin.y
+
+        if NSScreen.main != nil || !NSScreen.screens.isEmpty {
+            #expect(upperOriginY > centeredOriginY)
+        }
     }
 }

@@ -447,7 +447,8 @@ public final class AppCoordinator {
             case .normal, .launcher:
                 self.ensureSwitcherPanel().show(
                     mode: mode,
-                    activateApp: self.switcherViewModel.shouldActivateAppForCurrentSession
+                    activateApp: self.switcherViewModel.shouldActivateAppForCurrentSession,
+                    verticalPlacement: self.switcherViewModel.panelVerticalPlacement
                 )
             case .inactive:
                 // ランチャーモードで Esc / トグル終了した場合のみ直前アプリへフォーカスを戻す

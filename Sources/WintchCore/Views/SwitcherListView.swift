@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 画面中央のフローティングパネル内に表示されるウィンドウ一覧（およびランチャー検索バー）のビュー
+/// フローティングパネル内に表示されるウィンドウ一覧（およびランチャー検索バー）のビュー
 public struct SwitcherListView: View {
     /// ランチャーのキャプチャ表示行に配置する小型サムネイルの横幅
     public static let captureThumbnailWidth: CGFloat = 80
@@ -66,6 +66,15 @@ public struct SwitcherListView: View {
     /// 画面収録権限未許可バナーを表示すべきかどうか（実際にキャプチャ表示が有効なモードかつ未許可時のみ）
     private var showsScreenRecordingPermissionBanner: Bool {
         viewModel.isCaptureActiveForCurrentMode && !viewModel.isScreenRecordingGranted
+    }
+
+    /// アクティブディスプレイの有効高さおよび上部ヘッダ有無に応じたリスト領域の最大スクロール高さ
+    private var maxScrollHeight: CGFloat {
+        SwitcherPanelLayout.maxListScrollHeight(
+            availableScreenHeight: viewModel.availableScreenSize.height,
+            hasSearchHeader: viewModel.mode == .launcher,
+            hasPermissionBanner: showsScreenRecordingPermissionBanner
+        )
     }
 
     /// ビューの本体構築
@@ -253,7 +262,7 @@ public struct SwitcherListView: View {
                 }
                 .padding(10)
             }
-            .frame(maxHeight: 420)
+            .frame(maxHeight: maxScrollHeight)
             .fixedSize(horizontal: false, vertical: true)
             .onAppear {
                 scrollToSelectedRow(using: proxy, animated: false)
