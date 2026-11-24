@@ -2402,4 +2402,138 @@ struct SwitcherViewModelTests {
         #expect(installedAppService.launchedApps.map(\.displayName) == ["AlphaTool"])
         #expect(viewModel.isPresented == false)
     }
+
+    /// ウィンドウ／アプリ終了処理中に closingWindowID が対象ウィンドウ ID を追跡し、
+    /// 完了・失敗・カーソル移動・キャンセル後再起動の各ケースで正しく更新・解除されることを検証する
+    @Test("ウィンドウ終了処理中に対象ウィンドウ ID を追跡し完了・失敗・再起動時に安全に解除する")
+    @MainActor
+    func closingWindowIDLifecycleAcrossCloseTerminateAndReopen() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "AppA", title: "Window 1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 10, applicationName: "AppA", title: "Window 2", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", pid: 20, applicationName: "AppB", title: "Only Window", lastActivatedAt: now.addingTimeInterval(-20))
+        ]
+
+        var closeContinuation: CheckedContinuation<Bool, Never>?
+        windowService.closeWindowHandler = { _ in
+            await withCheckedContinuation { continuation in
+                closeContinuation = continuation
+            }
+        }
+        var terminateContinuation: CheckedContinuation<Bool, Never>?
+        windowService.terminateHandler = { _ in
+            await withCheckedContinuation { continuation in
+                terminateContinuation = continuation
+            }
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            isNormalSwitcherGroupedByApp: false,
+            isLauncherGroupedByApp: false
+        )
+
+        // 1. 単一ウィンドウクローズ待機中: 対象 ID (w2) が処理中となり、カーソルを移動しても対象 ID を維持する
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 1)
+        #expect(viewModel.closingWindowID == nil)
+        #expect(viewModel.isClosingWindow == false)
+
+        let closeTask = Task { @MainActor in
+            await viewModel.closeSelectedWindow()
+        }
+        await Task.yield()
+
+        #expect(viewModel.closingWindowID == "w2")
+        #expect(viewModel.isClosingWindow == true)
+        #expect(viewModel.isClosingWindow(id: "w2") == true)
+        #expect(viewModel.isClosingWindow(id: "w1") == false)
+
+        // 待機中に選択カーソルを動かしても、処理中対象は実際に閉じている w2 のまま変わらない
+        viewModel.moveSelection(.down)
+        #expect(viewModel.selectedIndex == 2)
+        #expect(viewModel.isClosingWindow(id: "w2") == true)
+        #expect(viewModel.isClosingWindow(id: "w3") == false)
+
+        // クローズ成功後は closingWindowID が解除され、w2 が一覧から除外される
+        closeContinuation?.resume(returning: true)
+        await closeTask.value
+        #expect(viewModel.closingWindowID == nil)
+        #expect(viewModel.isClosingWindow == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+
+        // 2. アプリ終了待機中（最後の 1 枚 w3）かつ失敗（確認ダイアログ残存）時は解除されて項目を維持する
+        #expect(viewModel.selectedIndex == 1) // w3
+        let terminateTask = Task { @MainActor in
+            await viewModel.closeSelectedWindow()
+        }
+        await Task.yield()
+
+        #expect(viewModel.closingWindowID == "w3")
+        #expect(viewModel.isClosingWindow(id: "w3") == true)
+
+        terminateContinuation?.resume(returning: false)
+        await terminateTask.value
+        #expect(viewModel.closingWindowID == nil)
+        #expect(viewModel.isClosingWindow == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+
+        // 3. クローズ待機中にキャンセルして別セッションを開き直した場合、即座に解除され旧完了が新セッションを壊さない
+        viewModel.cancel()
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3"])
+
+        var firstSessionContinuation: CheckedContinuation<Bool, Never>?
+        var secondSessionContinuation: CheckedContinuation<Bool, Never>?
+        windowService.closeWindowHandler = { entry in
+            await withCheckedContinuation { continuation in
+                if entry.id == "w1" {
+                    firstSessionContinuation = continuation
+                } else {
+                    secondSessionContinuation = continuation
+                }
+            }
+        }
+
+        let staleCloseTask = Task { @MainActor in
+            await viewModel.closeSelectedWindow() // w1
+        }
+        await Task.yield()
+        #expect(viewModel.closingWindowID == "w1")
+
+        // キャンセル時点で処理中状態は即時クリアされる
+        viewModel.cancel()
+        #expect(viewModel.closingWindowID == nil)
+        #expect(viewModel.isClosingWindow == false)
+
+        // 新セッションで即座に w2 のクローズを開始できる
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.moveSelection(.down) // w2
+        let newSessionCloseTask = Task { @MainActor in
+            await viewModel.closeSelectedWindow()
+        }
+        await Task.yield()
+        #expect(viewModel.closingWindowID == "w2")
+
+        // 旧セッションの完了が返っても、新セッションの closingWindowID ("w2") や一覧は維持される
+        firstSessionContinuation?.resume(returning: true)
+        await staleCloseTask.value
+        #expect(viewModel.closingWindowID == "w2")
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3"])
+
+        // 新セッションの完了で正常に解除・除外される
+        secondSessionContinuation?.resume(returning: true)
+        await newSessionCloseTask.value
+        #expect(viewModel.closingWindowID == nil)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+    }
 }

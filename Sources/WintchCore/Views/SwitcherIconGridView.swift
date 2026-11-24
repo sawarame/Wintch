@@ -94,6 +94,7 @@ public struct SwitcherIconGridView: View {
                             entry: result.entry,
                             icon: viewModel.icon(for: result.entry.pid),
                             isSelected: index == viewModel.selectedIndex,
+                            isClosing: viewModel.isClosingWindow(id: result.entry.id),
                             language: viewModel.resolvedLanguage
                         )
                         .id(result.id)
@@ -150,6 +151,8 @@ private struct SwitcherIconTileView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 現在クローズ／終了処理を実行中かどうか
+    let isClosing: Bool
     /// 補助表示テキストに使用する解決済み言語
     let language: ResolvedAppLanguage
 
@@ -157,7 +160,18 @@ private struct SwitcherIconTileView: View {
     var body: some View {
         VStack(spacing: 6) {
             appIconArea
+                .opacity(isClosing ? 0.35 : 1.0)
                 .frame(width: 60, height: 60)
+                .overlay {
+                    if isClosing {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.42))
+                                .frame(width: 32, height: 32)
+                            SwitcherClosingIndicatorView(usesLightAppearance: true)
+                        }
+                    }
+                }
 
             VStack(spacing: 2) {
                 Text(entry.displayApplicationName(in: language))

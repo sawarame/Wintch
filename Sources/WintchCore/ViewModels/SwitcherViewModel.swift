@@ -180,8 +180,13 @@ public final class SwitcherViewModel {
     /// 起動時に取得した全有効ウィンドウ一覧（MRU ソート済み）
     private var allEntries: [WindowEntry] = []
 
-    /// ウィンドウクローズ処理の多重実行を防止するロックフラグ
-    private var isClosingWindow = false
+    /// 現在クローズ／終了処理を実行中のウィンドウ項目 ID（処理中でない場合は nil）
+    public private(set) var closingWindowID: String?
+
+    /// 現在ウィンドウのクローズ／終了処理を実行中かどうか
+    public var isClosingWindow: Bool {
+        closingWindowID != nil
+    }
 
     /// 表示セッションを識別する世代カウンタ（非同期クローズ復帰時のセッション跨ぎ防止用）
     private var presentationGeneration: Int = 0
@@ -426,6 +431,13 @@ public final class SwitcherViewModel {
         return capturedThumbnails[cgWindowID]
     }
 
+    /// 指定されたウィンドウ項目が現在クローズ／終了処理中かどうかを返す
+    /// - Parameter entryID: 判定対象のウィンドウ項目 ID
+    /// - Returns: 対象ウィンドウを閉じている最中であれば true
+    public func isClosingWindow(id entryID: String) -> Bool {
+        closingWindowID == entryID
+    }
+
     /// サービス層から通知されたキーイベントを処理する
     /// - Parameter event: 受信したキーイベント
     public func handleHotKeyEvent(_ event: HotKeyEvent) {
@@ -459,13 +471,18 @@ public final class SwitcherViewModel {
             return
         }
 
-        isClosingWindow = true
-        defer { isClosingWindow = false }
-
         let targetMode = mode
         let capturedGeneration = presentationGeneration
         let target = displayedResults[selectedIndex].entry
         let previousIndex = selectedIndex
+        // UI へ処理中スピナーを即時反映するとともに多重実行を防止する
+        closingWindowID = target.id
+        defer {
+            // 同一セッションの進行中クローズのみ解除し、別セッションへ遷移済みの状態は上書きしない
+            if presentationGeneration == capturedGeneration && closingWindowID == target.id {
+                closingWindowID = nil
+            }
+        }
         // ランチャー検索による絞り込みに左右されないよう、全候補一覧を基準に同アプリの残余ウィンドウ数を判定する
         let isSingleWindowForApp = allEntries.filter { $0.pid == target.pid }.count <= 1
 
@@ -478,6 +495,8 @@ public final class SwitcherViewModel {
 
         // 待機中に別セッションへ遷移・終了済みの場合は状態を変更せず抜ける
         guard mode == targetMode, presentationGeneration == capturedGeneration else { return }
+
+        closingWindowID = nil
 
         guard didSucceed else {
             // 自動 Space 移動等が発生した失敗ケースでもパネルの前面・フォーカスを維持する
@@ -724,6 +743,7 @@ public final class SwitcherViewModel {
     /// - Parameter reason: パネル終了の理由
     private func dismiss(reason: SwitcherDismissReason) {
         presentationGeneration += 1
+        closingWindowID = nil
         installedAppsRefreshTask?.cancel()
         installedAppsRefreshTask = nil
         captureRefreshTask?.cancel()

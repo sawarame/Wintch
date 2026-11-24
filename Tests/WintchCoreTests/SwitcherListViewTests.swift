@@ -502,4 +502,115 @@ struct SwitcherListViewTests {
             #expect(upperOriginY > centeredOriginY)
         }
     }
+
+    /// 縦型リスト系の各表示形式（フラットリスト・グルーピングリスト・ランチャーキャプチャ・グルーピングアイコン）で
+    /// ウィンドウ終了処理中のみスピナー（NSProgressIndicator）が表示され、レイアウト寸法が変わらないことを検証する
+    @Test("リスト系ビュー各表示形式で終了処理中のみスピナーが表示されレイアウト寸法が維持される")
+    @MainActor
+    func closingIndicatorAppearsInListStylesWithoutChangingDimensions() async throws {
+        /// NSView ツリー内の NSProgressIndicator 一覧を収集するローカルヘルパー
+        func findProgressIndicators(in root: NSView) -> [NSProgressIndicator] {
+            var indicators: [NSProgressIndicator] = []
+            if let indicator = root as? NSProgressIndicator {
+                indicators.append(indicator)
+            }
+            for subview in root.subviews {
+                indicators.append(contentsOf: findProgressIndicators(in: subview))
+            }
+            return indicators
+        }
+
+        let scenarios: [(
+            label: String,
+            mode: SwitcherMode,
+            normalStyle: SwitcherDisplayStyle,
+            launcherStyle: LauncherDisplayStyle,
+            grouped: Bool
+        )] = [
+            ("launcher-flat-list", .launcher, .list, .list, false),
+            ("launcher-grouped-list", .launcher, .list, .list, true),
+            ("launcher-capture", .launcher, .list, .capture, false),
+            ("normal-grouped-icon", .normal, .icon, .list, true)
+        ]
+
+        for scenario in scenarios {
+            let windowService = MockWindowService()
+            let now = Date()
+            windowService.stubbedCandidates = [
+                RawWindowCandidate(
+                    id: "win-1",
+                    cgWindowID: 2001,
+                    pid: 50,
+                    bundleIdentifier: "com.example.demo",
+                    applicationName: "DemoApp",
+                    title: "First Window",
+                    lastActivatedAt: now
+                ),
+                RawWindowCandidate(
+                    id: "win-2",
+                    cgWindowID: 2002,
+                    pid: 50,
+                    bundleIdentifier: "com.example.demo",
+                    applicationName: "DemoApp",
+                    title: "Second Window",
+                    lastActivatedAt: now.addingTimeInterval(-10)
+                )
+            ]
+
+            var continuation: CheckedContinuation<Bool, Never>?
+            windowService.closeWindowHandler = { _ in
+                await withCheckedContinuation { cont in
+                    continuation = cont
+                }
+            }
+
+            let viewModel = SwitcherViewModel(
+                windowService: windowService,
+                hotKeyMonitor: MockHotKeyMonitor(),
+                permissionService: MockAccessibilityPermissionService(),
+                iconProvider: MockIconProvider(),
+                screenRecordingPermissionService: MockScreenRecordingPermissionService(),
+                windowCaptureService: MockWindowCaptureService(),
+                normalDisplayStyle: scenario.normalStyle,
+                launcherDisplayStyle: scenario.launcherStyle,
+                isNormalSwitcherGroupedByApp: scenario.grouped,
+                isLauncherGroupedByApp: scenario.grouped
+            )
+
+            if scenario.mode == .launcher {
+                viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+            } else {
+                viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+            }
+
+            let (panel, hostingView) = try makeHostedPanel(for: viewModel)
+            defer { panel.hidePanel(restorePreviousApp: false) }
+
+            let sizeBeforeClose = hostingView.fittingSize
+            #expect(findProgressIndicators(in: hostingView).isEmpty)
+
+            // クローズ処理開始中: 対象行にスピナーが 1 件だけ描画され、パネル寸法は変化しない
+            let closeTask = Task { @MainActor in
+                await viewModel.closeSelectedWindow()
+            }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(80))
+            hostingView.layoutSubtreeIfNeeded()
+
+            let sizeDuringClose = hostingView.fittingSize
+            #expect(viewModel.isClosingWindow == true)
+            #expect(findProgressIndicators(in: hostingView).count == 1)
+            #expect(sizeDuringClose.width == sizeBeforeClose.width)
+            #expect(abs(sizeDuringClose.height - sizeBeforeClose.height) < 0.5)
+
+            // 終了失敗（キャンセル残存）で戻るとスピナーは即座に消える
+            continuation?.resume(returning: false)
+            await closeTask.value
+            try? await Task.sleep(for: .milliseconds(80))
+            hostingView.layoutSubtreeIfNeeded()
+
+            #expect(viewModel.isClosingWindow == false)
+            #expect(findProgressIndicators(in: hostingView).isEmpty)
+        }
+    }
 }
