@@ -119,6 +119,7 @@ public struct SwitcherCaptureGridView: View {
                             thumbnail: viewModel.thumbnail(for: result.entry),
                             icon: viewModel.icon(for: result.entry.pid),
                             isSelected: index == viewModel.selectedIndex,
+                            isClosing: viewModel.isClosingWindow(id: result.entry.id),
                             language: viewModel.resolvedLanguage
                         )
                         .id(result.id)
@@ -177,6 +178,8 @@ private struct SwitcherCaptureCardView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 現在クローズ／終了処理を実行中かどうか
+    let isClosing: Bool
     /// 補助表示テキストに使用する解決済み言語
     let language: ResolvedAppLanguage
 
@@ -187,6 +190,17 @@ private struct SwitcherCaptureCardView: View {
                 .frame(height: 112)
                 .frame(maxWidth: .infinity)
                 .background(Color.black.opacity(0.16))
+                .overlay {
+                    if isClosing {
+                        ZStack {
+                            Color.black.opacity(0.38)
+                            SwitcherClosingIndicatorView(
+                                usesLightAppearance: true,
+                                controlSize: .regular
+                            )
+                        }
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)

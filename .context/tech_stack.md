@@ -124,6 +124,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │           ├── SettingsView.swift               # 左サイドバー付き設定画面（バージョン情報・手動更新統合）
 │           ├── ShortcutRecorderView.swift       # ショートカットキー入力キャプチャビュー
 │           ├── SwitcherCaptureGridView.swift    # キャプチャ表示型グリッドビュー
+│           ├── SwitcherClosingIndicatorView.swift # ウィンドウ／アプリ終了処理中の円形スピナービュー
 │           ├── SwitcherContentView.swift        # モード・表示形式に応じたコンテナ分岐ビュー
 │           ├── SwitcherIconGridView.swift       # アイコン型グリッドビュー
 │           ├── SwitcherListView.swift           # リスト型スイッチャー＆検索ランチャー統合ビュー

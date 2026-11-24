@@ -206,12 +206,14 @@ public struct SwitcherListView: View {
                             )
 
                         case let .window(index, result):
+                            let isClosing = viewModel.isClosingWindow(id: result.entry.id)
                             Group {
                                 if isNormalIconGroupedStyle {
                                     SwitcherGroupedIconRowView(
                                         result: result,
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex,
+                                        isClosing: isClosing,
                                         language: viewModel.resolvedLanguage
                                     )
                                 } else if usesCaptureRowStyle {
@@ -222,6 +224,7 @@ public struct SwitcherListView: View {
                                             : nil,
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex,
+                                        isClosing: isClosing,
                                         showsAppHeader: !isGrouped,
                                         language: viewModel.resolvedLanguage
                                     )
@@ -230,6 +233,7 @@ public struct SwitcherListView: View {
                                         result: result,
                                         icon: viewModel.icon(for: result.entry.pid),
                                         isSelected: index == viewModel.selectedIndex,
+                                        isClosing: isClosing,
                                         showsAppInfo: !isGrouped,
                                         language: viewModel.resolvedLanguage
                                     )
@@ -481,6 +485,8 @@ private struct SwitcherRowView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 現在クローズ／終了処理を実行中かどうか
+    let isClosing: Bool
     /// 行内にアプリアイコンとアプリ名を表示するか（グルーピング ON 時は false）
     let showsAppInfo: Bool
     /// 補助表示テキストに使用する解決済み言語
@@ -531,6 +537,10 @@ private struct SwitcherRowView: View {
             }
 
             Spacer(minLength: 0)
+
+            if isClosing {
+                SwitcherClosingIndicatorView(usesLightAppearance: isSelected)
+            }
         }
         .padding(.leading, showsAppInfo ? 12 : 34)
         .padding(.trailing, 12)
@@ -547,6 +557,8 @@ private struct SwitcherGroupedIconRowView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 現在クローズ／終了処理を実行中かどうか
+    let isClosing: Bool
     /// 補助表示テキストに使用する解決済み言語
     let language: ResolvedAppLanguage
 
@@ -572,6 +584,10 @@ private struct SwitcherGroupedIconRowView: View {
             .truncationMode(.tail)
 
             Spacer(minLength: 0)
+
+            if isClosing {
+                SwitcherClosingIndicatorView(usesLightAppearance: isSelected)
+            }
         }
         .padding(.leading, 24)
         .padding(.trailing, 12)
@@ -610,6 +626,8 @@ private struct SwitcherCaptureRowView: View {
     let icon: NSImage?
     /// 現在選択状態として強調表示するか
     let isSelected: Bool
+    /// 現在クローズ／終了処理を実行中かどうか
+    let isClosing: Bool
     /// 行内にアプリアイコン・アプリ名ヘッダ行を表示するか（グルーピング ON 時は false）
     let showsAppHeader: Bool
     /// 補助表示テキストに使用する解決済み言語
@@ -665,6 +683,10 @@ private struct SwitcherCaptureRowView: View {
             }
 
             Spacer(minLength: 0)
+
+            if isClosing {
+                SwitcherClosingIndicatorView(usesLightAppearance: isSelected)
+            }
         }
         .padding(.leading, showsAppHeader ? 12 : 24)
         .padding(.trailing, 12)
