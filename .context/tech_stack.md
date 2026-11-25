@@ -51,6 +51,13 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │   └── swift.md                         # Swift 6.0 コーディング・並行性・ドキュメント規約
 ├── .github/workflows/
 │   └── release.yml                      # テスト・Universal Build・署名・公証・ZIP/DMG Release・Homebrew Tap 自動更新
+├── docs/                                # GitHub Pages 公開用アプリ紹介ページ（純粋な静的 HTML/CSS/JS・5 言語対応）
+│   ├── .nojekyll                        # GitHub Pages の Jekyll 処理抑止マーカー
+│   ├── index.html                       # Wintch 単独紹介ページ本体
+│   ├── styles.css                       # ライト／ダーク・レスポンシブスタイルシート
+│   ├── i18n.js                          # 5 言語辞書・ブラウザ言語自動判定ロジック
+│   ├── app.js                           # Showcase デモ・テーマ切替・コピー・GitHub Releases 最新版取得
+│   └── assets/                          # SVG アイコンおよび OGP 画像
 ├── Resources/
 │   ├── Info.plist                       # バンドル情報ベース（LSUIElement / アイコン指定等）
 │   └── Icons/
