@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1120" />
+      <stop offset="55%" stop-color="#172554" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <radialGradient id="glowLeft" cx="22%" cy="32%" r="48%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.32" />
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glowRight" cx="82%" cy="74%" r="45%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.30" />
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="iconAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+    <linearGradient id="iconBody" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#E2E8F0" />
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="55%" stop-color="#60A5FA" />
+      <stop offset="100%" stop-color="#A78BFA" />
+    </linearGradient>
+    <clipPath id="fgWinClip">
+      <rect x="86" y="94" width="92" height="81" rx="15" />
+    </clipPath>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bgGrad)" />
+  <rect width="1200" height="630" fill="url(#glowLeft)" />
+  <rect width="1200" height="630" fill="url(#glowRight)" />
+
+  <!-- Wintch アプリアイコン -->
+  <g transform="translate(110, 195)">
+    <rect x="0" y="0" width="224" height="224" rx="50" fill="#0F172A" stroke="rgba(255,255,255,0.16)" stroke-width="2" />
+    <path
+      d="M 69 130 H 67 A 13 13 0 0 1 54 117 V 70 A 13 13 0 0 1 67 57 H 123 A 13 13 0 0 1 136 70 V 78"
+      fill="none"
+      stroke="#94A3B8"
+      stroke-width="14.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <g clip-path="url(#fgWinClip)">
+      <rect x="86" y="94" width="92" height="81" fill="url(#iconBody)" />
+      <rect x="86" y="94" width="92" height="24.5" fill="url(#iconAccent)" />
+    </g>
+  </g>
+
+  <!-- タイトル・タグライン -->
+  <g transform="translate(384, 215)">
+    <rect x="0" y="0" width="330" height="36" rx="18" fill="rgba(56,189,248,0.14)" stroke="rgba(96,165,250,0.38)" stroke-width="1.2" />
+    <text x="165" y="23" text-anchor="middle" fill="#93C5FD" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="600">
+      macOS 14.0+ · Native Swift 6 · MIT License
+    </text>
+
+    <text x="0" y="112" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="76" font-weight="800" letter-spacing="-1.5">
+      Wintch
+    </text>
+
+    <text x="0" y="162" fill="url(#titleGrad)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="700">
+      Per-window switcher &amp; search launcher for macOS
+    </text>
+
+    <text x="0" y="206" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="500">
+      Switch windows across Spaces · Fuzzy search &amp; app launch · Privacy by Design
+    </text>
+  </g>
+</svg>

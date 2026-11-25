@@ -1,6 +1,6 @@
 # Wintch
 
-[English](README.md) | **日本語**
+[English](README.md) | **日本語** | [紹介ページ (GitHub Pages)](https://sawarame.github.io/Wintch/)
 
 **Wintch**（Window + Switch）は、macOS 14.0 (Sonoma) 以降向けに設計された、シンプルで軽量な**ウィンドウ単位スイッチャー＆ランチャー**アプリです。
 
@@ -80,6 +80,12 @@ brew uninstall --cask wintch
 ├── .github/
 │   └── workflows/
 │       └── release.yml             # テスト・署名・公証・ZIP/DMG リリース・Homebrew Tap 更新自動化
+├── docs/                           # GitHub Pages 公開用の静的アプリ紹介ページ（外部依存なし・5 言語対応）
+│   ├── index.html                  # スタンドアロン紹介ページ・インタラクティブ Showcase
+│   ├── styles.css                  # ライト／ダーク・レスポンシブ対応スタイルシート
+│   ├── i18n.js                     # 5 言語ローカライズ辞書・言語解決ロジック
+│   ├── app.js                      # Showcase デモ・テーマ切替・コピー・最新バージョン動的取得
+│   └── assets/                     # アプリアイコン・メニューバーアイコン・OGP 画像（SVG）
 ├── Resources/
 │   ├── Info.plist                  # バンドル情報（LSUIElement / CFBundleIconFile 等）
 │   └── Icons/

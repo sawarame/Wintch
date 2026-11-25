@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-theme-choice="system">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wintch — Per-window switcher &amp; search launcher for macOS</title>
+    <meta
+      name="description"
+      content="A simple, lightweight, privacy-first per-window switcher and search launcher for macOS 14.0+. Switch individual windows across Spaces, fuzzy search windows and apps, and close windows from the panel."
+    />
+    <link rel="canonical" href="https://sawarame.github.io/Wintch/" />
+    <link rel="icon" type="image/svg+xml" href="./assets/app-icon.svg" />
+
+    <!-- OGP / Twitter Card メタデータ -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Wintch" />
+    <meta property="og:url" content="https://sawarame.github.io/Wintch/" />
+    <meta property="og:title" content="Wintch — Per-window switcher &amp; search launcher for macOS" />
+    <meta
+      property="og:description"
+      content="A simple, lightweight, privacy-first per-window switcher and search launcher for macOS 14.0+."
+    />
+    <meta property="og:image" content="https://sawarame.github.io/Wintch/assets/ogp.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Wintch — Per-window switcher &amp; search launcher for macOS" />
+    <meta
+      name="twitter:description"
+      content="A simple, lightweight, privacy-first per-window switcher and search launcher for macOS 14.0+."
+    />
+    <meta name="twitter:image" content="https://sawarame.github.io/Wintch/assets/ogp.svg" />
+
+    <!-- 初期描画時のテーマちらつき（FOUC）を防止するためのインライン初期化 -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("wintch-docs-theme");
+          var choice = saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
+          var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var resolved = choice === "system" ? (prefersDark ? "dark" : "light") : choice;
+          document.documentElement.setAttribute("data-theme-choice", choice);
+          document.documentElement.setAttribute("data-theme", resolved);
+        } catch (e) {
+          // localStorage 無効環境ではデフォルトのまま表示する
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+
+  <body>
+    <!-- スタンドアロン ヘッダー -->
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="#top" class="brand-link" aria-label="Wintch Home">
+          <img src="./assets/app-icon.svg" alt="" class="brand-icon" width="28" height="28" />
+          <span>Wintch</span>
+        </a>
+
+        <div class="header-controls">
+          <a
+            href="https://github.com/sawarame/Wintch"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="header-github-link"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path
+                d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.18-.02-2.14-3.2.7-3.87-1.35-3.87-1.35-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a10.98 10.98 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35 0.5 12 0.5z"
+              />
+            </svg>
+            <span class="header-github-text">GitHub</span>
+          </a>
+
+          <div class="controls-pill">
+            <div class="locale-dropdown">
+              <button
+                type="button"
+                id="locale-trigger"
+                class="locale-trigger"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="locale-menu"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                  <path d="M2 12h20" />
+                </svg>
+                <span id="current-locale-label">English</span>
+                <svg
+                  class="chevron-icon"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <div id="locale-menu" class="locale-menu" role="menu" hidden>
+                <button type="button" class="locale-option" role="menuitemradio" data-locale="en" aria-checked="true">
+                  <span>English</span>
+                </button>
+                <button type="button" class="locale-option" role="menuitemradio" data-locale="ja" aria-checked="false">
+                  <span>日本語</span>
+                </button>
+                <button type="button" class="locale-option" role="menuitemradio" data-locale="zh-Hans" aria-checked="false">
+                  <span>简体中文</span>
+                </button>
+                <button type="button" class="locale-option" role="menuitemradio" data-locale="zh-Hant" aria-checked="false">
+                  <span>繁體中文</span>
+                </button>
+                <button type="button" class="locale-option" role="menuitemradio" data-locale="ko" aria-checked="false">
+                  <span>한국어</span>
+                </button>
+              </div>
+            </div>
+
+            <span class="controls-divider" aria-hidden="true"></span>
+
+            <button
+              type="button"
+              id="theme-toggle"
+              class="theme-toggle-btn"
+              aria-label="Toggle color theme"
+              title="Toggle color theme"
+            >
+              <!-- System -->
+              <svg
+                class="theme-icon theme-icon-system"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <path d="M8 21h8" />
+                <path d="M12 17v4" />
+              </svg>
+              <!-- Light -->
+              <svg
+                class="theme-icon theme-icon-light"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2" />
+                <path d="M12 20v2" />
+                <path d="m4.93 4.93 1.41 1.41" />
+                <path d="m17.66 17.66 1.41 1.41" />
+                <path d="M2 12h2" />
+                <path d="M20 12h2" />
+                <path d="m6.34 17.66-1.41 1.41" />
+                <path d="m19.07 4.93-1.41 1.41" />
+              </svg>
+              <!-- Dark -->
+              <svg
+                class="theme-icon theme-icon-dark"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- セクション 0: ヒーロー -->
+      <section class="hero">
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="container hero-inner">
+          <nav class="anchor-nav" aria-label="Section navigation">
+            <a href="#switcher" class="anchor-pill" data-i18n="nav.switcher">Window Switcher</a>
+            <a href="#capture" class="anchor-pill" data-i18n="nav.capture">Display Styles</a>
+            <a href="#launcher" class="anchor-pill" data-i18n="nav.launcher">Search Launcher</a>
+            <a href="#close" class="anchor-pill" data-i18n="nav.close">Close Windows</a>
+            <a href="#privacy" class="anchor-pill" data-i18n="nav.privacy">Native Design</a>
+            <a href="#install" class="anchor-pill" data-i18n="nav.install">Install</a>
+          </nav>
+
+          <div class="hero-app-badge">
+            <img src="./assets/app-icon.svg" alt="Wintch App Icon" width="84" height="84" class="hero-icon" />
+            <span class="meta-pill">
+              <span data-version-text>v0.4.3</span>&nbsp;·&nbsp;<span data-i18n="hero.metaRest">macOS 14.0+ · MIT License</span>
+            </span>
+          </div>
+
+          <h1 class="hero-title">
+            <span data-i18n="hero.titleLine1">Switch windows,</span><br />
+            <span class="hero-title-accent" data-i18n="hero.titleAccent">more intuitively.</span>
+          </h1>
+
+          <p class="hero-subtitle" data-i18n="hero.subtitle">
+            Wintch (Window + Switch) is a simple, lightweight per-window switcher and search launcher for macOS—letting you jump straight to individual windows across Spaces, even when an app has several open.
+          </p>
+
+          <div class="cta-group">
+            <a
+              href="https://github.com/sawarame/Wintch/releases/latest"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="primary-download-btn"
+              data-download-link
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" x2="12" y1="15" y2="3" />
+              </svg>
+              <span data-download-label>Download (v0.4.3)</span>
+            </a>
+
+            <button
+              type="button"
+              class="copy-pill-btn"
+              data-copy="brew install --cask sawarame/tap/wintch"
+            >
+              <span class="terminal-icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" x2="20" y1="19" y2="19" />
+                </svg>
+              </span>
+              <code class="command-text">brew install --cask sawarame/tap/wintch</code>
+              <span class="copy-status-wrap" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <div class="hero-links">
+            <a
+              href="https://github.com/sawarame/Wintch"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="github-link"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path
+                  d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.18-.02-2.14-3.2.7-3.87-1.35-3.87-1.35-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a10.98 10.98 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35 0.5 12 0.5z"
+                />
+              </svg>
+              <span>GitHub (sawarame/Wintch)</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 1: インタラクティブ Showcase -->
+      <section class="showcase-section" aria-label="Interactive Preview">
+        <div class="container">
+          <div class="showcase-wrap">
+            <div class="tab-bar" role="tablist">
+              <button
+                type="button"
+                class="tab-button is-active"
+                role="tab"
+                aria-selected="true"
+                data-showcase-tab="switcher"
+              >
+                <span data-i18n="showcase.tabSwitcher">Window Switcher</span>
+                <kbd class="tab-shortcut">⌥ Tab</kbd>
+              </button>
+              <button
+                type="button"
+                class="tab-button"
+                role="tab"
+                aria-selected="false"
+                data-showcase-tab="launcher"
+              >
+                <span data-i18n="showcase.tabLauncher">Search Launcher</span>
+                <kbd class="tab-shortcut">⌥ Space</kbd>
+              </button>
+              <button
+                type="button"
+                class="tab-button"
+                role="tab"
+                aria-selected="false"
+                data-showcase-tab="settings"
+              >
+                <span data-i18n="showcase.tabSettings">Settings &amp; Permissions</span>
+                <kbd class="tab-shortcut">⌘ ,</kbd>
+              </button>
+            </div>
+
+            <div class="desktop-frame">
+              <div class="mac-menubar" aria-hidden="true">
+                <div class="mac-menubar-left">
+                  <span class="mac-apple-dot"></span>
+                  <span class="mac-menu-app">Wintch</span>
+                  <span class="mac-menu-hint">macOS 14.0+</span>
+                </div>
+                <div class="mac-menubar-right">
+                  <span class="menubar-icon-badge">
+                    <img src="./assets/menubar-icon.svg" alt="" class="menubar-svg" width="15" height="15" />
+                  </span>
+                  <span class="mac-clock">16:40</span>
+                </div>
+              </div>
+
+              <!-- app.js がアクティブタブに応じてインタラクティブ UI を描画する -->
+              <div id="showcase-stage" class="stage-area"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 2: 通常スイッチャー -->
+      <section id="switcher" class="feature-section section-alt">
+        <div class="container">
+          <div class="feature-grid">
+            <div class="feature-copy">
+              <span class="eyebrow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2" y="4" width="14" height="12" rx="2" />
+                  <path d="M8 20h12a2 2 0 0 0 2-2V10" />
+                </svg>
+                <span data-i18n="switcher.eyebrow">Window Switcher (⌥ + Tab)</span>
+              </span>
+              <h2 class="feature-title">
+                <span data-i18n="switcher.titleLine1">Per-window switching,</span><br />
+                <span class="feature-title-accent" data-i18n="switcher.titleAccent">without confusion.</span>
+              </h2>
+              <p class="feature-desc" data-i18n="switcher.desc">
+                While macOS Command + Tab switches by application, Wintch lists every open window individually across all Spaces—sorted by Most Recently Used (MRU) and optionally grouped by application.
+              </p>
+              <ul class="bullet-list">
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="switcher.bullet1">Press and release Option + Tab to jump straight back to the window you were just using</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="switcher.bullet2">Group windows by app (enabled by default) or view a flat MRU list—toggleable anytime from Settings or the menu bar</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="switcher.bullet3">Choose from List, Icon, or Capture View styles and customize activation shortcuts with conflict prevention</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-visual">
+              <div class="visual-card">
+                <div class="compare-box">
+                  <div class="compare-label" data-i18n="switcher.compareStandard">Built-in Command + Tab (per app)</div>
+                  <div class="app-chip-row">
+                    <span class="app-chip"><span class="demo-app-badge is-sm badge-ghostty">G</span>Ghostty</span>
+                    <span class="app-chip"><span class="demo-app-badge is-sm badge-safari">S</span>Safari</span>
+                    <span class="app-chip"><span class="demo-app-badge is-sm badge-xcode">X</span>Xcode</span>
+                  </div>
+                </div>
+
+                <div class="flow-arrow-row">
+                  <span class="flow-pill" data-i18n="switcher.compareWintch">Wintch (Per-Window MRU)</span>
+                </div>
+
+                <div class="mini-panel">
+                  <div class="mini-panel-row">
+                    <span class="mini-rank">1</span>
+                    <span class="demo-app-badge is-sm badge-ghostty">G</span>
+                    <span class="mini-app">Ghostty</span>
+                    <span class="mini-sub">~/dev/Wintch</span>
+                  </div>
+                  <div class="mini-panel-row is-active">
+                    <span class="mini-rank">2</span>
+                    <span class="demo-app-badge is-sm badge-safari">S</span>
+                    <span class="mini-app">Safari</span>
+                    <span class="mini-sub">Wintch — GitHub Releases</span>
+                  </div>
+                  <div class="mini-panel-row">
+                    <span class="mini-rank">3</span>
+                    <span class="demo-app-badge is-sm badge-safari">S</span>
+                    <span class="mini-app">Safari</span>
+                    <span class="mini-sub">Apple Developer Documentation</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 3: 表示形式とオプトイン・キャプチャ表示 -->
+      <section id="capture" class="feature-section">
+        <div class="container">
+          <div class="feature-grid is-reverse">
+            <div class="feature-copy">
+              <span class="eyebrow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect width="7" height="7" x="3" y="3" rx="1" />
+                  <rect width="7" height="7" x="14" y="3" rx="1" />
+                  <rect width="7" height="7" x="14" y="14" rx="1" />
+                  <rect width="7" height="7" x="3" y="14" rx="1" />
+                </svg>
+                <span data-i18n="capture.eyebrow">Display Styles &amp; Capture View</span>
+              </span>
+              <h2 class="feature-title">
+                <span data-i18n="capture.titleLine1">Pick your style,</span><br />
+                <span class="feature-title-accent" data-i18n="capture.titleAccent">or preview windows visually.</span>
+              </h2>
+              <p class="feature-desc" data-i18n="capture.desc">
+                Choose List, Icon, or opt-in Capture View for the Window Switcher—and List or Capture View independently for the Search Launcher. In Capture View, live window thumbnails make multiple windows of the same app recognizable at a glance.
+              </p>
+              <ul class="bullet-list">
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="capture.bullet1">Zero-latency display: opens immediately with cached thumbnails or placeholders and refreshes asynchronously in the background</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="capture.bullet2">Switch styles and app grouping independently for the Switcher and Search Launcher right from the menu bar</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="capture.bullet3">Screen Recording permission is strictly opt-in—List and Icon styles never request or use it</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-visual">
+              <div class="visual-card">
+                <div class="style-chips-row">
+                  <span class="style-chip" data-i18n="capture.styleList">List</span>
+                  <span class="style-chip" data-i18n="capture.styleIcon">Icon</span>
+                  <span class="style-chip is-highlight" data-i18n="capture.styleCapture">Capture View (Opt-in)</span>
+                </div>
+
+                <div class="capture-preview-grid">
+                  <div class="capture-preview-card">
+                    <div class="capture-thumb-box">
+                      <div class="capture-thumb-header"><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span></div>
+                      <div class="capture-thumb-body thumb-terminal">
+                        <span class="thumb-bar-accent"></span>
+                        <span class="thumb-bar-wide"></span>
+                        <span class="thumb-bar-short"></span>
+                      </div>
+                    </div>
+                    <div class="capture-card-footer">
+                      <span class="demo-app-badge is-sm badge-ghostty">G</span>
+                      <div class="capture-card-text">
+                        <div class="capture-card-app">Ghostty</div>
+                        <div class="capture-card-title">~/dev/Wintch — swift test</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="capture-preview-card is-active">
+                    <div class="capture-thumb-box">
+                      <div class="capture-thumb-header"><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span></div>
+                      <div class="capture-thumb-body thumb-browser">
+                        <span class="thumb-bar-accent"></span>
+                        <span class="thumb-bar-wide"></span>
+                        <span class="thumb-bar-short"></span>
+                      </div>
+                    </div>
+                    <div class="capture-card-footer">
+                      <span class="demo-app-badge is-sm badge-safari">S</span>
+                      <div class="capture-card-text">
+                        <div class="capture-card-app">Safari</div>
+                        <div class="capture-card-title">Wintch — GitHub Releases</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="capture-preview-card">
+                    <div class="capture-thumb-box">
+                      <div class="capture-thumb-header"><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span></div>
+                      <div class="capture-thumb-body thumb-code">
+                        <span class="thumb-bar-accent"></span>
+                        <span class="thumb-bar-wide"></span>
+                        <span class="thumb-bar-short"></span>
+                      </div>
+                    </div>
+                    <div class="capture-card-footer">
+                      <span class="demo-app-badge is-sm badge-xcode">X</span>
+                      <div class="capture-card-text">
+                        <div class="capture-card-app">Xcode</div>
+                        <div class="capture-card-title">SwitcherCaptureGridView.swift</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="capture-preview-card">
+                    <div class="capture-thumb-box">
+                      <div class="capture-thumb-header"><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span><span class="capture-thumb-dot"></span></div>
+                      <div class="capture-thumb-body thumb-browser">
+                        <span class="thumb-bar-accent"></span>
+                        <span class="thumb-bar-wide"></span>
+                        <span class="thumb-bar-short"></span>
+                      </div>
+                    </div>
+                    <div class="capture-card-footer">
+                      <span class="demo-app-badge is-sm badge-safari">S</span>
+                      <div class="capture-card-text">
+                        <div class="capture-card-app">Safari</div>
+                        <div class="capture-card-title">Developer Documentation</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p class="safe-note">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+                    <path d="m9 12 2 2 4-4" />
+                  </svg>
+                  <span data-i18n="capture.privacyNote">Thumbnails stay strictly in an in-memory temporary cache—never saved to disk or sent over the network.</span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 4: 検索ランチャー -->
+      <section id="launcher" class="feature-section section-alt">
+        <div class="container">
+          <div class="feature-grid">
+            <div class="feature-copy">
+              <span class="eyebrow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.34-4.34" />
+                </svg>
+                <span data-i18n="launcher.eyebrow">Search Launcher (⌥ + Space)</span>
+              </span>
+              <h2 class="feature-title">
+                <span data-i18n="launcher.titleLine1">Find windows and launch apps,</span><br />
+                <span class="feature-title-accent" data-i18n="launcher.titleAccent">from one panel.</span>
+              </h2>
+              <p class="feature-desc" data-i18n="launcher.desc">
+                Toggle the Search Launcher whenever your desktop gets busy. Narrow down windows by app name and title with space-separated AND fuzzy matching—and launch unopened apps directly from the "Launch App" section below.
+              </p>
+              <ul class="bullet-list">
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="launcher.bullet1">Highlights matched characters in real time, with full IME composition support for Japanese, Chinese, and Korean</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="launcher.bullet2">Works even with zero open windows, matching localized and English app aliases (e.g. メモ / Notes)</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="launcher.bullet3">Navigate seamlessly across windows and app candidates with ↑/↓, Ctrl + N/P, or ⌥ + Tab</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-visual">
+              <div class="visual-card">
+                <div class="mini-panel">
+                  <div class="mini-search-bar">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.34-4.34" />
+                    </svg>
+                    <span class="mini-query">note</span>
+                    <span class="caret" aria-hidden="true"></span>
+                  </div>
+                  <div class="mini-divider"></div>
+                  <div class="mini-panel-row is-active">
+                    <span class="demo-app-badge is-sm badge-safari">S</span>
+                    <span class="mini-app">Safari</span>
+                    <span class="mini-sub">Release <mark class="match-hl" style="color:#fff;background:rgba(255,255,255,0.28);">Note</mark>s — Wintch</span>
+                  </div>
+                  <div class="mini-divider"></div>
+                  <div class="mini-section-hint" data-i18n="launcher.launchSection">Launch App</div>
+                  <div class="mini-panel-row">
+                    <span class="demo-app-badge is-sm badge-notes">N</span>
+                    <span class="mini-app" data-i18n="launcher.notesLabel">Notes</span>
+                    <span class="mini-sub"><mark class="match-hl">Note</mark>s</span>
+                    <span class="mini-launch-tag" data-i18n="launcher.launchBadge">Launch</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 5: ウィンドウ／アプリ終了操作 -->
+      <section id="close" class="feature-section">
+        <div class="container">
+          <div class="feature-grid is-reverse">
+            <div class="feature-copy">
+              <span class="eyebrow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="m15 9-6 6" />
+                  <path d="m9 9 6 6" />
+                </svg>
+                <span data-i18n="close.eyebrow">Close Windows (⌥ + Q)</span>
+              </span>
+              <h2 class="feature-title">
+                <span data-i18n="close.titleLine1">Clean up windows</span><br />
+                <span class="feature-title-accent" data-i18n="close.titleAccent">right from the list.</span>
+              </h2>
+              <p class="feature-desc" data-i18n="close.desc">
+                No need to switch to a window just to close it. Select any window in the Switcher or Launcher and press your modifier + Q (default ⌥ + Q) to close it—or gracefully quit the app when closing its last window.
+              </p>
+              <ul class="bullet-list">
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="close.bullet1">Works identically with ⌥ + Q in both the Window Switcher and Search Launcher, showing a subtle spinner while closing</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="close.bullet2">Closes a single window when multiple are open, and gracefully quits the app on its last window</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="close.bullet3">Never force-quits—always respects standard unsaved-changes confirmation dialogs</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-visual">
+              <div class="visual-card">
+                <div class="close-action-header">
+                  <kbd class="key-pill">⌥ + Q</kbd>
+                  <span class="close-action-title" data-i18n="close.cardTitle">Close the selected window in place</span>
+                </div>
+                <div class="mini-panel">
+                  <div class="mini-panel-row">
+                    <span class="demo-app-badge is-sm badge-ghostty">G</span>
+                    <span class="mini-app">Ghostty</span>
+                    <span class="mini-sub">~/dev/Wintch</span>
+                  </div>
+                  <div class="mini-panel-row is-closing">
+                    <span class="demo-app-badge is-sm badge-safari">S</span>
+                    <span class="mini-app">Safari</span>
+                    <span class="mini-sub">Old Tab — Reference</span>
+                    <span class="close-badge"><span class="closing-spinner" style="width:11px;height:11px;border-width:1.8px;" aria-hidden="true"></span>⌥Q</span>
+                  </div>
+                  <div class="mini-panel-row">
+                    <span class="demo-app-badge is-sm badge-xcode">X</span>
+                    <span class="mini-app">Xcode</span>
+                    <span class="mini-sub">SwitcherListView.swift</span>
+                  </div>
+                </div>
+                <p class="safe-note">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+                    <path d="m9 12 2 2 4-4" />
+                  </svg>
+                  <span data-i18n="close.safeNote">Standard save-confirmation dialogs are always respected for unsaved changes.</span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 6: ネイティブ設計・プライバシー・多言語・自動更新 -->
+      <section id="privacy" class="feature-section section-alt">
+        <div class="container">
+          <div class="feature-grid">
+            <div class="feature-copy">
+              <span class="eyebrow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+                </svg>
+                <span data-i18n="privacy.eyebrow">Native &amp; Privacy by Design</span>
+              </span>
+              <h2 class="feature-title">
+                <span data-i18n="privacy.titleLine1">Native macOS design,</span><br />
+                <span class="feature-title-accent" data-i18n="privacy.titleAccent">fast and minimal.</span>
+              </h2>
+              <p class="feature-desc" data-i18n="privacy.desc">
+                Built purely with Apple's standard frameworks—Swift 6.0 and SwiftUI—with zero third-party dependencies and zero private APIs. Works reliably even in Secure Input fields like password prompts.
+              </p>
+              <ul class="bullet-list">
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="privacy.bullet1">Universal Binary for Apple Silicon &amp; Intel, living unobtrusively in your menu bar without a Dock icon</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="privacy.bullet2">No analytics or telemetry—Screen Recording and automatic update checks are strictly opt-in</span>
+                </li>
+                <li class="bullet-item">
+                  <svg class="bullet-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16 9-5.5 5.5L8 12"/></svg>
+                  <span data-i18n="privacy.bullet3">Instant switching across 5 languages (English, Japanese, Simplified/Traditional Chinese, Korean) plus safe in-app updates</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="feature-visual">
+              <div class="visual-card">
+                <div class="perm-list">
+                  <div class="perm-row">
+                    <span class="perm-icon" aria-hidden="true">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="4" width="16" height="16" rx="2" />
+                        <rect x="9" y="9" width="6" height="6" />
+                        <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+                      </svg>
+                    </span>
+                    <div>
+                      <div class="perm-title">Swift 6.0 + SwiftUI</div>
+                      <div class="perm-desc" data-i18n="privacy.card1Desc">Native Universal Binary (Apple Silicon / Intel) with zero external dependencies</div>
+                    </div>
+                  </div>
+
+                  <div class="perm-row">
+                    <span class="perm-icon" aria-hidden="true">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+                        <path d="m9 12 2 2 4-4" />
+                      </svg>
+                    </span>
+                    <div>
+                      <div class="perm-title" data-i18n="privacy.card2Title">Least Privilege &amp; Opt-In</div>
+                      <div class="perm-desc" data-i18n="privacy.card2Desc">Accessibility permission only by default; Screen Recording &amp; update checks are opt-in</div>
+                    </div>
+                  </div>
+
+                  <div class="perm-row">
+                    <span class="perm-icon" aria-hidden="true">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                        <path d="M2 12h20" />
+                      </svg>
+                    </span>
+                    <div>
+                      <div class="perm-title" data-i18n="privacy.card3Title">Menu Bar Resident &amp; 5 Languages</div>
+                      <div class="perm-desc" data-i18n="privacy.card3Desc">No Dock clutter; supports EN / JA / 简体中文 / 繁體中文 / 한국어 without restart</div>
+                    </div>
+                  </div>
+
+                  <div class="perm-row">
+                    <span class="perm-icon" aria-hidden="true">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path d="M3 3v5h5" />
+                        <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                        <path d="M16 16h5v5" />
+                      </svg>
+                    </span>
+                    <div>
+                      <div class="perm-title" data-i18n="privacy.card4Title">Secure Input &amp; Verified Updates</div>
+                      <div class="perm-desc" data-i18n="privacy.card4Desc">Stays responsive in password fields and verifies signatures before in-app updates</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 7: キーボードショートカット一覧 -->
+      <section id="shortcuts" class="shortcuts-section">
+        <div class="container">
+          <div class="section-header">
+            <span class="eyebrow" data-i18n="shortcuts.eyebrow">Keyboard Shortcuts</span>
+            <h2 class="section-title" data-i18n="shortcuts.title">Default Shortcuts</h2>
+            <p class="section-subtitle" data-i18n="shortcuts.subtitle">
+              Default keybindings out of the box. You can customize activation shortcuts anytime in Settings (⌘ + ,).
+            </p>
+          </div>
+
+          <div class="shortcut-list">
+            <div class="shortcut-row">
+              <div class="shortcut-key-cell"><kbd class="shortcut-kbd">⌥ + Tab</kbd></div>
+              <div class="shortcut-scope-cell"><span class="shortcut-scope-badge" data-i18n="shortcuts.scopeSwitcher">Switcher</span></div>
+              <div class="shortcut-desc-cell" data-i18n="shortcuts.descTab">Hold to open switcher and cycle to the next window (release modifier to confirm)</div>
+            </div>
+            <div class="shortcut-row">
+              <div class="shortcut-key-cell"><kbd class="shortcut-kbd">⌥ + ⇧ + Tab</kbd></div>
+              <div class="shortcut-scope-cell"><span class="shortcut-scope-badge" data-i18n="shortcuts.scopeSwitcher">Switcher</span></div>
+              <div class="shortcut-desc-cell" data-i18n="shortcuts.descShiftTab">Move selection backward to the previous window</div>
+            </div>
+            <div class="shortcut-row">
+              <div class="shortcut-key-cell"><kbd class="shortcut-kbd">⌥ + Space</kbd></div>
+              <div class="shortcut-scope-cell"><span class="shortcut-scope-badge" data-i18n="shortcuts.scopeLauncher">Launcher</span></div>
+              <div class="shortcut-desc-cell" data-i18n="shortcuts.descSpace">Toggle the Search Launcher open or closed</div>
+            </div>
+            <div class="shortcut-row">
+              <div class="shortcut-key-cell"><kbd class="shortcut-kbd">↑ / ↓ / ← / → · Ctrl + N / P</kbd></div>
+              <div class="shortcut-scope-cell"><span class="shortcut-scope-badge" data-i18n="shortcuts.scopeCommon">Common</span></div>
+              <div class="shortcut-desc-cell" data-i18n="shortcuts.descArrows">Navigate list items or icon/capture grids (⌥ + Tab also works in the Launcher)</div>
+            </div>
+            <div class="shortcut-row">
+              <div class="shortcut-key-cell"><kbd class="shortcut-kbd">⌥ + Q</kbd></div>
+              <div class="shortcut-scope-cell"><span class="shortcut-scope-badge" data-i18n="shortcuts.scopeCommon">Common</span></div>
+              <div class="shortcut-desc-cell" data-i18n="shortcuts.descClose">Close the selected window (or gracefully quit if it is the app's last window)</div>
+            </div>
+            <div class="shortcut-row">
+              <div class="shortcut-key-cell"><kbd class="shortcut-kbd">Enter / Esc</kbd></div>
+              <div class="shortcut-scope-cell"><span class="shortcut-scope-badge" data-i18n="shortcuts.scopeCommon">Common</span></div>
+              <div class="shortcut-desc-cell" data-i18n="shortcuts.descEnterEsc">Press Enter to switch or launch; press Esc to cancel without switching</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 8: インストール方法 -->
+      <section id="install" class="install-section section-alt">
+        <div class="container">
+          <div class="section-header">
+            <span class="eyebrow" data-i18n="install.eyebrow">Installation</span>
+            <h2 class="section-title" data-i18n="install.title">Install &amp; Setup</h2>
+            <p class="section-subtitle" data-i18n="install.subtitle">
+              Install quickly via Homebrew Cask or download the Developer ID-signed and Apple-notarized DMG / ZIP from GitHub Releases.
+            </p>
+          </div>
+
+          <div class="install-grid">
+            <!-- Homebrew カード -->
+            <div class="install-card">
+              <div class="install-card-header">
+                <span class="install-badge is-recommended" data-i18n="install.recommendedBadge">Recommended</span>
+                <h3 class="install-card-title" data-i18n="install.brewTitle">Install with Homebrew</h3>
+              </div>
+              <p class="install-card-desc" data-i18n="install.brewDesc">
+                Run the command below in your terminal to add the tap and install Wintch in one step.
+              </p>
+
+              <div class="command-stack">
+                <button type="button" class="copy-block-btn" data-copy="brew install --cask sawarame/tap/wintch">
+                  <code class="command-text">brew install --cask sawarame/tap/wintch</code>
+                  <span class="copy-status-wrap" aria-hidden="true"></span>
+                </button>
+
+                <div class="sub-command-group">
+                  <span class="sub-command-label" data-i18n="install.brewUpgradeLabel">Upgrade to the latest version</span>
+                  <button type="button" class="copy-block-btn" data-copy="brew upgrade --cask wintch">
+                    <code class="command-text">brew upgrade --cask wintch</code>
+                    <span class="copy-status-wrap" aria-hidden="true"></span>
+                  </button>
+                </div>
+
+                <div class="sub-command-group">
+                  <span class="sub-command-label" data-i18n="install.brewUninstallLabel">Uninstall (add --zap to remove preferences)</span>
+                  <button type="button" class="copy-block-btn" data-copy="brew uninstall --cask wintch">
+                    <code class="command-text">brew uninstall --cask wintch</code>
+                    <span class="copy-status-wrap" aria-hidden="true"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- GitHub Releases (DMG / ZIP) カード -->
+            <div class="install-card">
+              <div class="install-card-header">
+                <span class="install-badge is-manual">DMG / ZIP</span>
+                <h3 class="install-card-title" data-i18n="install.manualTitle">Manual Install from GitHub Releases</h3>
+              </div>
+              <p class="install-card-desc" data-i18n="install.manualDesc">
+                If you prefer not to use Homebrew, download the disk image or archive directly from GitHub Releases.
+              </p>
+
+              <ol class="step-list">
+                <li data-i18n="install.step1">Download the latest Wintch-vX.Y.Z.dmg (or .zip) from the GitHub Releases page.</li>
+                <li data-i18n="install.step2">Open the DMG and drag Wintch.app into Applications (or extract the ZIP and move Wintch.app to /Applications), then launch it.</li>
+                <li data-i18n="install.step3">Follow the first-launch prompt to grant Accessibility permission in System Settings &gt; Privacy &amp; Security &gt; Accessibility.</li>
+              </ol>
+
+              <p class="notarized-note">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+                <span data-i18n="install.notarizedNote">Distributed .app and .dmg builds are Developer ID-signed and Apple-notarized, so no Gatekeeper warnings appear on launch.</span>
+              </p>
+
+              <a
+                href="https://github.com/sawarame/Wintch/releases/latest"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="releases-link-btn"
+              >
+                <span data-i18n="install.openReleases">Open GitHub Releases</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" x2="21" y1="14" y2="3" />
+                </svg>
+              </a>
+            </div>
+          </div>
+
+          <div class="specs-strip">
+            <div class="spec-item">
+              <svg class="spec-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <path d="M8 21h8M12 17v4" />
+              </svg>
+              <div>
+                <div class="spec-label" data-i18n="specs.osLabel">OS / Architecture</div>
+                <div class="spec-value" data-i18n="specs.osValue">macOS 14.0 (Sonoma)+ · Apple Silicon / Intel</div>
+              </div>
+            </div>
+            <div class="spec-item">
+              <svg class="spec-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+              </svg>
+              <div>
+                <div class="spec-label" data-i18n="specs.permLabel">Permissions</div>
+                <div class="spec-value" data-i18n="specs.permValue">Accessibility (Screen Recording optional for Capture View)</div>
+              </div>
+            </div>
+            <div class="spec-item">
+              <svg class="spec-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16" />
+              </svg>
+              <div>
+                <div class="spec-label" data-i18n="specs.licenseLabel">License / Stack</div>
+                <div class="spec-value" data-i18n="specs.licenseValue">MIT License · Swift 6.0 / SwiftUI · 5 Languages</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- セクション 9: 下部 CTA -->
+      <section class="bottom-cta-section">
+        <div class="container bottom-cta-inner">
+          <img src="./assets/app-icon.svg" alt="Wintch App Icon" width="68" height="68" class="bottom-cta-icon" />
+          <h2 class="bottom-cta-title" data-i18n="bottomCta.title">Switch windows without friction.</h2>
+          <p class="bottom-cta-desc" data-i18n="bottomCta.desc">Free and open-source under the MIT License.</p>
+          <div class="cta-group">
+            <a
+              href="https://github.com/sawarame/Wintch/releases/latest"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="primary-download-btn"
+              data-download-link
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" x2="12" y1="15" y2="3" />
+              </svg>
+              <span data-download-label>Download (v0.4.3)</span>
+            </a>
+
+            <button
+              type="button"
+              class="copy-pill-btn"
+              data-copy="brew install --cask sawarame/tap/wintch"
+            >
+              <span class="terminal-icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" x2="20" y1="19" y2="19" />
+                </svg>
+              </span>
+              <code class="command-text">brew install --cask sawarame/tap/wintch</code>
+              <span class="copy-status-wrap" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- スタンドアロン フッター -->
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <span>Wintch — MIT License</span>
+        <div class="footer-links">
+          <a href="https://github.com/sawarame/Wintch" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/sawarame/Wintch/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+          <a href="https://github.com/sawarame/Wintch/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+        </div>
+      </div>
+    </footer>
+
+    <!-- コピー完了通知用のスクリーンリーダー向けライブ領域 -->
+    <div id="live-status" class="sr-only" aria-live="polite"></div>
+
+    <script src="./i18n.js" defer></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
