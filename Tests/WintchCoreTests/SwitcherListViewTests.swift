@@ -297,13 +297,16 @@ struct SwitcherListViewTests {
         }
     }
 
-    /// 検索ランチャーのキャプチャ表示型で縦型リスト（幅 520pt）とサムネイル付き行高さ・
+    /// 検索ランチャーのキャプチャ表示型でディスプレイ幅連動の縦型リストとサムネイル付き行高さ・
     /// 画面収録権限未許可時の非インタラクティブ警告バナー・自動スクロール追従が正しく動作することを検証する
     @Test("検索ランチャーのキャプチャ表示型でサムネイル行レイアウト・権限未許可バナー・自動スクロール追従が動作する")
     @MainActor
     func launcherCaptureStyleLayoutPermissionBannerAndScroll() throws {
-        // 1. 同一 2 件候補で、キャプチャ表示型はリスト型より行高さが大きく幅 520pt を維持する
+        // 1. 同一 2 件候補で、キャプチャ表示型はリスト型より行高さが大きく、拡大後のパネル幅を維持する
         let listViewModel = makeViewModel(windowCount: 2, appCount: 0, launcherDisplayStyle: .list)
+        let expectedWidth = SwitcherPanelLayout.listPanelWidth(
+            availableScreenWidth: listViewModel.availableScreenSize.width
+        )
         listViewModel.handleHotKeyEvent(.launcherTriggerPressed)
         let listHosting = NSHostingView(rootView: SwitcherListView(viewModel: listViewModel))
         listHosting.layoutSubtreeIfNeeded()
@@ -323,8 +326,9 @@ struct SwitcherListViewTests {
         captureGrantedHosting.layoutSubtreeIfNeeded()
         let captureGrantedSize = captureGrantedHosting.fittingSize
 
-        #expect(listSize.width == 520)
-        #expect(captureGrantedSize.width == 520)
+        #expect(expectedWidth > 520)
+        #expect(listSize.width == expectedWidth)
+        #expect(captureGrantedSize.width == expectedWidth)
         #expect(captureGrantedSize.height > listSize.height)
 
         // 2. 画面収録権限未許可時は検索ヘッダ下に非インタラクティブな警告バナーが追加表示され、NSButton を含まない
@@ -342,10 +346,10 @@ struct SwitcherListViewTests {
         deniedHosting.layoutSubtreeIfNeeded()
         let deniedSize = deniedHosting.fittingSize
 
-        #expect(deniedSize.width == 520)
+        #expect(deniedSize.width == expectedWidth)
         #expect(deniedSize.height > captureGrantedSize.height)
 
-        let bannerHosting = NSHostingView(rootView: deniedView.permissionBannerView.frame(width: 520))
+        let bannerHosting = NSHostingView(rootView: deniedView.permissionBannerView.frame(width: expectedWidth))
         bannerHosting.layoutSubtreeIfNeeded()
         #expect(bannerHosting.fittingSize.height >= 30)
         func collectSubviews(_ root: NSView) -> [NSView] {
@@ -406,13 +410,16 @@ struct SwitcherListViewTests {
         let flatSize = flatHosting.fittingSize
 
         // 3 アプリ各 1 ウィンドウの場合、グルーピング ON は 3 件のアプリ見出し行が追加されるためフラット時より高さが大きくなる
-        #expect(groupedSize.width == 520)
-        #expect(flatSize.width == 520)
+        let expectedWidth = SwitcherPanelLayout.listPanelWidth(
+            availableScreenWidth: groupedVM.availableScreenSize.width
+        )
+        #expect(groupedSize.width == expectedWidth)
+        #expect(flatSize.width == expectedWidth)
         #expect(groupedSize.height > flatSize.height)
     }
 
     /// 通常スイッチャーのアイコン型・キャプチャ表示型でグルーピング ON のとき、
-    /// 検索ランチャーのキャプチャ表示型（グルーピング ON）と同じプレビュー枠付き縦型リスト（幅 520pt）になり、
+    /// 検索ランチャーのキャプチャ表示型（グルーピング ON）と同じプレビュー枠付き縦型リスト（拡大横幅）になり、
     /// アイコン型では権限未許可でも警告バナーを表示せず、キャプチャ表示型未許可時のみバナーを表示することを検証する
     @Test("通常スイッチャーのアイコン型・キャプチャ表示型（グルーピング ON）がランチャーのキャプチャ表示型と同一の縦型リストになる")
     @MainActor
@@ -445,11 +452,15 @@ struct SwitcherListViewTests {
         normalCaptureDeniedHosting.layoutSubtreeIfNeeded()
         let normalCaptureDeniedSize = normalCaptureDeniedHosting.fittingSize
 
-        // いずれも幅 520pt の縦型リストとして描画される
-        #expect(normalListSize.width == 520)
-        #expect(normalIconSize.width == 520)
-        #expect(normalCaptureGrantedSize.width == 520)
-        #expect(normalCaptureDeniedSize.width == 520)
+        // いずれもディスプレイ幅に応じた拡大後の縦型リスト幅として描画される
+        let expectedWidth = SwitcherPanelLayout.listPanelWidth(
+            availableScreenWidth: normalListVM.availableScreenSize.width
+        )
+        #expect(expectedWidth > 520)
+        #expect(normalListSize.width == expectedWidth)
+        #expect(normalIconSize.width == expectedWidth)
+        #expect(normalCaptureGrantedSize.width == expectedWidth)
+        #expect(normalCaptureDeniedSize.width == expectedWidth)
 
         // アイコン型（大きなアイコン 46pt・枠/背景なし・領域 50pt）とキャプチャ表示型（サムネイル高さ 50pt・権限許可）は
         // 同じ行高さとなり、リスト型より大きい
@@ -483,6 +494,19 @@ struct SwitcherListViewTests {
 
         #expect(smallScreenHeight > 420)
         #expect(largeScreenHeight > smallScreenHeight + 200)
+        // ディスプレイ横幅に応じてパネル横幅も拡大・クランプされること
+        #expect(smallScreenHosting.fittingSize.width == 680)
+        #expect(largeScreenHosting.fittingSize.width == 800)
+
+        viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
+        let standardScreenHosting = NSHostingView(rootView: SwitcherListView(viewModel: viewModel))
+        standardScreenHosting.layoutSubtreeIfNeeded()
+        #expect(standardScreenHosting.fittingSize.width == 720)
+
+        viewModel.updateAvailableScreenSize(CGSize(width: 600, height: 720))
+        let narrowScreenHosting = NSHostingView(rootView: SwitcherListView(viewModel: viewModel))
+        narrowScreenHosting.layoutSubtreeIfNeeded()
+        #expect(narrowScreenHosting.fittingSize.width == 510)
 
         // 実 SwitcherPanel で上寄せ配置と中央配置を比較（ディスプレイが取得可能な環境で上端位置を確認）
         let compactVM = makeViewModel(windowCount: 3, appCount: 0)

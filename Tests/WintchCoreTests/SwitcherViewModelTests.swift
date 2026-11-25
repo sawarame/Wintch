@@ -1910,8 +1910,8 @@ struct SwitcherViewModelTests {
             normalDisplayStyle: .capture,
             isNormalSwitcherGroupedByApp: false
         )
-        // 500pt 幅画面: アイコン型では 3 列（1 行目: [0, 1, 2]、2 行目: [3, 4]）に折り返される
-        viewModel.updateAvailableScreenSize(CGSize(width: 500, height: 800))
+        // 560pt 幅画面: アイコン型（タイル幅 128pt）では 3 列（1 行目: [0, 1, 2]、2 行目: [3, 4]）に折り返される
+        viewModel.updateAvailableScreenSize(CGSize(width: 560, height: 800))
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
         #expect(viewModel.capturedThumbnails[401] != nil)
         viewModel.cancel()

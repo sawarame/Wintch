@@ -8,7 +8,7 @@ public enum SwitcherGridLayout {
     /// キャプチャ表示型 1 枚のカードの固定高さ（ポイント）
     public static let cardHeight: CGFloat = 164
     /// アイコン型 1 枚のタイルの固定横幅（ポイント）
-    public static let iconTileWidth: CGFloat = 112
+    public static let iconTileWidth: CGFloat = 128
     /// アイコン型 1 枚のタイルの固定高さ（ポイント）
     public static let iconTileHeight: CGFloat = 120
     /// カード／タイル間の横・縦間隔（ポイント）
@@ -18,7 +18,7 @@ public enum SwitcherGridLayout {
     /// キャプチャ表示型で 1 行あたりに配置する最大列数上限
     public static let maxColumnsLimit: Int = 5
     /// アイコン型で 1 行あたりに配置する最大列数上限
-    public static let iconMaxColumnsLimit: Int = 8
+    public static let iconMaxColumnsLimit: Int = 10
     /// ディスプレイ利用可能幅に対するパネル最大幅の比率
     public static let maxScreenWidthRatio: CGFloat = 0.85
 

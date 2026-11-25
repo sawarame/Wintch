@@ -8,6 +8,11 @@ struct SwitcherGridLayoutTests {
     /// 項目数と画面幅に応じた列数算出が上限・下限・最小余白制約を満たすことを検証する
     @Test("項目数と画面幅から適切なグリッド列数を算出する")
     func columnsCountRespectsItemCountAndScreenWidth() {
+        // キャプチャ表示型（グルーピング OFF）のカード寸法および最大列数上限は従来通り不変であること
+        #expect(SwitcherGridLayout.cardWidth == 216)
+        #expect(SwitcherGridLayout.cardHeight == 164)
+        #expect(SwitcherGridLayout.maxColumnsLimit == 5)
+
         // 1 件〜2 件のときは項目数に一致し、不要な空列を作らない
         #expect(SwitcherGridLayout.columnsCount(itemCount: 1, availableScreenWidth: 1440) == 1)
         #expect(SwitcherGridLayout.columnsCount(itemCount: 2, availableScreenWidth: 1440) == 2)
@@ -23,7 +28,7 @@ struct SwitcherGridLayoutTests {
         #expect(SwitcherGridLayout.columnsCount(itemCount: 0, availableScreenWidth: 1440) == 1)
     }
 
-    /// アイコン型のタイル幅（112pt）と最大列数上限（8 列）に基づく列数算出および SwitcherDisplayStyle の定義を検証する
+    /// アイコン型の拡大後タイル幅（128pt）と最大列数上限（10 列）に基づく列数算出および SwitcherDisplayStyle の定義を検証する
     @Test("アイコン型の列数計算および SwitcherDisplayStyle の定義順・プロパティを検証する")
     func iconStyleColumnsCountAndDisplayStyleProperties() {
         // SwitcherDisplayStyle の列挙順・rawValue・displayName・default・usesGridLayout
@@ -38,19 +43,22 @@ struct SwitcherGridLayoutTests {
         #expect(SwitcherDisplayStyle.list.usesGridLayout == false)
         #expect(SwitcherDisplayStyle.icon.usesGridLayout == true)
         #expect(SwitcherDisplayStyle.capture.usesGridLayout == true)
+        #expect(SwitcherGridLayout.iconTileWidth == 128)
+        #expect(SwitcherGridLayout.iconMaxColumnsLimit == 10)
 
         // アイコン型でも 1〜3 件のときは項目数に一致し、不要な空列を作らない
         #expect(SwitcherGridLayout.columnsCount(itemCount: 1, availableScreenWidth: 1440, style: .icon) == 1)
         #expect(SwitcherGridLayout.columnsCount(itemCount: 3, availableScreenWidth: 1440, style: .icon) == 3)
 
-        // 広い画面では最大列数上限（8 列）でクランプされる
+        // 1440pt 画面では画面幅 85% 以内（8 列）に収まり、広い画面では最大列数上限（10 列）でクランプされる
         #expect(SwitcherGridLayout.columnsCount(itemCount: 12, availableScreenWidth: 1440, style: .icon) == 8)
-        #expect(SwitcherGridLayout.columnsCount(itemCount: 20, availableScreenWidth: 2560, style: .icon) == 8)
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 12, availableScreenWidth: 1920, style: .icon) == 10)
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 20, availableScreenWidth: 2560, style: .icon) == 10)
 
         // 狭い画面では画面幅 85% 以内に収まる列数へ自動折り返しされる
-        // availableScreenWidth = 500 -> maxPanelWidth = 425 -> innerWidth = 397 -> floor((397 + 10) / 122) = 3 列
-        #expect(SwitcherGridLayout.columnsCount(itemCount: 10, availableScreenWidth: 500, style: .icon) == 3)
-        // availableScreenWidth = 300 -> maxPanelWidth = 255 -> innerWidth = 227 -> floor((227 + 10) / 122) = 1 列
+        // availableScreenWidth = 500 -> maxPanelWidth = 425 -> innerWidth = 397 -> floor((397 + 10) / 138) = 2 列
+        #expect(SwitcherGridLayout.columnsCount(itemCount: 10, availableScreenWidth: 500, style: .icon) == 2)
+        // availableScreenWidth = 300 -> maxPanelWidth = 255 -> innerWidth = 227 -> floor((227 + 10) / 138) = 1 列
         #expect(SwitcherGridLayout.columnsCount(itemCount: 10, availableScreenWidth: 300, style: .icon) == 1)
         #expect(SwitcherGridLayout.columnsCount(itemCount: 0, availableScreenWidth: 1440, style: .icon) == 1)
     }
