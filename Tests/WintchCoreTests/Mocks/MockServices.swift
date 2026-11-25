@@ -5,6 +5,8 @@ import Foundation
 /// テスト用のウィンドウサービスモック
 @MainActor
 final class MockWindowService: WindowServicing {
+    /// OS 通知を模擬したリアルタイムライフサイクルイベント通知ハンドラ
+    var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)?
     /// startObserving の呼び出し回数
     var startObservingCallCount = 0
     /// stopObserving の呼び出し回数
@@ -15,20 +17,44 @@ final class MockWindowService: WindowServicing {
     var activatedWindows: [WindowEntry] = []
     /// クローズが要求されたウィンドウ履歴
     var closedWindows: [WindowEntry] = []
-    /// ウィンドウ ID ごとの closeWindow スタブ結果（未指定時は closeWindowDefaultResult を使用）
+    /// ウィンドウ ID ごとの closeWindow スタブ結果（互換用：true は即時完了、false は送出失敗）
     var stubbedCloseWindowResults: [String: Bool] = [:]
-    /// closeWindow のデフォルト戻り値
+    /// closeWindow のデフォルト戻り値（互換用）
     var closeWindowDefaultResult = true
-    /// 非同期のクローズ挙動（待機や割り込みテスト）を差し込む任意のフック
+    /// 非同期のクローズ挙動（互換用：true は即時完了、false は送出失敗）
     var closeWindowHandler: ((WindowEntry) async -> Bool)?
+    /// ウィンドウ ID ごとの終了要求フェーズ結果スタブ（優先適用）
+    var stubbedCloseWindowRequestResults: [String: WindowCloseRequestResult] = [:]
+    /// 終了要求フェーズのデフォルト戻り値（指定時は互換プロパティより優先）
+    var closeWindowDefaultRequestResult: WindowCloseRequestResult?
+    /// 終了要求フェーズのカスタム非同期フック（優先適用）
+    var requestCloseWindowHandler: ((WindowEntry) async -> WindowCloseRequestResult)?
     /// アプリケーション終了が要求された PID 履歴
     var terminatedPIDs: [Int32] = []
-    /// PID ごとの terminateApplication スタブ結果（未指定時は terminateDefaultResult を使用）
+    /// PID ごとの terminateApplication スタブ結果（互換用：true は即時完了、false は送出失敗）
     var stubbedTerminateResults: [Int32: Bool] = [:]
-    /// terminateApplication のデフォルト戻り値
+    /// terminateApplication のデフォルト戻り値（互換用）
     var terminateDefaultResult = true
-    /// 非同期のアプリ終了挙動を差し込む任意のフック
+    /// 非同期のアプリ終了挙動（互換用：true は即時完了、false は送出失敗）
     var terminateHandler: ((Int32) async -> Bool)?
+    /// PID ごとのアプリ終了要求フェーズ結果スタブ（優先適用）
+    var stubbedTerminateRequestResults: [Int32: WindowCloseRequestResult] = [:]
+    /// アプリ終了要求フェーズのデフォルト戻り値（指定時は互換プロパティより優先）
+    var terminateDefaultRequestResult: WindowCloseRequestResult?
+    /// アプリ終了要求フェーズのカスタム非同期フック（優先適用）
+    var requestTerminateHandler: ((Int32) async -> WindowCloseRequestResult)?
+    /// 生存中として扱うウィンドウ ID 集合（nil の場合は常に生存扱い）
+    var aliveWindowIDs: Set<String>?
+    /// フォールバック生存確認（isWindowAlive）のカスタム非同期フック
+    var isWindowAliveHandler: ((WindowEntry) async -> Bool)?
+    /// 稼働中として扱うアプリケーション PID 集合（nil の場合は常に稼働扱い）
+    var runningApplicationPIDs: Set<Int32>?
+    /// フォールバック生存確認（isApplicationRunning）のカスタム非同期フック
+    var isApplicationRunningHandler: ((Int32) async -> Bool)?
+    /// isWindowAlive が呼ばれた回数
+    var isWindowAliveCallCount = 0
+    /// isApplicationRunning が呼ばれた回数
+    var isApplicationRunningCallCount = 0
 
     /// 監視開始を記録する
     func startObserving() {
@@ -52,26 +78,95 @@ final class MockWindowService: WindowServicing {
         activatedWindows.append(entry)
     }
 
-    /// 対象ウィンドウのクローズ要求を記録し、スタブ設定に応じた成否を返す
+    /// 対象ウィンドウのクローズ要求を記録し、スタブ設定に応じた要求フェーズ結果を返す
     /// - Parameter entry: クローズ対象ウィンドウ
-    /// - Returns: スタブまたはハンドラが決定したクローズ成否
-    func closeWindow(_ entry: WindowEntry) async -> Bool {
+    /// - Returns: スタブまたはハンドラが決定した要求フェーズ結果
+    func requestCloseWindow(_ entry: WindowEntry) async -> WindowCloseRequestResult {
         closedWindows.append(entry)
-        if let closeWindowHandler {
-            return await closeWindowHandler(entry)
+        if let requestCloseWindowHandler {
+            return await requestCloseWindowHandler(entry)
         }
-        return stubbedCloseWindowResults[entry.id] ?? closeWindowDefaultResult
+        if let closeWindowHandler {
+            let succeeded = await closeWindowHandler(entry)
+            return succeeded ? .alreadyClosed() : .failed()
+        }
+        if let result = stubbedCloseWindowRequestResults[entry.id] {
+            return result
+        }
+        if let boolResult = stubbedCloseWindowResults[entry.id] {
+            return boolResult ? .alreadyClosed() : .failed()
+        }
+        if let closeWindowDefaultRequestResult {
+            return closeWindowDefaultRequestResult
+        }
+        return closeWindowDefaultResult ? .alreadyClosed() : .failed()
     }
 
-    /// 対象アプリケーションの終了要求を記録し、スタブ設定に応じた成否を返す
+    /// 対象アプリケーションの終了要求を記録し、スタブ設定に応じた要求フェーズ結果を返す
     /// - Parameter pid: 終了対象プロセス ID
-    /// - Returns: スタブまたはハンドラが決定した終了成否
-    func terminateApplication(pid: Int32) async -> Bool {
+    /// - Returns: スタブまたはハンドラが決定した要求フェーズ結果
+    func requestTerminateApplication(pid: Int32) async -> WindowCloseRequestResult {
         terminatedPIDs.append(pid)
-        if let terminateHandler {
-            return await terminateHandler(pid)
+        if let requestTerminateHandler {
+            return await requestTerminateHandler(pid)
         }
-        return stubbedTerminateResults[pid] ?? terminateDefaultResult
+        if let terminateHandler {
+            let succeeded = await terminateHandler(pid)
+            return succeeded ? .alreadyClosed() : .failed()
+        }
+        if let result = stubbedTerminateRequestResults[pid] {
+            return result
+        }
+        if let boolResult = stubbedTerminateResults[pid] {
+            return boolResult ? .alreadyClosed() : .failed()
+        }
+        if let terminateDefaultRequestResult {
+            return terminateDefaultRequestResult
+        }
+        return terminateDefaultResult ? .alreadyClosed() : .failed()
+    }
+
+    /// 指定ウィンドウが現在も生存しているかをスタブ設定に従って返す
+    /// - Parameter entry: 確認対象のウィンドウ項目
+    /// - Returns: 生存している場合は true
+    func isWindowAlive(_ entry: WindowEntry) async -> Bool {
+        isWindowAliveCallCount += 1
+        if let isWindowAliveHandler {
+            return await isWindowAliveHandler(entry)
+        }
+        if let aliveWindowIDs {
+            return aliveWindowIDs.contains(entry.id)
+        }
+        return true
+    }
+
+    /// 指定アプリケーションが現在も稼働中かをスタブ設定に従って返す
+    /// - Parameter pid: 確認対象のプロセス ID
+    /// - Returns: 稼働中の場合は true
+    func isApplicationRunning(pid: Int32) async -> Bool {
+        isApplicationRunningCallCount += 1
+        if let isApplicationRunningHandler {
+            return await isApplicationRunningHandler(pid)
+        }
+        if let runningApplicationPIDs {
+            return runningApplicationPIDs.contains(pid)
+        }
+        return true
+    }
+
+    /// テストから個別ウィンドウ破棄のリアルタイム通知を模擬発火する
+    /// - Parameters:
+    ///   - windowID: 破棄されたウィンドウ ID
+    ///   - cgWindowID: 紐付いていた CoreGraphics ウィンドウ ID（任意）
+    ///   - pid: 所有プロセスの PID
+    func simulateWindowClosed(windowID: String, cgWindowID: UInt32? = nil, pid: Int32) {
+        onWindowLifecycleEvent?(.windowClosed(windowID: windowID, cgWindowID: cgWindowID, pid: pid))
+    }
+
+    /// テストからアプリケーション終了のリアルタイム通知を模擬発火する
+    /// - Parameter pid: 終了したプロセスの PID
+    func simulateApplicationTerminated(pid: Int32) {
+        onWindowLifecycleEvent?(.applicationTerminated(pid: pid))
     }
 }
 

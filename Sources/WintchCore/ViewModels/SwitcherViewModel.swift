@@ -180,16 +180,27 @@ public final class SwitcherViewModel {
     /// 起動時に取得した全有効ウィンドウ一覧（MRU ソート済み）
     private var allEntries: [WindowEntry] = []
 
-    /// 現在クローズ／終了処理を実行中のウィンドウ項目 ID（処理中でない場合は nil）
-    public private(set) var closingWindowID: String?
+    /// 現在クローズ／終了処理の完了待ち（ローディング表示中）となっているウィンドウ項目 ID 集合
+    public private(set) var closingWindowIDs: Set<String> = []
 
-    /// 現在ウィンドウのクローズ／終了処理を実行中かどうか
+    /// 互換用：処理中のウィンドウが 1 件以上ある場合にその代表 ID を返す（処理中でない場合は nil）
+    public var closingWindowID: String? {
+        closingWindowIDs.first
+    }
+
+    /// 現在いずれかのウィンドウでクローズ／終了処理のローディング表示を実行中かどうか
     public var isClosingWindow: Bool {
-        closingWindowID != nil
+        !closingWindowIDs.isEmpty
     }
 
     /// 表示セッションを識別する世代カウンタ（非同期クローズ復帰時のセッション跨ぎ防止用）
     private var presentationGeneration: Int = 0
+
+    /// 別操作スペース一時遷移を伴い得る単一ウィンドウ終了要求の送出中カウンタ（この間のみ `.resignedActive` を抑止する）
+    private var activeCloseRequestCount: Int = 0
+
+    /// 単一ウィンドウ終了要求の送出中に `.resignedActive` による閉鎖を抑止したかどうか
+    private var didSuppressResignActiveDuringCloseRequest: Bool = false
 
     /// 現在の表示セッションで自アプリの一時アクティブ化を行うべきかどうか
     public private(set) var shouldActivateAppForCurrentSession: Bool = false
@@ -208,10 +219,18 @@ public final class SwitcherViewModel {
     private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
     /// ウィンドウサムネイルキャプチャサービス（キャプチャ表示型選択時のみ使用）
     private let windowCaptureService: (any WindowCaptureServicing)?
+    /// 1 ウィンドウ項目あたりのローディングスピナー表示上限時間（既定値は 5 秒）
+    private let closeLoadingTimeout: Duration
+    /// スピナー表示中のフォールバック生存確認ポーリング間隔（既定値は 80ms）
+    private let closePollInterval: Duration
+    /// スピナー上限到達後にパネル表示中の遅延完了を検知するための低頻度確認間隔（既定値は 500ms）
+    private let postTimeoutPollInterval: Duration
     /// インストール済みアプリ一覧のバックグラウンド更新タスク
     private var installedAppsRefreshTask: Task<Void, Never>?
     /// ウィンドウサムネイルのバックグラウンド取得タスク
     private var captureRefreshTask: Task<Void, Never>?
+    /// 終了要求送出済みウィンドウ ID ごとの非同期完了監視タスク
+    private var closeMonitorTasksByWindowID: [String: Task<Void, Never>] = [:]
 
     /// スイッチャー ViewModel を初期化する
     /// - Parameters:
@@ -227,6 +246,9 @@ public final class SwitcherViewModel {
     ///   - isNormalSwitcherGroupedByApp: 通常スイッチャーの初期アプリグルーピング設定（既定値は true）
     ///   - isLauncherGroupedByApp: 検索ランチャーの初期アプリグルーピング設定（既定値は true）
     ///   - resolvedLanguage: パネル表示に使用する解決済み言語（既定値は日本語）
+    ///   - closeLoadingTimeout: 1 項目あたりのローディングスピナー表示上限時間（既定値は 5 秒）
+    ///   - closePollInterval: スピナー表示中のフォールバック生存確認間隔（既定値は 80ms）
+    ///   - postTimeoutPollInterval: スピナー上限到達後の低頻度フォールバック確認間隔（既定値は 500ms）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -239,7 +261,10 @@ public final class SwitcherViewModel {
         launcherDisplayStyle: LauncherDisplayStyle = .default,
         isNormalSwitcherGroupedByApp: Bool = true,
         isLauncherGroupedByApp: Bool = true,
-        resolvedLanguage: ResolvedAppLanguage = .japanese
+        resolvedLanguage: ResolvedAppLanguage = .japanese,
+        closeLoadingTimeout: Duration = .seconds(5),
+        closePollInterval: Duration = .milliseconds(80),
+        postTimeoutPollInterval: Duration = .milliseconds(500)
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -253,6 +278,14 @@ public final class SwitcherViewModel {
         self.isNormalSwitcherGroupedByApp = isNormalSwitcherGroupedByApp
         self.isLauncherGroupedByApp = isLauncherGroupedByApp
         self.resolvedLanguage = resolvedLanguage
+        self.closeLoadingTimeout = closeLoadingTimeout
+        self.closePollInterval = closePollInterval
+        self.postTimeoutPollInterval = postTimeoutPollInterval
+
+        // パネル表示中に OS 通知で検知したウィンドウ破棄・アプリ終了をリアルタイムに一覧へ反映する
+        self.windowService.onWindowLifecycleEvent = { [weak self] event in
+            self?.handleWindowLifecycleEvent(event)
+        }
     }
 
     /// パネル表示に使用する解決済み言語を即時更新する
@@ -435,7 +468,7 @@ public final class SwitcherViewModel {
     /// - Parameter entryID: 判定対象のウィンドウ項目 ID
     /// - Returns: 対象ウィンドウを閉じている最中であれば true
     public func isClosingWindow(id entryID: String) -> Bool {
-        closingWindowID == entryID
+        closingWindowIDs.contains(entryID)
     }
 
     /// サービス層から通知されたキーイベントを処理する
@@ -462,70 +495,239 @@ public final class SwitcherViewModel {
         }
     }
 
-    /// 現在選択中の対象を閉じる（同アプリに複数ウィンドウがあれば1枚のみ閉じ、最後の1枚ならアプリごと終了する）
+    /// 現在選択中の対象へ終了要求を送出し、完了待機中は項目ごとに非同期追跡する
+    /// （同アプリに複数ウィンドウがあれば 1 枚のみ閉じ、最後の 1 枚ならアプリごと通常終了する）
     public func closeSelectedWindow() async {
-        // 非表示中・クローズ処理中・選択候補なし（0件等）の場合は安全に無視する
+        // 非表示中・選択候補なし（0 件やアプリ起動候補選択中）の場合は安全に無視する
         guard mode != .inactive,
-              !isClosingWindow,
               displayedResults.indices.contains(selectedIndex) else {
+            return
+        }
+
+        let target = displayedResults[selectedIndex].entry
+        // すでに終了処理中（スピナー表示中）の同一ウィンドウに対する重複 Q 押下は無視する
+        guard !closingWindowIDs.contains(target.id) else {
             return
         }
 
         let targetMode = mode
         let capturedGeneration = presentationGeneration
-        let target = displayedResults[selectedIndex].entry
-        let previousIndex = selectedIndex
-        // UI へ処理中スピナーを即時反映するとともに多重実行を防止する
-        closingWindowID = target.id
-        defer {
-            // 同一セッションの進行中クローズのみ解除し、別セッションへ遷移済みの状態は上書きしない
-            if presentationGeneration == capturedGeneration && closingWindowID == target.id {
-                closingWindowID = nil
-            }
-        }
+        // UI へ処理中スピナーを即時反映し、前回タイムアウト後の監視タスクがあれば差し替える
+        closingWindowIDs.insert(target.id)
+        closeMonitorTasksByWindowID.removeValue(forKey: target.id)?.cancel()
+
         // ランチャー検索による絞り込みに左右されないよう、全候補一覧を基準に同アプリの残余ウィンドウ数を判定する
         let isSingleWindowForApp = allEntries.filter { $0.pid == target.pid }.count <= 1
 
-        let didSucceed: Bool
+        let requestResult: WindowCloseRequestResult
         if isSingleWindowForApp {
-            didSucceed = await windowService.terminateApplication(pid: target.pid)
+            requestResult = await windowService.requestTerminateApplication(pid: target.pid)
         } else {
-            didSucceed = await windowService.closeWindow(target)
+            // 別スペース一時遷移を伴い得る単一ウィンドウ終了要求の送出中のみ .resignedActive 閉鎖を抑止する
+            activeCloseRequestCount += 1
+            defer {
+                if presentationGeneration == capturedGeneration {
+                    activeCloseRequestCount = max(activeCloseRequestCount - 1, 0)
+                }
+            }
+            requestResult = await windowService.requestCloseWindow(target)
         }
 
-        // 待機中に別セッションへ遷移・終了済みの場合は状態を変更せず抜ける
+        // 要求送出中に別セッションへ遷移・終了済みの場合は状態を変更せず抜ける
         guard mode == targetMode, presentationGeneration == capturedGeneration else { return }
 
-        closingWindowID = nil
-
-        guard didSucceed else {
-            // 自動 Space 移動等が発生した失敗ケースでもパネルの前面・フォーカスを維持する
-            onPanelFocusRestoreNeeded?(targetMode)
-            return
+        let shouldRestoreFocus = !isSingleWindowForApp
+            && (requestResult.didSwitchSpace || didSuppressResignActiveDuringCloseRequest)
+        if activeCloseRequestCount == 0 {
+            didSuppressResignActiveDuringCloseRequest = false
         }
 
-        if isSingleWindowForApp {
-            let removedIDs = allEntries.filter { $0.pid == target.pid || $0.id == target.id }.compactMap(\.cgWindowID)
-            for windowID in removedIDs {
+        switch requestResult {
+        case .failed:
+            closingWindowIDs.remove(target.id)
+            if shouldRestoreFocus {
+                onPanelFocusRestoreNeeded?(targetMode)
+            }
+
+        case .alreadyClosed:
+            closingWindowIDs.remove(target.id)
+            if isSingleWindowForApp {
+                removeEntries(matchingPID: target.pid, fallbackWindowID: target.id)
+            } else {
+                removeEntry(matchingWindowID: target.id, cgWindowID: target.cgWindowID)
+            }
+
+        case .requested:
+            if shouldRestoreFocus {
+                onPanelFocusRestoreNeeded?(targetMode)
+            }
+            // 要求送出中に OS 通知で既に一覧から除外済みであればスピナーのみ解除して終了する
+            guard allEntries.contains(where: { $0.id == target.id }) else {
+                closingWindowIDs.remove(target.id)
+                return
+            }
+            startCloseMonitoring(
+                for: target,
+                isSingleWindowForApp: isSingleWindowForApp,
+                targetMode: targetMode,
+                generation: capturedGeneration
+            )
+        }
+    }
+
+    /// WindowService から通知されたリアルタイムのウィンドウ破棄／アプリ終了イベントを処理する
+    /// - Parameter event: 受信したライフサイクルイベント
+    public func handleWindowLifecycleEvent(_ event: WindowLifecycleEvent) {
+        guard mode != .inactive else { return }
+        switch event {
+        case let .windowClosed(windowID, cgWindowID, _):
+            removeEntry(matchingWindowID: windowID, cgWindowID: cgWindowID)
+        case let .applicationTerminated(pid):
+            removeEntries(matchingPID: pid, fallbackWindowID: nil)
+        }
+    }
+
+    /// 終了要求を送出した対象について、フォールバック生存確認およびスピナー表示上限タイムアウトを非同期で監視する
+    /// - Parameters:
+    ///   - target: 監視対象のウィンドウ項目
+    ///   - isSingleWindowForApp: アプリ通常終了として PID 単位で監視する場合は true
+    ///   - targetMode: 開始時の表示モード
+    ///   - generation: 開始時の表示セッション世代
+    private func startCloseMonitoring(
+        for target: WindowEntry,
+        isSingleWindowForApp: Bool,
+        targetMode: SwitcherMode,
+        generation: Int
+    ) {
+        closeMonitorTasksByWindowID[target.id]?.cancel()
+        let loadingDeadline = ContinuousClock.now + closeLoadingTimeout
+        let pollInterval = closePollInterval
+        let postTimeoutInterval = postTimeoutPollInterval
+
+        closeMonitorTasksByWindowID[target.id] = Task { @MainActor [weak self] in
+            var didReachLoadingTimeout = false
+
+            while !Task.isCancelled {
+                let sleepDuration: Duration
+                if didReachLoadingTimeout {
+                    sleepDuration = postTimeoutInterval
+                } else {
+                    let now = ContinuousClock.now
+                    if now >= loadingDeadline {
+                        sleepDuration = .zero
+                    } else {
+                        let remaining = now.duration(to: loadingDeadline)
+                        sleepDuration = remaining < pollInterval ? remaining : pollInterval
+                    }
+                }
+
+                if sleepDuration > .zero {
+                    try? await Task.sleep(for: sleepDuration)
+                }
+
+                guard let self,
+                      !Task.isCancelled,
+                      self.mode == targetMode,
+                      self.presentationGeneration == generation else {
+                    return
+                }
+
+                // OS 通知等により既に一覧から除外済みであれば監視を終了する
+                guard self.allEntries.contains(where: { $0.id == target.id }) else {
+                    self.closingWindowIDs.remove(target.id)
+                    self.closeMonitorTasksByWindowID.removeValue(forKey: target.id)
+                    return
+                }
+
+                let isAlive: Bool
+                if isSingleWindowForApp {
+                    isAlive = await self.windowService.isApplicationRunning(pid: target.pid)
+                } else {
+                    isAlive = await self.windowService.isWindowAlive(target)
+                }
+
+                guard !Task.isCancelled,
+                      self.mode == targetMode,
+                      self.presentationGeneration == generation else {
+                    return
+                }
+
+                if !isAlive {
+                    self.closeMonitorTasksByWindowID.removeValue(forKey: target.id)
+                    self.closingWindowIDs.remove(target.id)
+                    if isSingleWindowForApp {
+                        self.removeEntries(matchingPID: target.pid, fallbackWindowID: target.id)
+                    } else {
+                        self.removeEntry(matchingWindowID: target.id, cgWindowID: target.cgWindowID)
+                    }
+                    return
+                }
+
+                // ローディング上限時間経過後はスピナーのみ解除し、パネルが開いている間は低頻度監視＋OS 通知を継続する
+                if !didReachLoadingTimeout && ContinuousClock.now >= loadingDeadline {
+                    didReachLoadingTimeout = true
+                    self.closingWindowIDs.remove(target.id)
+                }
+            }
+        }
+    }
+
+    /// 指定ウィンドウに一致する項目を一覧・キャッシュから除外して表示と選択カーソルを更新する
+    /// - Parameters:
+    ///   - windowID: 除外対象のウィンドウ項目 ID
+    ///   - cgWindowID: 補助照合用の CoreGraphics ウィンドウ ID（不明時は nil）
+    private func removeEntry(matchingWindowID windowID: String, cgWindowID: UInt32?) {
+        applyEntriesRemoval { entry in
+            if entry.id == windowID {
+                return true
+            }
+            if let cgWindowID, entry.cgWindowID == cgWindowID {
+                return true
+            }
+            return false
+        }
+    }
+
+    /// 指定 PID（および必要ならフォールバック ID）に一致する全ウィンドウ項目を一覧・キャッシュから除外して表示を更新する
+    /// - Parameters:
+    ///   - pid: 終了したアプリケーションのプロセス ID
+    ///   - fallbackWindowID: PID 一致に加えて確実に除外する対象ウィンドウ ID（任意）
+    private func removeEntries(matchingPID pid: Int32, fallbackWindowID: String?) {
+        applyEntriesRemoval { entry in
+            entry.pid == pid || (fallbackWindowID != nil && entry.id == fallbackWindowID)
+        }
+    }
+
+    /// 条件に一致するウィンドウ項目を一覧・キャッシュ・監視タスクから除外し、選択カーソル維持とリサイズ通知を行う
+    /// - Parameter predicate: 除外対象とみなすウィンドウ項目の判定クロージャ
+    private func applyEntriesRemoval(where predicate: (WindowEntry) -> Bool) {
+        guard mode != .inactive else { return }
+        let removedEntries = allEntries.filter(predicate)
+        guard !removedEntries.isEmpty else { return }
+
+        let currentMode = mode
+        let previousIndex = selectedIndex
+        let previousTarget = currentSelectionTarget()
+
+        for entry in removedEntries {
+            closingWindowIDs.remove(entry.id)
+            closeMonitorTasksByWindowID.removeValue(forKey: entry.id)?.cancel()
+            if let windowID = entry.cgWindowID {
                 capturedThumbnails.removeValue(forKey: windowID)
                 windowCaptureService?.invalidateThumbnail(for: windowID)
             }
-            allEntries.removeAll { $0.pid == target.pid || $0.id == target.id }
-        } else {
-            if let windowID = target.cgWindowID {
-                capturedThumbnails.removeValue(forKey: windowID)
-                windowCaptureService?.invalidateThumbnail(for: windowID)
-            }
-            allEntries.removeAll { $0.id == target.id }
         }
 
-        if allEntries.isEmpty && targetMode == .normal {
+        let removedIDs = Set(removedEntries.map(\.id))
+        allEntries.removeAll { removedIDs.contains($0.id) }
+
+        if allEntries.isEmpty && currentMode == .normal {
             // 通常スイッチャーでは開いている通常ウィンドウが 0 件になった時点でパネルを自動的に閉じる
             dismiss(reason: .cancelled)
             return
         }
 
-        switch targetMode {
+        switch currentMode {
         case .normal:
             rebuildNormalDisplayedResults()
             displayedAppResults = []
@@ -539,12 +741,29 @@ public final class SwitcherViewModel {
             return
         }
 
-        selectedIndex = SwitcherSelection.indexAfterRemoval(
-            current: previousIndex,
-            remainingCount: activeResultCount
+        selectedIndex = SwitcherSelection.indexAfterExternalRemoval(
+            previousIndex: previousIndex,
+            previousTarget: previousTarget,
+            remainingWindowIDs: displayedResults.map(\.entry.id),
+            remainingAppIDs: currentMode == .launcher ? displayedAppResults.map(\.id) : []
         )
         onSearchResultsUpdated?()
-        onPanelFocusRestoreNeeded?(targetMode)
+        onPanelFocusRestoreNeeded?(currentMode)
+    }
+
+    /// 現在選択中のウィンドウ項目またはアプリ起動候補の識別子を返す
+    /// - Returns: 選択中の対象識別子（候補 0 件等で範囲外の場合は nil）
+    private func currentSelectionTarget() -> SwitcherSelection.SelectionTarget? {
+        if displayedResults.indices.contains(selectedIndex) {
+            return .window(id: displayedResults[selectedIndex].entry.id)
+        }
+        if mode == .launcher {
+            let appIndex = selectedIndex - displayedResults.count
+            if displayedAppResults.indices.contains(appIndex) {
+                return .app(id: displayedAppResults[appIndex].id)
+            }
+        }
+        return nil
     }
 
     /// ランチャーモードの検索文字列を更新し、ファジー検索結果と選択位置を再計算する
@@ -614,8 +833,10 @@ public final class SwitcherViewModel {
     /// - Parameter reason: パネル終了の理由（デフォルトは明示的キャンセル）
     public func cancel(reason: SwitcherDismissReason = .cancelled) {
         guard mode != .inactive else { return }
-        // クローズ処理中の自動 Space 移動に伴う一時的な非アクティブ化ではパネルを閉じない
-        if reason == .resignedActive && isClosingWindow {
+        // 別スペース一時遷移を伴い得る単一ウィンドウ終了要求の送出中のみ非アクティブ化による閉鎖を抑止する
+        // （終了待ちモニタリング中は確認ダイアログ操作を妨げないようブロックしない）
+        if reason == .resignedActive && activeCloseRequestCount > 0 {
+            didSuppressResignActiveDuringCloseRequest = true
             return
         }
         dismiss(reason: reason)
@@ -743,7 +964,13 @@ public final class SwitcherViewModel {
     /// - Parameter reason: パネル終了の理由
     private func dismiss(reason: SwitcherDismissReason) {
         presentationGeneration += 1
-        closingWindowID = nil
+        closingWindowIDs.removeAll()
+        activeCloseRequestCount = 0
+        didSuppressResignActiveDuringCloseRequest = false
+        for task in closeMonitorTasksByWindowID.values {
+            task.cancel()
+        }
+        closeMonitorTasksByWindowID.removeAll()
         installedAppsRefreshTask?.cancel()
         installedAppsRefreshTask = nil
         captureRefreshTask?.cancel()

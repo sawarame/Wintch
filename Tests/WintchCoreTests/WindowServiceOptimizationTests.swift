@@ -201,4 +201,119 @@ struct WindowServiceOptimizationTests {
         )
         #expect(targetPIDs == [20, 40])
     }
+
+    /// AX 対象未解決時のウィンドウクローズ要求結果が、消滅済み判定と送出失敗判定およびスペース遷移フラグを正しく分類することを検証する
+    @Test("resolveCloseRequestResultOnUnresolvedTarget は終了済みアプリ・消滅済み CGWindow を alreadyClosed と判定する")
+    func resolveCloseRequestResultOnUnresolvedTargetDistinguishesClosedAndFailed() {
+        #expect(
+            WindowService.resolveCloseRequestResultOnUnresolvedTarget(
+                isAppTerminated: true,
+                cgWindowID: 100,
+                survivingCGWindowIDs: [100],
+                didSwitchSpace: true
+            ) == .alreadyClosed(didSwitchSpace: true)
+        )
+        #expect(
+            WindowService.resolveCloseRequestResultOnUnresolvedTarget(
+                isAppTerminated: false,
+                cgWindowID: 100,
+                survivingCGWindowIDs: [200],
+                didSwitchSpace: false
+            ) == .alreadyClosed(didSwitchSpace: false)
+        )
+        #expect(
+            WindowService.resolveCloseRequestResultOnUnresolvedTarget(
+                isAppTerminated: false,
+                cgWindowID: 100,
+                survivingCGWindowIDs: [100, 200],
+                didSwitchSpace: true
+            ) == .failed(didSwitchSpace: true)
+        )
+        #expect(
+            WindowService.resolveCloseRequestResultOnUnresolvedTarget(
+                isAppTerminated: false,
+                cgWindowID: nil,
+                survivingCGWindowIDs: [],
+                didSwitchSpace: false
+            ) == .failed(didSwitchSpace: false)
+        )
+    }
+
+    /// アプリ終了要求（terminate）の結果分類が、終了済み・拒否・進行中・即時終了を正しく区別することを検証する
+    @Test("resolveTerminateRequestResult は状態に応じて alreadyClosed・requested・failed を返す")
+    func resolveTerminateRequestResultClassifiesOutcomesCorrectly() {
+        #expect(
+            WindowService.resolveTerminateRequestResult(
+                hasRunningApp: false,
+                isAlreadyTerminated: true,
+                terminateAccepted: false,
+                isTerminatedImmediately: true
+            ) == .alreadyClosed()
+        )
+        #expect(
+            WindowService.resolveTerminateRequestResult(
+                hasRunningApp: true,
+                isAlreadyTerminated: true,
+                terminateAccepted: false,
+                isTerminatedImmediately: true
+            ) == .alreadyClosed()
+        )
+        #expect(
+            WindowService.resolveTerminateRequestResult(
+                hasRunningApp: true,
+                isAlreadyTerminated: false,
+                terminateAccepted: false,
+                isTerminatedImmediately: false
+            ) == .failed()
+        )
+        #expect(
+            WindowService.resolveTerminateRequestResult(
+                hasRunningApp: true,
+                isAlreadyTerminated: false,
+                terminateAccepted: true,
+                isTerminatedImmediately: false
+            ) == .requested()
+        )
+        #expect(
+            WindowService.resolveTerminateRequestResult(
+                hasRunningApp: true,
+                isAlreadyTerminated: false,
+                terminateAccepted: true,
+                isTerminatedImmediately: true
+            ) == .alreadyClosed()
+        )
+    }
+
+    /// AXUIElementDestroyedNotification 受信時の通知イベント生成が、重複排除および無関係子要素の無視を正しく行うことを検証する
+    @Test("makeDestroyedWindowLifecycleEvents は対象ウィンドウ一致時のみ重複なしで通知イベントを生成する")
+    func makeDestroyedWindowLifecycleEventsDeduplicatesAndFiltersNonWindowElements() {
+        // 一致なし（ボタン等の子要素破棄）は通知を生成しない
+        #expect(WindowService.makeDestroyedWindowLifecycleEvents(from: [], pid: 42).isEmpty)
+
+        // キャッシュと追跡対象で同一 ID が重複一致しても 1 件に統合し、別 ID（cg-* 等）は保持する
+        let events = WindowService.makeDestroyedWindowLifecycleEvents(
+            from: [
+                (windowID: "ax-42-1", cgWindowID: 1001),
+                (windowID: "ax-42-1", cgWindowID: 1001),
+                (windowID: "cg-1001", cgWindowID: 1001)
+            ],
+            pid: 42
+        )
+        #expect(
+            events == [
+                .windowClosed(windowID: "ax-42-1", cgWindowID: 1001, pid: 42),
+                .windowClosed(windowID: "cg-1001", cgWindowID: 1001, pid: 42)
+            ]
+        )
+    }
+
+    /// 存在しない PID に対する終了要求・生存確認が安全に終了済みとして返ることを検証する
+    @Test("WindowService は未稼働 PID に対して alreadyClosed および稼働なしを返す")
+    @MainActor
+    func nonexistentPIDIsTreatedAsAlreadyClosedAndNotRunning() async {
+        let service = WindowService()
+        let invalidPID: Int32 = 999_999
+        #expect(await service.requestTerminateApplication(pid: invalidPID) == .alreadyClosed())
+        #expect(await service.isApplicationRunning(pid: invalidPID) == false)
+    }
 }
