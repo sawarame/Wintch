@@ -120,6 +120,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   └── UpdateViewModel.swift            # 更新確認・進捗・スキップ・差し替えフォールバック制御
 │       └── Views/
 │           ├── LauncherSearchField.swift        # IME 優先 NSTextField ラッパー検索入力欄
+│           ├── MenuBarContentView.swift         # メニューバー常駐メニュー本体（通常スイッチャー／検索ランチャー独立入り口）
 │           ├── PermissionGuideView.swift        # アクセシビリティ権限誘導画面
 │           ├── SettingsView.swift               # 左サイドバー付き設定画面（バージョン情報・手動更新統合）
 │           ├── ShortcutRecorderView.swift       # ショートカットキー入力キャプチャビュー

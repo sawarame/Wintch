@@ -9,11 +9,11 @@ public enum AppStringKey: String, CaseIterable, Equatable, Sendable {
 
     /// メニューバー: アクセシビリティ権限不足案内
     case menuBarAccessibilityRequired
-    /// メニューバー: 表示形式サブメニュー
+    /// メニューバー: 表示形式セクション見出し
     case menuBarDisplayStyle
-    /// メニューバー: 通常スイッチャーセクション
+    /// メニューバー: 通常スイッチャーサブメニュー
     case menuBarNormalSwitcher
-    /// メニューバー: 検索ランチャーセクション
+    /// メニューバー: 検索ランチャーサブメニュー
     case menuBarSearchLauncher
     /// メニューバー・設定共通: アプリごとにグルーピング
     case groupByAppToggle
@@ -867,11 +867,11 @@ public struct AppStrings: Equatable, Sendable {
     public var settingsLanguageLabel: String { text(for: .settingsLanguageLabel) }
     /// メニューバー: アクセシビリティ権限不足案内
     public var menuBarAccessibilityRequired: String { text(for: .menuBarAccessibilityRequired) }
-    /// メニューバー: 表示形式サブメニュー
+    /// メニューバー: 表示形式セクション見出し
     public var menuBarDisplayStyle: String { text(for: .menuBarDisplayStyle) }
-    /// メニューバー: 通常スイッチャーセクション
+    /// メニューバー: 通常スイッチャーサブメニュー
     public var menuBarNormalSwitcher: String { text(for: .menuBarNormalSwitcher) }
-    /// メニューバー: 検索ランチャーセクション
+    /// メニューバー: 検索ランチャーサブメニュー
     public var menuBarSearchLauncher: String { text(for: .menuBarSearchLauncher) }
     /// 共通: アプリごとにグルーピングトグル
     public var groupByAppToggle: String { text(for: .groupByAppToggle) }
