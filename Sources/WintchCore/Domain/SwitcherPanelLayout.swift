@@ -8,8 +8,23 @@ public enum SwitcherPanelVerticalPlacement: Equatable, Sendable {
     case centered
 }
 
-/// スイッチャー／検索ランチャーパネルの垂直配置判定・座標計算・一覧最大高さ算出を行う純粋ロジック群
+/// スイッチャー／検索ランチャーパネルの垂直配置判定・座標計算・パネル横幅／一覧最大高さ算出を行う純粋ロジック群
 public enum SwitcherPanelLayout {
+    /// リスト表示パネルの基準とするディスプレイ有効幅比率
+    public static let listWidthScreenRatio: CGFloat = 0.50
+
+    /// リスト表示パネルの標準的な最小目標横幅（ポイント）
+    public static let minListPanelWidth: CGFloat = 680
+
+    /// リスト表示パネルの最大横幅上限（ポイント）
+    public static let maxListPanelWidth: CGFloat = 800
+
+    /// リスト表示パネルがディスプレイ有効幅に対して占有可能な最大比率（狭い画面での画面外はみ出し防止）
+    public static let maxListScreenWidthRatio: CGFloat = 0.85
+
+    /// 極小ディスプレイ時でもリスト表示が破綻しないように保護する絶対最小横幅（ポイント）
+    public static let absoluteMinListPanelWidth: CGFloat = 320
+
     /// 上寄せ配置時にディスプレイ有効高さに対して確保する上端オフセット比率
     public static let upperTopOffsetRatio: CGFloat = 0.14
 
@@ -53,6 +68,18 @@ public enum SwitcherPanelLayout {
             return .centered
         }
         return .upperAnchored
+    }
+
+    /// リスト表示パネル（通常スイッチャー縦型リストおよび検索ランチャー）の横幅をディスプレイ有効幅に応じて算出する
+    /// - Parameter availableScreenWidth: アクティブディスプレイの有効横幅（ポイント）
+    /// - Returns: 画面幅比率と上下限に基づき安全にクランプされたパネル横幅（整数ポイント）
+    public static func listPanelWidth(availableScreenWidth: CGFloat) -> CGFloat {
+        guard availableScreenWidth > 0 else { return minListPanelWidth }
+        let proportional = availableScreenWidth * listWidthScreenRatio
+        let preferredWidth = min(max(proportional, minListPanelWidth), maxListPanelWidth)
+        let screenCap = availableScreenWidth * maxListScreenWidthRatio
+        let safeFloor = min(absoluteMinListPanelWidth, availableScreenWidth)
+        return max(min(preferredWidth, screenCap), safeFloor).rounded()
     }
 
     /// 上寄せ配置時にディスプレイ有効領域の上端から空けるオフセット距離を算出する

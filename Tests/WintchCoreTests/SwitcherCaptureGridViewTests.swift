@@ -210,7 +210,11 @@ struct SwitcherCaptureGridViewTests {
         flatContentHosting.layoutSubtreeIfNeeded()
         #expect(flatContentHosting.fittingSize.width == expectedWidth)
 
-        // グルーピング ON に切り替えると、アイコン型でも縦型リスト（幅 520pt・1 列）へ切り替わり画面収録権限を参照しないこと
+        // グルーピング ON に切り替えると、アイコン型でも縦型リスト（ディスプレイ幅連動・1 列）へ切り替わり画面収録権限を参照しないこと
+        let expectedGroupedListWidth = SwitcherPanelLayout.listPanelWidth(
+            availableScreenWidth: viewModel.availableScreenSize.width
+        )
+        #expect(expectedGroupedListWidth == 720)
         viewModel.updateNormalSwitcherGrouping(true)
         #expect(viewModel.usesGridLayoutForCurrentMode == false)
         #expect(viewModel.gridColumnCount == 1)
@@ -218,9 +222,9 @@ struct SwitcherCaptureGridViewTests {
 
         let normalContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         normalContentHosting.layoutSubtreeIfNeeded()
-        #expect(normalContentHosting.fittingSize.width == 520)
+        #expect(normalContentHosting.fittingSize.width == expectedGroupedListWidth)
 
-        // キャプチャ表示型・グルーピング ON の場合も幅 520pt の縦型リストで描画され、権限未許可時はバナー付き・ボタン無しであること
+        // キャプチャ表示型・グルーピング ON の場合もディスプレイ幅連動の縦型リストで描画され、権限未許可時はバナー付き・ボタン無しであること
         viewModel.cancel()
         viewModel.updateNormalDisplayStyle(.capture)
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
@@ -228,7 +232,7 @@ struct SwitcherCaptureGridViewTests {
         #expect(viewModel.isScreenRecordingGranted == false)
         let groupedCaptureHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         groupedCaptureHosting.layoutSubtreeIfNeeded()
-        #expect(groupedCaptureHosting.fittingSize.width == 520)
+        #expect(groupedCaptureHosting.fittingSize.width == expectedGroupedListWidth)
         #expect(collectAllSubviews(in: groupedCaptureHosting).compactMap { $0 as? NSButton }.isEmpty)
 
         viewModel.cancel()
@@ -236,7 +240,7 @@ struct SwitcherCaptureGridViewTests {
         #expect(viewModel.mode == .launcher)
         let launcherContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         launcherContentHosting.layoutSubtreeIfNeeded()
-        #expect(launcherContentHosting.fittingSize.width == 520)
+        #expect(launcherContentHosting.fittingSize.width == expectedGroupedListWidth)
     }
 
     /// アイコングリッドおよびキャプチャグリッド（グルーピング OFF）において、

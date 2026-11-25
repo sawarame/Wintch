@@ -250,4 +250,38 @@ struct SwitcherPanelLayoutTests {
             ) >= 48
         )
     }
+
+    /// リスト表示パネルの横幅がディスプレイ有効幅に応じて従来 520pt より拡大し、狭幅・広幅・異常値で安全にクランプされることを検証する
+    @Test("リスト表示パネルの横幅がディスプレイ幅に応じて拡大し上下限で安全にクランプされる")
+    func listPanelWidthScalesWithScreenWidthAndClampsSafely() {
+        // 標準ノート（1280pt / 1440pt / 1512pt）では従来の固定幅 520pt より明確に広がる
+        let width1280 = SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 1280)
+        let width1440 = SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 1440)
+        let width1512 = SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 1512)
+        #expect(width1280 == 680)
+        #expect(width1440 == 720)
+        #expect(width1512 == 756)
+        #expect(width1280 > 520)
+        #expect(width1440 > width1280)
+        #expect(width1512 > width1440)
+
+        // 大型外部ディスプレイ（1728pt / 1920pt / 2560pt）では上限 800pt にクランプされ間延びしない
+        #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 1728) == 800)
+        #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 1920) == 800)
+        #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 2560) == 800)
+
+        // 狭い画面では画面幅 85% 以内にクランプされ画面外へはみ出さない
+        let width700 = SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 700)
+        #expect(width700 == 595)
+        #expect(width700 <= 700 * SwitcherPanelLayout.maxListScreenWidthRatio)
+
+        let width500 = SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 500)
+        #expect(width500 == 425)
+        #expect(width500 <= 500 * SwitcherPanelLayout.maxListScreenWidthRatio)
+
+        // 極小画面では有効幅を超えない安全な幅に収まり、0 以下の異常値では既定の最小目標幅へフォールバックする
+        #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 300) == 300)
+        #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 0) == SwitcherPanelLayout.minListPanelWidth)
+        #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: -100) == SwitcherPanelLayout.minListPanelWidth)
+    }
 }

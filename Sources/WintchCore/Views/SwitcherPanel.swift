@@ -27,7 +27,12 @@ public final class SwitcherPanel: NSPanel {
     /// - Parameter contentView: パネル内にホストする SwiftUI コンテンツビュー
     public init(contentView: SwitcherContentView) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: SwitcherPanelLayout.minListPanelWidth,
+                height: 240
+            ),
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false

@@ -26,7 +26,7 @@ public struct SwitcherContentView: View {
     public var body: some View {
         Group {
             // グルーピング ON 時は通常スイッチャーのアイコン型・キャプチャ表示型も
-            // 検索ランチャーのキャプチャ表示型と同一の縦型リストビュー（幅 520pt）で表示する
+            // 検索ランチャーのキャプチャ表示型と同一の縦型リストビュー（ディスプレイ幅連動）で表示する
             if viewModel.usesGridLayoutForCurrentMode {
                 switch viewModel.normalDisplayStyle {
                 case .icon:
@@ -42,17 +42,13 @@ public struct SwitcherContentView: View {
                 case .list:
                     SwitcherListView(
                         viewModel: viewModel,
-                        onContentHeightChanged: { newHeight in
-                            onContentSizeChanged?(CGSize(width: 520, height: newHeight))
-                        }
+                        onContentSizeChanged: onContentSizeChanged
                     )
                 }
             } else {
                 SwitcherListView(
                     viewModel: viewModel,
-                    onContentHeightChanged: { newHeight in
-                        onContentSizeChanged?(CGSize(width: 520, height: newHeight))
-                    }
+                    onContentSizeChanged: onContentSizeChanged
                 )
             }
         }

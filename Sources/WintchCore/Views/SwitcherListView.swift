@@ -17,19 +17,25 @@ public struct SwitcherListView: View {
     /// スイッチャーの状態管理を行う ViewModel
     private let viewModel: SwitcherViewModel
 
-    /// コンテンツ高さ変化時にパネル側へリサイズを通知するコールバック
+    /// コンテンツ高さ変化時にパネル側へリサイズを通知するコールバック（従来互換）
     private let onContentHeightChanged: ((CGFloat) -> Void)?
+
+    /// コンテンツサイズ（幅・高さ）変化時にパネル側へリサイズを通知するコールバック
+    private let onContentSizeChanged: ((CGSize) -> Void)?
 
     /// リストビューを初期化する
     /// - Parameters:
     ///   - viewModel: スイッチャー ViewModel
     ///   - onContentHeightChanged: コンテンツ高さ変化時の通知クロージャ
+    ///   - onContentSizeChanged: コンテンツサイズ変化時の通知クロージャ
     public init(
         viewModel: SwitcherViewModel,
-        onContentHeightChanged: ((CGFloat) -> Void)? = nil
+        onContentHeightChanged: ((CGFloat) -> Void)? = nil,
+        onContentSizeChanged: ((CGSize) -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.onContentHeightChanged = onContentHeightChanged
+        self.onContentSizeChanged = onContentSizeChanged
     }
 
     /// 検索文字列の双方向バインディング
@@ -68,6 +74,13 @@ public struct SwitcherListView: View {
         viewModel.isCaptureActiveForCurrentMode && !viewModel.isScreenRecordingGranted
     }
 
+    /// アクティブディスプレイの有効幅に応じたリストパネル横幅
+    private var panelWidth: CGFloat {
+        SwitcherPanelLayout.listPanelWidth(
+            availableScreenWidth: viewModel.availableScreenSize.width
+        )
+    }
+
     /// アクティブディスプレイの有効高さおよび上部ヘッダ有無に応じたリスト領域の最大スクロール高さ
     private var maxScrollHeight: CGFloat {
         SwitcherPanelLayout.maxListScrollHeight(
@@ -98,12 +111,15 @@ public struct SwitcherListView: View {
                 resultListView
             }
         }
-        .frame(width: 520)
+        .frame(width: panelWidth)
         .background(
             GeometryReader { proxy in
                 Color.clear
-                    .onChange(of: proxy.size.height) { _, newHeight in
-                        onContentHeightChanged?(newHeight)
+                    .onChange(of: proxy.size) { oldSize, newSize in
+                        onContentSizeChanged?(newSize)
+                        if abs(oldSize.height - newSize.height) > 0.5 {
+                            onContentHeightChanged?(newSize.height)
+                        }
                     }
             }
         )
