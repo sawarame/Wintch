@@ -107,4 +107,36 @@ struct SwitcherGridLayoutTests {
         #expect(SwitcherGridLayout.moveIndex(current: 2, direction: .down, count: count, columns: columns) == 0)
         #expect(SwitcherGridLayout.moveIndex(current: 0, direction: .up, count: count, columns: columns) == 2)
     }
+
+    /// 項目数・列数・表示形式からグリッドの確定コンテンツ高さが正確に算出されることを検証する
+    @Test("グリッドの確定コンテンツ高さがタイル寸法・行間・余白から正確に算出される")
+    func gridContentHeightCalculatesExactRowsAndPadding() {
+        // 0 件時は上下余白のみ
+        #expect(
+            SwitcherGridLayout.contentHeight(itemCount: 0, columns: 5, style: .capture)
+                == SwitcherGridLayout.gridPadding * 2
+        )
+
+        // キャプチャ表示型: 1 行（3 件 / 3 列）= 164 + 28 = 192
+        #expect(
+            SwitcherGridLayout.contentHeight(itemCount: 3, columns: 3, style: .capture)
+                == SwitcherGridLayout.cardHeight + SwitcherGridLayout.gridPadding * 2
+        )
+
+        // キャプチャ表示型: 3 行（11 件 / 5 列）= 164*3 + 10*2 + 28 = 540
+        #expect(
+            SwitcherGridLayout.contentHeight(itemCount: 11, columns: 5, style: .capture)
+                == SwitcherGridLayout.cardHeight * 3
+                    + SwitcherGridLayout.cardSpacing * 2
+                    + SwitcherGridLayout.gridPadding * 2
+        )
+
+        // アイコン型: 2 行（11 件 / 10 列）= 120*2 + 10 + 28 = 278
+        #expect(
+            SwitcherGridLayout.contentHeight(itemCount: 11, columns: 10, style: .icon)
+                == SwitcherGridLayout.iconTileHeight * 2
+                    + SwitcherGridLayout.cardSpacing
+                    + SwitcherGridLayout.gridPadding * 2
+        )
+    }
 }

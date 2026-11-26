@@ -23,6 +23,24 @@ public final class SwitcherPanel: NSPanel {
     /// 現在の表示セッションで自アプリの一時アクティブ化を実施したかどうか
     private var didActivateAppForCurrentSession: Bool = false
 
+    /// 連続リサイズ要求の整数丸め・往復振動検出・上限ガードを管理する安定化器
+    private var resizeStabilizer = SwitcherPanelResizeStabilizer()
+
+    /// `setFrame` 実行中に発生する同期レイアウト由来の再入フィードバックを遮断するフラグ
+    private var isApplyingFrameUpdate: Bool = false
+
+    /// 非同期コアレッシング中の最新リサイズ要求サイズ
+    private var pendingTargetSize: CGSize?
+
+    /// メインランループ次ターンへの非同期リサイズ反映をスケジュール済みかどうか
+    private var hasScheduledSizeUpdate: Bool = false
+
+    /// 表示セッション切替時に旧セッションの遅延リサイズ要求を破棄するための世代トークン
+    private var resizeSessionToken: Int = 0
+
+    /// テスト検証用：現在の表示セッション中に実際に `setFrame` を適用した回数
+    internal private(set) var appliedResizeCountForTesting: Int = 0
+
     /// パネルを初期化する
     /// - Parameter contentView: パネル内にホストする SwiftUI コンテンツビュー
     public init(contentView: SwitcherContentView) {
@@ -50,7 +68,11 @@ public final class SwitcherPanel: NSPanel {
         self.hidesOnDeactivate = false
 
         let hostingView = NSHostingView(rootView: contentView)
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        // NSHostingView の自動ウィンドウサイズ制約が SwitcherPanel 側の上端固定 setFrame と
+        // 競合・押し戻し（リサイズフィードバックループ）を起こさないよう、サイズ制御をパネル側へ一本化する
+        hostingView.sizingOptions = []
+        hostingView.translatesAutoresizingMaskIntoConstraints = true
+        hostingView.autoresizingMask = [.width, .height]
         // ホスティングビューのレイヤー自体も角丸でクリップし、四隅の描画漏れを防ぐ
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 14
@@ -59,31 +81,80 @@ public final class SwitcherPanel: NSPanel {
         self.contentView = hostingView
     }
 
+    /// コンテンツ構成（検索結果・グルーピング・言語等）の変化開始を通知し、リサイズ安定化サイクルをリセットする
+    public func beginContentResizeCycle() {
+        resizeStabilizer.resetCycle()
+    }
+
     /// 表示中に上端位置を固定したまま指定高さへ下方向リサイズする（リスト型互換）
     /// - Parameter height: 新しいコンテンツ高さ
     public func updateAnchoredHeight(to height: CGFloat) {
         updateAnchoredSize(to: CGSize(width: frame.width, height: height))
     }
 
-    /// 表示中に上端位置および水平中心を維持したまま指定サイズへリサイズする
+    /// 表示中に上端位置および水平中心を維持したまま指定サイズへリサイズをスケジュールする
+    /// SwiftUI の RunLoop Observer 内からの同期 `setFrame` による無限レイアウト循環を防ぐため、
+    /// 再入を遮断しつつ最新サイズのみを次ターンへ非同期コアレッシング実行する
     /// - Parameter size: 新しいコンテンツサイズ
     public func updateAnchoredSize(to size: CGSize) {
-        guard isVisible, currentMode != .inactive, let anchoredTopY else {
+        guard isVisible, currentMode != .inactive, anchoredTopY != nil else {
+            return
+        }
+        // `setFrame` 内部の同期レイアウトから戻ってきたサイズ通知はフィードバックループ原因のため無視する
+        guard !isApplyingFrameUpdate else {
             return
         }
 
-        let targetWidth = max(size.width, 200)
-        let targetHeight = max(size.height, 48)
-        guard abs(frame.height - targetHeight) > 0.5 || abs(frame.width - targetWidth) > 0.5 else {
+        pendingTargetSize = size
+        guard !hasScheduledSizeUpdate else {
+            return
+        }
+        hasScheduledSizeUpdate = true
+        let expectedToken = resizeSessionToken
+        // 現在の RunLoop Observer（SwiftUI UpdateGroup）を抜けた後の次ターンで 1 回だけ適用する
+        // `.common` モードでスケジュールし、イベント追跡中や RunLoop 駆動テスト環境でも確実に反映する
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.flushPendingAnchoredSizeUpdate(expectedToken: expectedToken)
+            }
+        }
+    }
+
+    /// コアレッシング済みの最新リサイズ要求を取り出してパネルフレームへ反映する
+    /// - Parameter expectedToken: スケジュール時点の表示セッショントークン
+    private func flushPendingAnchoredSizeUpdate(expectedToken: Int) {
+        hasScheduledSizeUpdate = false
+        guard expectedToken == resizeSessionToken,
+              let requestedSize = pendingTargetSize else {
+            return
+        }
+        pendingTargetSize = nil
+        applyAnchoredSizeIfNeeded(requestedSize)
+    }
+
+    /// 安定化器で正規化・振動検出を通過したサイズのみを上端固定で `NSWindow.setFrame` へ適用する
+    /// - Parameter size: 適用候補のコンテンツサイズ
+    private func applyAnchoredSizeIfNeeded(_ size: CGSize) {
+        guard isVisible, currentMode != .inactive, let anchoredTopY, !isApplyingFrameUpdate else {
+            return
+        }
+        guard let targetSize = resizeStabilizer.resolveTargetSize(
+            requestedSize: size,
+            currentFrameSize: frame.size
+        ) else {
             return
         }
 
-        let newOriginY = anchoredTopY - targetHeight
-        let newOriginX = frame.midX - (targetWidth / 2.0)
+        // 非 Retina 環境（backingScale = 1.0）でも端数ズレが起きないよう整数ポイント座標で適用する
+        let newOriginY = (anchoredTopY - targetSize.height).rounded()
+        let newOriginX = (frame.midX - (targetSize.width / 2.0)).rounded()
+        isApplyingFrameUpdate = true
+        defer { isApplyingFrameUpdate = false }
         setFrame(
-            NSRect(x: newOriginX, y: newOriginY, width: targetWidth, height: targetHeight),
+            NSRect(x: newOriginX, y: newOriginY, width: targetSize.width, height: targetSize.height),
             display: true
         )
+        appliedResizeCountForTesting += 1
         // リサイズ後の角丸形状に合わせて OS 側のウィンドウシャドウを再計算する
         invalidateShadow()
     }
@@ -113,6 +184,11 @@ public final class SwitcherPanel: NSPanel {
         verticalPlacement: SwitcherPanelVerticalPlacement = .upperAnchored
     ) {
         currentMode = mode
+        resizeSessionToken &+= 1
+        pendingTargetSize = nil
+        hasScheduledSizeUpdate = false
+        resizeStabilizer.resetCycle()
+        appliedResizeCountForTesting = 0
         let shouldActivate = activateApp ?? (mode == .launcher)
         didActivateAppForCurrentSession = shouldActivate
         if shouldActivate {
@@ -141,7 +217,8 @@ public final class SwitcherPanel: NSPanel {
             hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize
             if fittingSize.width > 0 && fittingSize.height > 0 {
-                setContentSize(fittingSize)
+                let normalized = SwitcherPanelResizeStabilizer.normalizedSize(from: fittingSize)
+                setContentSize(normalized)
             }
         }
 
@@ -151,13 +228,13 @@ public final class SwitcherPanel: NSPanel {
                 in: screenFrame,
                 placement: verticalPlacement
             )
-            setFrameOrigin(origin)
+            setFrameOrigin(NSPoint(x: origin.x.rounded(), y: origin.y.rounded()))
         } else {
             center()
         }
 
         // 表示中のウィンドウクローズ等で高さが変わった際に上端位置を維持するため両モードで上端座標を記録する
-        anchoredTopY = frame.maxY
+        anchoredTopY = frame.maxY.rounded()
         if shouldActivate {
             // 日本語 IME 変換やセキュア入力解除のため一時的に自アプリをアクティブ化する
             NSApplication.shared.activate()
@@ -176,33 +253,24 @@ public final class SwitcherPanel: NSPanel {
 
     /// 表示中に上端位置を固定したままコンテンツ高さの変化に応じて下方向へリサイズする
     public func updateAnchoredHeightIfNeeded() {
-        guard isVisible, currentMode != .inactive, let anchoredTopY, let hostingView = contentView else {
+        guard isVisible, currentMode != .inactive, anchoredTopY != nil, !isApplyingFrameUpdate, let hostingView = contentView else {
             return
         }
 
         hostingView.layoutSubtreeIfNeeded()
         let fittingSize = hostingView.fittingSize
-        let targetHeight = max(fittingSize.height, 48)
         let targetWidth = fittingSize.width > 0 ? fittingSize.width : frame.width
-
-        guard abs(frame.height - targetHeight) > 0.5 || abs(frame.width - targetWidth) > 0.5 else {
-            return
-        }
-
-        let newOriginY = anchoredTopY - targetHeight
-        let newOriginX = frame.midX - (targetWidth / 2.0)
-        setFrame(
-            NSRect(x: newOriginX, y: newOriginY, width: targetWidth, height: targetHeight),
-            display: true
-        )
-        // リサイズ後の角丸形状に合わせて OS 側のウィンドウシャドウを再計算する
-        invalidateShadow()
+        updateAnchoredSize(to: CGSize(width: targetWidth, height: fittingSize.height))
     }
 
     /// パネルを非表示にし、必要であれば直前アプリへフォーカスを戻す
     /// - Parameter restorePreviousApp: キャンセル時などに直前アプリを再アクティブ化する場合は true
     public func hidePanel(restorePreviousApp: Bool = false) {
         let appToRestore = restorePreviousApp ? previousFrontmostApp : nil
+        resizeSessionToken &+= 1
+        pendingTargetSize = nil
+        hasScheduledSizeUpdate = false
+        resizeStabilizer.resetCycle()
         anchoredTopY = nil
         previousFrontmostApp = nil
         didActivateAppForCurrentSession = false

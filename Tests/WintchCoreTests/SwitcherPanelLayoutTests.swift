@@ -284,4 +284,144 @@ struct SwitcherPanelLayoutTests {
         #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: 0) == SwitcherPanelLayout.minListPanelWidth)
         #expect(SwitcherPanelLayout.listPanelWidth(availableScreenWidth: -100) == SwitcherPanelLayout.minListPanelWidth)
     }
+
+    /// SwitcherPanelResizeStabilizer が端数丸め・往復振動検出・連続更新上限・サイクルリセットを正しく制御することを検証する
+    @Test("SwitcherPanelResizeStabilizer が端数誤差・往復振動・連続更新上限を遮断しサイクルリセット後に再追従する")
+    func resizeStabilizerPreventsFractionalJitterOscillationAndRunaway() {
+        // 1. 下限クランプ・整数ポイント丸め・非有限値の安全な正規化
+        #expect(
+            SwitcherPanelResizeStabilizer.normalizedSize(from: CGSize(width: 120.4, height: 30.2))
+                == CGSize(width: 200, height: 48)
+        )
+        #expect(
+            SwitcherPanelResizeStabilizer.normalizedSize(from: CGSize(width: 800.4, height: 664.6))
+                == CGSize(width: 800, height: 665)
+        )
+        #expect(
+            SwitcherPanelResizeStabilizer.normalizedSize(
+                from: CGSize(width: CGFloat.nan, height: CGFloat.infinity)
+            ) == CGSize(width: 200, height: 48)
+        )
+
+        var stabilizer = SwitcherPanelResizeStabilizer(maxUpdatesPerCycle: 4)
+
+        // 2. 非 Retina 環境で起きやすい 0.4pt 等のサブピクセル差は無視する
+        #expect(
+            stabilizer.resolveTargetSize(
+                requestedSize: CGSize(width: 800.2, height: 664.4),
+                currentFrameSize: CGSize(width: 800, height: 664)
+            ) == nil
+        )
+        #expect(stabilizer.appliedCountInCycle == 0)
+
+        // 3. 1pt 以上の変化（664 -> 665）は初回のみ許可し、直後に 665 -> 664 へ戻る往復振動は即座に遮断する
+        let first = stabilizer.resolveTargetSize(
+            requestedSize: CGSize(width: 800, height: 664.6),
+            currentFrameSize: CGSize(width: 800, height: 664)
+        )
+        #expect(first == CGSize(width: 800, height: 665))
+        #expect(stabilizer.appliedCountInCycle == 1)
+
+        let pingPong = stabilizer.resolveTargetSize(
+            requestedSize: CGSize(width: 800, height: 664),
+            currentFrameSize: CGSize(width: 800, height: 665)
+        )
+        #expect(pingPong == nil)
+        #expect(stabilizer.appliedCountInCycle == 1)
+
+        // 4. サイクルリセット後は同じ 664 への正当な縮小も再び許可される
+        stabilizer.resetCycle()
+        let afterReset = stabilizer.resolveTargetSize(
+            requestedSize: CGSize(width: 800, height: 664),
+            currentFrameSize: CGSize(width: 800, height: 665)
+        )
+        #expect(afterReset == CGSize(width: 800, height: 664))
+
+        // 5. 単調増加する異常連打でも maxUpdatesPerCycle（4 回）で確実に打ち切る
+        var current = CGSize(width: 800, height: 664)
+        var applied = 1
+        for step in 1...10 {
+            let nextRequest = CGSize(width: 800, height: 664 + CGFloat(step * 10))
+            if let resolved = stabilizer.resolveTargetSize(requestedSize: nextRequest, currentFrameSize: current) {
+                current = resolved
+                applied += 1
+            }
+        }
+        #expect(applied == 4)
+        #expect(stabilizer.appliedCountInCycle == 4)
+    }
+
+    /// リスト行の保守的最小高さに基づき、多数候補時のみ固定最大高さモードへ切り替わることを検証する
+    @Test("リスト行の最小保証高さに応じて固定最大高さモードと非遅延モードが適切に分岐する")
+    func listFixedMaxScrollHeightThresholdBehavior() {
+        let now = Date()
+        /// テスト用のダミーウィンドウ行配列を生成するローカルヘルパー
+        func makeWindowRows(count: Int) -> [SwitcherListRow] {
+            (0..<count).map { index in
+                let entry = WindowEntry(
+                    id: "w-\(index)",
+                    cgWindowID: UInt32(100 + index),
+                    pid: Int32(10 + index),
+                    bundleIdentifier: "com.example.app\(index)",
+                    applicationName: "App\(index)",
+                    windowTitle: "Window \(index)",
+                    lastActivatedAt: now
+                )
+                return .window(index: index, result: WindowSearchResult(entry: entry))
+            }
+        }
+
+        let maxScrollHeight: CGFloat = 748
+
+        // 少数件数（3 件）は maxScrollHeight 未満のため非遅延 VStack モード
+        let fewRows = makeWindowRows(count: 3)
+        #expect(
+            SwitcherPanelLayout.shouldUseFixedMaxScrollHeight(
+                rows: fewRows,
+                isGrouped: false,
+                usesTallWindowRow: true,
+                maxScrollHeight: maxScrollHeight
+            ) == false
+        )
+
+        // キャプチャ行 15 件（最小高さ >= 900pt）は確実に 748pt を超えるため固定最大高さ＋LazyVStack モード
+        let manyCaptureRows = makeWindowRows(count: 15)
+        #expect(
+            SwitcherPanelLayout.shouldUseFixedMaxScrollHeight(
+                rows: manyCaptureRows,
+                isGrouped: false,
+                usesTallWindowRow: true,
+                maxScrollHeight: maxScrollHeight
+            ) == true
+        )
+
+        // 通常グルーピングリスト行 30 件も確実に 748pt を超えるため固定最大高さモード
+        let manyGroupedListRows = makeWindowRows(count: 30)
+        #expect(
+            SwitcherPanelLayout.shouldUseFixedMaxScrollHeight(
+                rows: manyGroupedListRows,
+                isGrouped: true,
+                usesTallWindowRow: false,
+                maxScrollHeight: maxScrollHeight
+            ) == true
+        )
+
+        // 0 件および異常な maxScrollHeight <= 0 では常に false
+        #expect(
+            SwitcherPanelLayout.shouldUseFixedMaxScrollHeight(
+                rows: [],
+                isGrouped: false,
+                usesTallWindowRow: false,
+                maxScrollHeight: maxScrollHeight
+            ) == false
+        )
+        #expect(
+            SwitcherPanelLayout.shouldUseFixedMaxScrollHeight(
+                rows: manyCaptureRows,
+                isGrouped: false,
+                usesTallWindowRow: true,
+                maxScrollHeight: 0
+            ) == false
+        )
+    }
 }

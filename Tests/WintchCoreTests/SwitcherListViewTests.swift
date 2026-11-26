@@ -652,4 +652,104 @@ struct SwitcherListViewTests {
             #expect(findProgressIndicators(in: hostingView).isEmpty)
         }
     }
+
+    /// 検索ランチャー（キャプチャ表示型・グルーピング ON/OFF・ウィンドウ＋アプリ候補混在）で
+    /// IME 変換中を想定した連続クエリ更新を行っても、サイズ通知ループが起きず上端固定で有限回数内に収束することを検証する
+    @Test("検索ランチャーのキャプチャ表示型で連続検索してもリサイズループせず上端固定で収束する")
+    @MainActor
+    func launcherCaptureRapidQueryChangesConvergeWithoutResizeLoop() throws {
+        for isGrouped in [true, false] {
+            let viewModel = makeViewModel(
+                windowCount: 12,
+                appCount: 18,
+                launcherDisplayStyle: .capture,
+                screenRecordingStatus: .granted
+            )
+            viewModel.updateLauncherGrouping(isGrouped)
+            viewModel.updateAvailableScreenSize(CGSize(width: 1920, height: 1050))
+            viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+
+            var panelRef: SwitcherPanel?
+            let contentView = SwitcherContentView(
+                viewModel: viewModel,
+                onContentSizeChanged: { newSize in
+                    panelRef?.updateAnchoredSize(to: newSize)
+                }
+            )
+            let panel = SwitcherPanel(contentView: contentView)
+            panelRef = panel
+            viewModel.onSearchResultsUpdated = {
+                panelRef?.beginContentResizeCycle()
+            }
+            panel.alphaValue = 0
+            panel.ignoresMouseEvents = true
+            panel.show(mode: .launcher, activateApp: false, verticalPlacement: .upperAnchored)
+            defer { panel.hidePanel(restorePreviousApp: false) }
+
+            pumpMainRunLoop(for: 0.1)
+            let initialTopY = panel.frame.maxY
+
+            // IME 変換中を想定し、候補数が大きく増減するクエリ列を連続適用する
+            let queries = ["s", "sa", "sam", "Sample", "SampleApp1", "SampleLaunch", "zzzzzz", "Sample", ""]
+            for query in queries {
+                viewModel.updateSearchQuery(query)
+                pumpMainRunLoop(for: 0.04)
+            }
+
+            // 全クエリ適用後の追加ランループ巡回でリサイズ回数が増え続けないこと（収束確認）
+            pumpMainRunLoop(for: 0.15)
+            let countAfterSettling = panel.appliedResizeCountForTesting
+            pumpMainRunLoop(for: 0.15)
+            #expect(panel.appliedResizeCountForTesting == countAfterSettling)
+            // 候補増減に伴う正当なリサイズが実際に機能しつつ、暴走的な回数になっていないこと
+            #expect(countAfterSettling >= 1)
+            #expect(countAfterSettling <= queries.count * 3)
+            // 上端位置が初期アンカーからずれていないこと
+            #expect(abs(panel.frame.maxY - initialTopY) <= 1.0)
+        }
+    }
+
+    /// SwitcherPanel へ同一サイクル内で振動サイズや端数サイズを連続通知しても、
+    /// 非同期コアレッシングと振動ガードにより有限回数で停止し上端位置が維持されることを検証する
+    @Test("SwitcherPanel への振動サイズ・端数サイズ連続通知が有限回数で収束し上端位置を維持する")
+    @MainActor
+    func switcherPanelBlocksOscillatingAndFractionalResizeFeedback() throws {
+        let viewModel = makeViewModel(windowCount: 4, appCount: 0, launcherDisplayStyle: .capture)
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+
+        let (panel, _) = try makeHostedPanel(for: viewModel)
+        defer { panel.hidePanel(restorePreviousApp: false) }
+
+        let initialFrame = panel.frame
+        let initialTopY = initialFrame.maxY
+        let baseWidth = initialFrame.width
+        let baseHeight = initialFrame.height
+
+        // 1. 同一ランループ内で大量のサイズ通知が来ても非同期コアレッシングで 1 回に集約される
+        for offset in 1...10 {
+            panel.updateAnchoredSize(to: CGSize(width: baseWidth, height: baseHeight + CGFloat(offset)))
+        }
+        pumpMainRunLoop(for: 0.08)
+        #expect(panel.appliedResizeCountForTesting == 1)
+        #expect(panel.frame.height == (baseHeight + 10).rounded())
+        #expect(abs(panel.frame.maxY - initialTopY) <= 1.0)
+
+        // 2. 元の高さへ戻る往復振動（baseHeight + 10 -> baseHeight -> baseHeight + 10）を繰り返しても再発火しない
+        for _ in 0..<5 {
+            panel.updateAnchoredSize(to: CGSize(width: baseWidth, height: baseHeight))
+            pumpMainRunLoop(for: 0.03)
+            panel.updateAnchoredSize(to: CGSize(width: baseWidth, height: baseHeight + 10))
+            pumpMainRunLoop(for: 0.03)
+        }
+        #expect(panel.appliedResizeCountForTesting == 1)
+
+        // 3. サブピクセル端数差（+0.4pt）の連打でも追加リサイズは発生しない
+        panel.beginContentResizeCycle()
+        for _ in 0..<5 {
+            panel.updateAnchoredSize(to: CGSize(width: baseWidth, height: panel.frame.height + 0.4))
+            pumpMainRunLoop(for: 0.03)
+        }
+        #expect(panel.appliedResizeCountForTesting == 1)
+        #expect(abs(panel.frame.maxY - initialTopY) <= 1.0)
+    }
 }

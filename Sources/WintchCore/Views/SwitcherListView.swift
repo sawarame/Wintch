@@ -114,10 +114,14 @@ public struct SwitcherListView: View {
         .frame(width: panelWidth)
         .background(
             GeometryReader { proxy in
+                let roundedSize = CGSize(
+                    width: proxy.size.width.rounded(),
+                    height: proxy.size.height.rounded()
+                )
                 Color.clear
-                    .onChange(of: proxy.size) { oldSize, newSize in
+                    .onChange(of: roundedSize) { oldSize, newSize in
                         onContentSizeChanged?(newSize)
-                        if abs(oldSize.height - newSize.height) > 0.5 {
+                        if abs(oldSize.height - newSize.height) >= 1.0 {
                             onContentHeightChanged?(newSize.height)
                         }
                     }
@@ -208,94 +212,50 @@ public struct SwitcherListView: View {
     /// リスト最上部（上部余白・先頭見出し行を含む y == 0）へ確実に復帰するための固定スクロールアンカー ID
     private static let topScrollAnchorID = "__wintch_list_top_anchor__"
 
+    /// 現在のリスト行数が最大スクロール高さ以上になることが保証され、固定高さ＋遅延スタックを使うべきかどうか
+    private var usesFixedMaxScrollHeight: Bool {
+        SwitcherPanelLayout.shouldUseFixedMaxScrollHeight(
+            rows: listRows,
+            isGrouped: isGrouped,
+            usesTallWindowRow: isNormalIconGroupedStyle || usesCaptureRowStyle,
+            maxScrollHeight: maxScrollHeight
+        )
+    }
+
     /// ウィンドウ候補および（ランチャー検索時の）アプリ起動候補を統合表示する縦型スクロールリスト
     private var resultListView: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(spacing: 0) {
-                    // 上部余白（10pt）を兼ねる非ゼロ高さの常駐アンカーを LazyVStack 外の y == 0 に置き、
-                    // 長距離スクロールや検索更新時でも height == 0 無視や見積もり高さズレなしに最上部へ復帰させる
-                    Color.clear
-                        .frame(height: 10)
-                        .id(Self.topScrollAnchorID)
-
-                    LazyVStack(spacing: 4) {
-                        // ForEach 要素の id と ScrollViewReader の scrollTo 対象 ID を一致させるため単一モデルで描画する
-                        ForEach(listRows) { row in
-                            switch row {
-                            case let .appGroupHeader(_, applicationName, representativePID, matchedAppNameRanges, isFirstGroup):
-                                appGroupHeaderView(
-                                    applicationName: applicationName,
-                                    icon: viewModel.icon(for: representativePID),
-                                    matchedRanges: matchedAppNameRanges,
-                                    isFirstGroup: isFirstGroup
-                                )
-
-                            case let .window(index, result):
-                                let isClosing = viewModel.isClosingWindow(id: result.entry.id)
-                                Group {
-                                    if isNormalIconGroupedStyle {
-                                        SwitcherGroupedIconRowView(
-                                            result: result,
-                                            icon: viewModel.icon(for: result.entry.pid),
-                                            isSelected: index == viewModel.selectedIndex,
-                                            isClosing: isClosing,
-                                            language: viewModel.resolvedLanguage
-                                        )
-                                    } else if usesCaptureRowStyle {
-                                        SwitcherCaptureRowView(
-                                            result: result,
-                                            thumbnail: viewModel.isCaptureActiveForCurrentMode
-                                                ? viewModel.thumbnail(for: result.entry)
-                                                : nil,
-                                            icon: viewModel.icon(for: result.entry.pid),
-                                            isSelected: index == viewModel.selectedIndex,
-                                            isClosing: isClosing,
-                                            showsAppHeader: !isGrouped,
-                                            language: viewModel.resolvedLanguage
-                                        )
-                                    } else {
-                                        SwitcherRowView(
-                                            result: result,
-                                            icon: viewModel.icon(for: result.entry.pid),
-                                            isSelected: index == viewModel.selectedIndex,
-                                            isClosing: isClosing,
-                                            showsAppInfo: !isGrouped,
-                                            language: viewModel.resolvedLanguage
-                                        )
-                                    }
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewModel.selectAndActivate(at: index)
-                                }
-
-                            case let .launchSectionHeader(title, hasPrecedingWindows):
-                                appLaunchSectionHeader(
-                                    title: title,
-                                    hasPrecedingWindows: hasPrecedingWindows
-                                )
-
-                            case let .appLaunch(unifiedIndex, result):
-                                AppLaunchRowView(
-                                    result: result,
-                                    icon: viewModel.icon(forAppURL: result.app.bundleURL),
-                                    isSelected: unifiedIndex == viewModel.selectedIndex,
-                                    launchBadgeTitle: viewModel.strings.launcherLaunchBadge
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewModel.selectAndActivate(at: unifiedIndex)
-                                }
+            Group {
+                if usesFixedMaxScrollHeight {
+                    // 候補が多く確実に maxScrollHeight へ達する場合は、確定高さ＋LazyVStack とし
+                    // .fixedSize(vertical: true) を外すことで推定高さ変動とパネルリサイズの循環を遮断する
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(spacing: 0) {
+                            topScrollAnchorView
+                            LazyVStack(spacing: 4) {
+                                listRowsContent
                             }
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 10)
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
+                    .frame(height: maxScrollHeight)
+                } else {
+                    // 少数件数時は非遅延 VStack で全行を 1 パス確定計測し、遅延プリフェッチ由来の高さ振動を防ぐ
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(spacing: 0) {
+                            topScrollAnchorView
+                            VStack(spacing: 4) {
+                                listRowsContent
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 10)
+                        }
+                    }
+                    .frame(maxHeight: maxScrollHeight)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .frame(maxHeight: maxScrollHeight)
-            .fixedSize(horizontal: false, vertical: true)
             .onAppear {
                 scrollToSelectedRow(using: proxy, animated: false)
             }
@@ -312,6 +272,89 @@ public struct SwitcherListView: View {
             .onChange(of: viewModel.mode) { _, newMode in
                 guard newMode != .inactive else { return }
                 scrollToSelectedRow(using: proxy, animated: false)
+            }
+        }
+    }
+
+    /// 上部余白（10pt）を兼ねる常駐スクロールアンカービュー
+    private var topScrollAnchorView: some View {
+        // 上部余白（10pt）を兼ねる非ゼロ高さの常駐アンカーをリスト先頭の y == 0 に置き、
+        // 長距離スクロールや検索更新時でも height == 0 無視や見積もり高さズレなしに最上部へ復帰させる
+        Color.clear
+            .frame(height: 10)
+            .id(Self.topScrollAnchorID)
+    }
+
+    /// 統合リスト行配列（グループ見出し・ウィンドウ行・アプリ起動セクション）を描画する共通コンテンツ
+    @ViewBuilder
+    private var listRowsContent: some View {
+        // ForEach 要素の id と ScrollViewReader の scrollTo 対象 ID を一致させるため単一モデルで描画する
+        ForEach(listRows) { row in
+            switch row {
+            case let .appGroupHeader(_, applicationName, representativePID, matchedAppNameRanges, isFirstGroup):
+                appGroupHeaderView(
+                    applicationName: applicationName,
+                    icon: viewModel.icon(for: representativePID),
+                    matchedRanges: matchedAppNameRanges,
+                    isFirstGroup: isFirstGroup
+                )
+
+            case let .window(index, result):
+                let isClosing = viewModel.isClosingWindow(id: result.entry.id)
+                Group {
+                    if isNormalIconGroupedStyle {
+                        SwitcherGroupedIconRowView(
+                            result: result,
+                            icon: viewModel.icon(for: result.entry.pid),
+                            isSelected: index == viewModel.selectedIndex,
+                            isClosing: isClosing,
+                            language: viewModel.resolvedLanguage
+                        )
+                    } else if usesCaptureRowStyle {
+                        SwitcherCaptureRowView(
+                            result: result,
+                            thumbnail: viewModel.isCaptureActiveForCurrentMode
+                                ? viewModel.thumbnail(for: result.entry)
+                                : nil,
+                            icon: viewModel.icon(for: result.entry.pid),
+                            isSelected: index == viewModel.selectedIndex,
+                            isClosing: isClosing,
+                            showsAppHeader: !isGrouped,
+                            language: viewModel.resolvedLanguage
+                        )
+                    } else {
+                        SwitcherRowView(
+                            result: result,
+                            icon: viewModel.icon(for: result.entry.pid),
+                            isSelected: index == viewModel.selectedIndex,
+                            isClosing: isClosing,
+                            showsAppInfo: !isGrouped,
+                            language: viewModel.resolvedLanguage
+                        )
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    viewModel.selectAndActivate(at: index)
+                }
+
+            case let .launchSectionHeader(title, hasPrecedingWindows):
+                appLaunchSectionHeader(
+                    title: title,
+                    hasPrecedingWindows: hasPrecedingWindows
+                )
+
+            case let .appLaunch(unifiedIndex, result):
+                AppLaunchRowView(
+                    result: result,
+                    icon: viewModel.icon(forAppURL: result.app.bundleURL),
+                    isSelected: unifiedIndex == viewModel.selectedIndex,
+                    launchBadgeTitle: viewModel.strings.launcherLaunchBadge
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    viewModel.selectAndActivate(at: unifiedIndex)
+                }
             }
         }
     }
