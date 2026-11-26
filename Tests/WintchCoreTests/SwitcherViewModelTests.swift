@@ -480,15 +480,23 @@ struct SwitcherViewModelTests {
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
         #expect(viewModel.selectedIndex == 1)
 
-        // 複数ウィンドウ時のクローズ失敗で一覧・選択を維持しフォーカス復元も呼ばれる
+        // 複数ウィンドウ時のスペース遷移なしクローズ失敗では一覧・選択を維持し、確認ダイアログ操作を妨げる不要なフォーカス奪還は行わない
         await viewModel.closeSelectedWindow()
         #expect(windowService.closedWindows.map(\.id) == ["w2"])
         #expect(viewModel.isPresented == true)
         #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3"])
         #expect(viewModel.selectedIndex == 1)
+        #expect(restoredModes.isEmpty)
+
+        // 別スペース一時遷移を伴うクローズ失敗時はパネルフォーカスを復元し、一覧・選択を維持する
+        windowService.stubbedCloseWindowRequestResults["w2"] = .failed(didSwitchSpace: true)
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3"])
+        #expect(viewModel.selectedIndex == 1)
         #expect(restoredModes == [.normal])
 
-        // 単一ウィンドウアプリの終了失敗でも一覧・選択を維持しフォーカス復元が呼ばれる
+        // 単一ウィンドウアプリの終了失敗でも一覧・選択を維持し、不要なフォーカス奪還を行わない
         viewModel.moveSelection(.down)
         #expect(viewModel.selectedIndex == 2)
         await viewModel.closeSelectedWindow()
@@ -496,7 +504,7 @@ struct SwitcherViewModelTests {
         #expect(viewModel.isPresented == true)
         #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3"])
         #expect(viewModel.selectedIndex == 2)
-        #expect(restoredModes == [.normal, .normal])
+        #expect(restoredModes == [.normal])
     }
 
     /// 最後の1件を閉じた際の自動終了、検索0件時の無視、および待機中の連打・途中キャンセル安全性を検証する
@@ -2535,5 +2543,474 @@ struct SwitcherViewModelTests {
         await newSessionCloseTask.value
         #expect(viewModel.closingWindowID == nil)
         #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+    }
+
+    /// 終了に時間がかかるウィンドウ／アプリに対して、スピナー表示を維持したまま
+    /// OS 通知およびフォールバック生存確認でリアルタイムに一覧除外・キャッシュ破棄されることを検証する
+    @Test("遅延完了時に OS 通知およびフォールバック生存確認でリアルタイムに一覧除外・スピナー解除される")
+    @MainActor
+    func delayedCloseAndTerminateCompleteViaLifecycleEventAndFallbackPolling() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let captureService = MockWindowCaptureService()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 101, pid: 10, applicationName: "HeavyApp", title: "Doc 1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 102, pid: 10, applicationName: "HeavyApp", title: "Doc 2", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", cgWindowID: 201, pid: 20, applicationName: "ElectronApp", title: "Tab A", lastActivatedAt: now.addingTimeInterval(-20)),
+            RawWindowCandidate(id: "w4", cgWindowID: 202, pid: 20, applicationName: "ElectronApp", title: "Tab B", lastActivatedAt: now.addingTimeInterval(-30)),
+            RawWindowCandidate(id: "w5", cgWindowID: 301, pid: 30, applicationName: "SlowQuitApp", title: "Main", lastActivatedAt: now.addingTimeInterval(-40))
+        ]
+        captureService.cachedThumbnails = [
+            101: NSImage(size: NSSize(width: 20, height: 12)),
+            102: NSImage(size: NSSize(width: 20, height: 12)),
+            201: NSImage(size: NSSize(width: 20, height: 12)),
+            301: NSImage(size: NSSize(width: 20, height: 12))
+        ]
+        windowService.closeWindowDefaultRequestResult = .requested()
+        windowService.terminateDefaultRequestResult = .requested()
+        windowService.aliveWindowIDs = ["w1", "w2", "w3", "w4", "w5"]
+        windowService.runningApplicationPIDs = [10, 20, 30]
+
+        var resizeCount = 0
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false,
+            closeLoadingTimeout: .seconds(30),
+            closePollInterval: .milliseconds(20),
+            postTimeoutPollInterval: .milliseconds(40)
+        )
+        viewModel.onSearchResultsUpdated = { resizeCount += 1 }
+
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 1) // w2
+
+        // 1. 単一ウィンドウクローズが .requested を返してもスピナーと一覧項目を維持し、OS 通知到着で即時除外される
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "w2") == true)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3", "w4", "w5"])
+
+        try? await Task.sleep(for: .milliseconds(50))
+        // まだ閉じ切っていない間はスピナーが消えない
+        #expect(viewModel.isClosingWindow(id: "w2") == true)
+
+        windowService.simulateWindowClosed(windowID: "w2", cgWindowID: 102, pid: 10)
+        #expect(viewModel.isClosingWindow(id: "w2") == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3", "w4", "w5"])
+        #expect(captureService.invalidatedWindowIDs.contains(102))
+        #expect(viewModel.capturedThumbnails[102] == nil)
+        #expect(resizeCount == 1)
+
+        // 2. OS 通知が発火しないウィンドウ（w3）でもフォールバック生存確認（isWindowAlive == false）で自動除外される
+        #expect(viewModel.selectedIndex == 1) // w3
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "w3") == true)
+
+        windowService.aliveWindowIDs?.remove("w3")
+        for _ in 0..<100 where viewModel.entries.contains(where: { $0.id == "w3" }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(viewModel.isClosingWindow(id: "w3") == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w4", "w5"])
+        #expect(captureService.invalidatedWindowIDs.contains(201))
+
+        // 3. 1 枚のみのアプリ（w5, pid: 30）は terminate 後にフォールバック生存確認（isApplicationRunning == false）で自動除外される
+        viewModel.moveSelection(.down) // w5 (index 2)
+        #expect(viewModel.entries[viewModel.selectedIndex].id == "w5")
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.terminatedPIDs == [30])
+        #expect(viewModel.isClosingWindow(id: "w5") == true)
+
+        windowService.runningApplicationPIDs?.remove(30)
+        for _ in 0..<100 where viewModel.entries.contains(where: { $0.id == "w5" }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(viewModel.isClosingWindow(id: "w5") == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w4"])
+        #expect(captureService.invalidatedWindowIDs.contains(301))
+
+        viewModel.cancel()
+    }
+
+    /// 複数ウィンドウを連続して Q で閉じられること、重複 Q が無視されること、
+    /// および他項目を選択中に別項目が遅延完了しても選択カーソルがずれないことを検証する
+    @Test("複数ウィンドウを同時追跡しつつカーソル移動でき、別項目の遅延除外でも選択項目へ追従する")
+    @MainActor
+    func multipleConcurrentClosesAndSelectionCursorTracking() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, bundleIdentifier: "com.example.a", applicationName: "AppA", title: "Win 1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 10, bundleIdentifier: "com.example.a", applicationName: "AppA", title: "Win 2", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", pid: 20, bundleIdentifier: "com.example.b", applicationName: "AppB", title: "Win 3", lastActivatedAt: now.addingTimeInterval(-20))
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(displayName: "AlphaTool", bundleIdentifier: "com.example.alpha", bundleURL: URL(fileURLWithPath: "/Applications/AlphaTool.app")),
+            LaunchableApp(displayName: "BetaApp", bundleIdentifier: "com.example.beta", bundleURL: URL(fileURLWithPath: "/Applications/BetaApp.app"))
+        ]
+        windowService.closeWindowDefaultRequestResult = .requested()
+        windowService.terminateDefaultRequestResult = .requested()
+        windowService.aliveWindowIDs = ["w1", "w2", "w3"]
+        windowService.runningApplicationPIDs = [10, 20]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService,
+            isNormalSwitcherGroupedByApp: false,
+            isLauncherGroupedByApp: false,
+            closeLoadingTimeout: .seconds(30),
+            closePollInterval: .milliseconds(30),
+            postTimeoutPollInterval: .milliseconds(60)
+        )
+
+        // 1. 通常スイッチャーで w2 と w1 を連続して終了待ちにしつつ、w3 へ移動してカーソル維持を検証する
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 1) // w2
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.closingWindowIDs == ["w2"])
+
+        // 処理中の w2 へ重複 Q しても多重実行されない
+        await viewModel.closeSelectedWindow()
+        #expect(windowService.closedWindows.map(\.id) == ["w2"])
+
+        // w1 へ移動して続けて Q を押すと複数同時に追跡される
+        viewModel.moveSelection(.up) // w1 (index 0)
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.closingWindowIDs == ["w1", "w2"])
+        #expect(viewModel.isClosingWindow(id: "w1") == true)
+        #expect(viewModel.isClosingWindow(id: "w2") == true)
+        #expect(viewModel.isClosingWindow(id: "w3") == false)
+
+        // w3（index 2）へ移動している間に w1 が遅延完了しても、カーソルは w3（新 index 1）に追従する
+        viewModel.moveSelection(.down) // w2 (index 1)
+        viewModel.moveSelection(.down) // w3 (index 2)
+        #expect(viewModel.entries[viewModel.selectedIndex].id == "w3")
+
+        windowService.simulateWindowClosed(windowID: "w1", pid: 10)
+        #expect(viewModel.entries.map(\.id) == ["w2", "w3"])
+        #expect(viewModel.entries[viewModel.selectedIndex].id == "w3")
+        #expect(viewModel.selectedIndex == 1)
+        #expect(viewModel.closingWindowIDs == ["w2"])
+
+        // さらに w2 が遅延完了してもカーソルは w3（新 index 0）に追従する
+        windowService.simulateWindowClosed(windowID: "w2", pid: 10)
+        #expect(viewModel.entries.map(\.id) == ["w3"])
+        #expect(viewModel.entries[viewModel.selectedIndex].id == "w3")
+        #expect(viewModel.selectedIndex == 0)
+        #expect(viewModel.closingWindowIDs.isEmpty)
+        viewModel.cancel()
+
+        // 2. ランチャーでアプリ起動候補を選択中に上部のウィンドウが遅延完了しても、アプリ起動候補の選択がずれない
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("a")
+        // ウィンドウ候補: AppA(w1, w2), AppB(w3) のうち "a" に一致するのは AppA(w1, w2) と AppB(w3)
+        // アプリ起動候補: AlphaTool, BetaApp
+        let windowCountBefore = viewModel.displayedResults.count
+        #expect(windowCountBefore >= 2)
+        #expect(viewModel.displayedAppResults.count == 2)
+
+        // 先頭ウィンドウ（w1）を終了待ちにして、アプリ起動候補 2 件目（BetaApp）へ移動する
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "w1") == true)
+        let targetAppID = viewModel.displayedAppResults[1].id
+        for _ in 0..<(windowCountBefore + 1) {
+            viewModel.moveSelection(.down)
+        }
+        #expect(viewModel.selectedIndex == windowCountBefore + 1)
+
+        // w1 が遅延完了で消えてウィンドウ件数が 1 減っても、選択対象は引き続き BetaApp に追従する
+        windowService.simulateWindowClosed(windowID: "w1", pid: 10)
+        let expectedAppIndex = viewModel.displayedAppResults.firstIndex(where: { $0.id == targetAppID })
+        #expect(expectedAppIndex != nil)
+        #expect(viewModel.selectedIndex == viewModel.displayedResults.count + (expectedAppIndex ?? 0))
+        viewModel.cancel()
+    }
+
+    /// ローディング上限時間を経過するとスピナーのみ解除されて一覧に残り、
+    /// その後パネルを開いたまま対象が閉じた場合に自動で一覧から除外されることを検証する
+    @Test("ローディング上限経過でスピナーのみ解除して残存させ、その後の遅延完了で一覧から自動除外する")
+    @MainActor
+    func spinnerTimeoutPreservesEntryAndContinuesRealtimeMonitoring() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Editor", title: "Unsaved.txt", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 10, applicationName: "Editor", title: "Saved.txt", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w3", pid: 20, applicationName: "Viewer", title: "Doc", lastActivatedAt: now.addingTimeInterval(-20))
+        ]
+        windowService.closeWindowDefaultRequestResult = .requested()
+        windowService.aliveWindowIDs = ["w1", "w2", "w3"]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            isNormalSwitcherGroupedByApp: false,
+            closeLoadingTimeout: .milliseconds(60),
+            closePollInterval: .milliseconds(20),
+            postTimeoutPollInterval: .milliseconds(35)
+        )
+
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 1) // w2
+
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "w2") == true)
+
+        // 上限時間（60ms）を超過しても対象が生存中ならスピナーのみ解除され、誤除外されない
+        for _ in 0..<100 where viewModel.isClosingWindow(id: "w2") {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(viewModel.isClosingWindow(id: "w2") == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2", "w3"])
+
+        // 1. スピナー解除後もパネル表示中であれば、OS 通知による遅延完了で一覧から自動除外される
+        windowService.simulateWindowClosed(windowID: "w2", pid: 10)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+
+        // 2. OS 通知が飛ばないケースでも、タイムアウト後の低頻度監視で遅延完了を拾って除外する
+        viewModel.moveSelection(.up) // w1 (index 0)
+        // w1 は pid 10 の残り 1 枚なので terminate 扱いになる
+        windowService.terminateDefaultRequestResult = .requested()
+        windowService.runningApplicationPIDs = [10, 20]
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "w1") == true)
+
+        for _ in 0..<100 where viewModel.isClosingWindow(id: "w1") {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(viewModel.isClosingWindow(id: "w1") == false)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w3"])
+
+        // 後からアプリが実際に終了すると、パネルを閉じ直さずに自動除外される
+        windowService.runningApplicationPIDs?.remove(10)
+        for _ in 0..<100 where viewModel.entries.contains(where: { $0.id == "w1" }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(viewModel.entries.map(\.id) == ["w3"])
+
+        viewModel.cancel()
+    }
+
+    /// フォーカス保護が別スペース一時遷移を伴い得る終了要求送出中のみに限定され、
+    /// 終了待ち（モニタリング）中やアプリ終了時はパネル外クリック（.resignedActive）で確認ダイアログ側へ移れることを検証する
+    @Test("終了要求送出中のみ resignedActive を抑止し、終了待ちモニタリング中はパネル外クリックを妨げない")
+    @MainActor
+    func focusProtectionIsLimitedToWindowCloseRequestPhase() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "Editor", title: "Doc 1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 10, applicationName: "Editor", title: "Doc 2", lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+        windowService.aliveWindowIDs = ["w1", "w2"]
+
+        var requestContinuation: CheckedContinuation<WindowCloseRequestResult, Never>?
+        windowService.requestCloseWindowHandler = { _ in
+            await withCheckedContinuation { continuation in
+                requestContinuation = continuation
+            }
+        }
+
+        var restoredModes: [SwitcherMode] = []
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            isLauncherGroupedByApp: false,
+            closeLoadingTimeout: .seconds(30),
+            closePollInterval: .milliseconds(30),
+            postTimeoutPollInterval: .milliseconds(60)
+        )
+        viewModel.onPanelFocusRestoreNeeded = { mode in
+            restoredModes.append(mode)
+        }
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        let requestTask = Task { @MainActor in
+            await viewModel.closeSelectedWindow()
+        }
+        await Task.yield()
+
+        // 1. 要求送出中（別スペース一時遷移中）は .resignedActive でパネルを閉じない
+        viewModel.cancel(reason: .resignedActive)
+        #expect(viewModel.isPresented == true)
+
+        // 要求送出が完了し、別スペース遷移が発生していた場合はフォーカスを復元してモニタリングへ移行する
+        requestContinuation?.resume(returning: .requested(didSwitchSpace: true))
+        await requestTask.value
+        #expect(restoredModes == [.launcher])
+        #expect(viewModel.isClosingWindow(id: "w1") == true)
+
+        // 2. 終了待ち（モニタリング）中に確認ダイアログ等をクリック（.resignedActive）した場合はブロックせずパネルを閉じる
+        viewModel.cancel(reason: .resignedActive)
+        #expect(viewModel.isPresented == false)
+        #expect(viewModel.closingWindowIDs.isEmpty)
+    }
+
+    /// 最後の 1 件が遅延完了で除外された場合、通常スイッチャーは自動で閉じ、
+    /// 検索ランチャーは開いたままウィンドウ 0 件状態へ遷移することを検証する
+    @Test("最後の 1 件の遅延完了で通常スイッチャーは自動閉鎖し、検索ランチャーは 0 件状態へ遷移する")
+    @MainActor
+    func lastEntryDelayedRemovalDismissesNormalAndPreservesLauncher() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let installedAppService = MockInstalledAppService()
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "only", pid: 50, bundleIdentifier: "com.example.solo", applicationName: "SoloApp", title: "Main")
+        ]
+        installedAppService.stubbedApps = [
+            LaunchableApp(displayName: "SoloApp", bundleIdentifier: "com.example.solo", bundleURL: URL(fileURLWithPath: "/Applications/SoloApp.app"))
+        ]
+        windowService.terminateDefaultRequestResult = .requested()
+        windowService.runningApplicationPIDs = [50]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            installedAppService: installedAppService,
+            closeLoadingTimeout: .seconds(30),
+            closePollInterval: .milliseconds(25),
+            postTimeoutPollInterval: .milliseconds(50)
+        )
+
+        // 1. 通常スイッチャーで最後の 1 件が遅延終了すると自動的にパネルが閉じる
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.mode == .normal)
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.isClosingWindow(id: "only") == true)
+
+        windowService.simulateApplicationTerminated(pid: 50)
+        #expect(viewModel.isPresented == false)
+        #expect(viewModel.mode == .inactive)
+        #expect(viewModel.closingWindowIDs.isEmpty)
+
+        // 2. 検索ランチャー（未入力）で最後の 1 件が遅延終了するとパネルを維持し 0 件案内状態へ遷移する
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.mode == .launcher)
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "only") == true)
+
+        windowService.simulateApplicationTerminated(pid: 50)
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.entries.isEmpty)
+        #expect(viewModel.emptyState == .noOpenWindows)
+        viewModel.cancel()
+
+        // 3. 検索ランチャー（検索語あり）で最後の 1 件が遅延終了するとアプリ起動候補へ再評価される
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        viewModel.updateSearchQuery("Solo")
+        #expect(viewModel.displayedResults.map(\.id) == ["only"])
+        #expect(viewModel.displayedAppResults.isEmpty)
+
+        await viewModel.closeSelectedWindow()
+        windowService.simulateApplicationTerminated(pid: 50)
+        #expect(viewModel.isPresented == true)
+        #expect(viewModel.displayedResults.isEmpty)
+        #expect(viewModel.displayedAppResults.map(\.app.displayName) == ["SoloApp"])
+        #expect(viewModel.selectedIndex == 0)
+        viewModel.cancel()
+    }
+
+    /// 終了監視中にパネルを閉じて再オープンした場合、旧セッションの監視タスクが確実にキャンセルされ
+    /// 新セッションの状態（一覧・スピナー）を上書きしないことを検証する
+    @Test("セッション跨ぎ時に旧セッションの完了監視タスクがキャンセルされ新セッションを破壊しない")
+    @MainActor
+    func sessionBoundaryCancelsStaleMonitoringTasks() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", pid: 10, applicationName: "AppA", title: "Window 1", lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", pid: 10, applicationName: "AppA", title: "Window 2", lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+        windowService.closeWindowDefaultRequestResult = .requested()
+
+        var stalePollContinuation: CheckedContinuation<Bool, Never>?
+        var pollCallIndex = 0
+        windowService.isWindowAliveHandler = { entry in
+            pollCallIndex += 1
+            if pollCallIndex == 1 && entry.id == "w1" {
+                return await withCheckedContinuation { continuation in
+                    stalePollContinuation = continuation
+                }
+            }
+            return true
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            isLauncherGroupedByApp: false,
+            closeLoadingTimeout: .milliseconds(80),
+            closePollInterval: .milliseconds(15),
+            postTimeoutPollInterval: .milliseconds(40)
+        )
+
+        // 旧セッションで w1 の終了監視を開始し、フォールバック生存確認の await に到達するまで待機する
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.isClosingWindow(id: "w1") == true)
+        for _ in 0..<100 where stalePollContinuation == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(stalePollContinuation != nil)
+
+        // パネルを閉じて即座に新セッションを開く
+        viewModel.cancel()
+        #expect(viewModel.closingWindowIDs.isEmpty)
+
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.closingWindowIDs.isEmpty)
+
+        // 旧セッションの生存確認から false（消滅）が遅延返却されても、新セッションの一覧は一切破壊されない
+        stalePollContinuation?.resume(returning: false)
+        try? await Task.sleep(for: .milliseconds(40))
+        #expect(viewModel.mode == .launcher)
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.closingWindowIDs.isEmpty)
+        viewModel.cancel()
     }
 }

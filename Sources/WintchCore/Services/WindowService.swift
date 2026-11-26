@@ -59,6 +59,20 @@ public final class WindowService: WindowServicing {
         var lastActivatedAt: Date?
     }
 
+    /// 終了要求を送出したウィンドウの追跡情報（別スペース解決済み cg-* 要素の破棄通知・生存確認用）
+    private struct TrackedCloseTarget {
+        let entryID: String
+        let pid: Int32
+        let cgWindowID: UInt32?
+        let axElement: AXUIElement
+    }
+
+    /// OS 通知等でウィンドウ破棄またはアプリ終了を検知した際に呼ばれるリアルタイム通知ハンドラ
+    public var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)?
+
+    /// 終了要求を送出済みのウィンドウ追跡マップ（WindowEntry.id キー）
+    private var trackedCloseTargetsByEntryID: [String: TrackedCloseTarget] = [:]
+
     /// ウィンドウキャッシュ整理時の CGWindow 生存チェック方針
     enum CGCacheRetentionDecision: Equatable, Sendable {
         /// キャッシュをそのまま保持する
@@ -228,7 +242,7 @@ public final class WindowService: WindowServicing {
             }
         )
 
-        // アプリ終了時のキャッシュ解放
+        // アプリ終了時のキャッシュ解放およびリアルタイム通知
         workspaceObservers.append(
             center.addObserver(
                 forName: NSWorkspace.didTerminateApplicationNotification,
@@ -238,9 +252,9 @@ public final class WindowService: WindowServicing {
                 guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
                 let pid = app.processIdentifier
                 Task { @MainActor [weak self] in
-                    self?.unregisterObserver(for: pid)
-                    self?.cachedWindowsByPID.removeValue(forKey: pid)
-                    self?.cachedWindowMenuByPID.removeValue(forKey: pid)
+                    guard let self, self.isObserving else { return }
+                    self.cleanupTerminatedPID(pid)
+                    self.onWindowLifecycleEvent?(.applicationTerminated(pid: pid))
                 }
             }
         )
@@ -309,6 +323,7 @@ public final class WindowService: WindowServicing {
         }
         cachedWindowsByPID.removeAll()
         cachedWindowMenuByPID.removeAll()
+        trackedCloseTargetsByEntryID.removeAll()
     }
 
     /// 現在の全操作スペース上のウィンドウ候補を収集して返す
@@ -715,12 +730,42 @@ public final class WindowService: WindowServicing {
         }
     }
 
-    /// 指定されたウィンドウ1枚のみを閉じる操作を実行し、実際に消滅したかを確認して返す
+    /// 指定されたウィンドウ 1 枚に対してクローズ要求を送出し、要求フェーズの結果を返す
     /// - Parameter entry: クローズ対象のウィンドウ項目
-    /// - Returns: ウィンドウが閉じられたことを確認した場合は true、非対応や確認ダイアログ等で残存した場合は false
-    public func closeWindow(_ entry: WindowEntry) async -> Bool {
-        guard let target = await resolveCachedWindowWithSpaceFallback(entry) else {
-            return false
+    /// - Returns: 要求送出成功・すでに消滅済み・送出失敗のいずれかを表す結果
+    public func requestCloseWindow(_ entry: WindowEntry) async -> WindowCloseRequestResult {
+        guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated else {
+            cleanupTerminatedPID(entry.pid)
+            return .alreadyClosed()
+        }
+
+        let (resolvedTarget, didSwitchSpace) = await resolveCachedWindowWithSpaceFallback(entry)
+        guard let target = resolvedTarget else {
+            let isAppTerminated = NSRunningApplication(processIdentifier: entry.pid)?.isTerminated ?? true
+            if isAppTerminated {
+                cleanupTerminatedPID(entry.pid)
+            }
+            let survivingCGWindowIDs: Set<UInt32>
+            if !isAppTerminated, entry.cgWindowID != nil {
+                survivingCGWindowIDs = await fetchSurvivingCGWindowIDsInBackground(for: entry.pid)
+            } else {
+                survivingCGWindowIDs = []
+            }
+            return Self.resolveCloseRequestResultOnUnresolvedTarget(
+                isAppTerminated: isAppTerminated,
+                cgWindowID: entry.cgWindowID,
+                survivingCGWindowIDs: survivingCGWindowIDs,
+                didSwitchSpace: didSwitchSpace
+            )
+        }
+
+        // クローズボタン押下前に既にウィンドウが消滅済みであれば即座に完了として返す
+        let isAliveBeforePress = await checkAXWindowAliveInBackground(target.axElement, pid: entry.pid)
+        guard isAliveBeforePress else {
+            removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: target.axElement)
+            cachedWindowMenuByPID.removeValue(forKey: entry.pid)
+            trackedCloseTargetsByEntryID.removeValue(forKey: entry.id)
+            return .alreadyClosed(didSwitchSpace: didSwitchSpace)
         }
 
         // クローズボタン属性が存在し、かつ無効化されていない場合のみ押下アクションを実行する
@@ -734,70 +779,183 @@ public final class WindowService: WindowServicing {
         guard buttonStatus == .success,
               let closeButtonVal = closeButtonRef,
               CFGetTypeID(closeButtonVal) == AXUIElementGetTypeID() else {
-            return false
+            return .failed(didSwitchSpace: didSwitchSpace)
         }
 
         let closeButton = closeButtonVal as! AXUIElement
         Self.applyMessagingTimeout(to: closeButton)
         if let isEnabled = Self.copyBoolAttribute(closeButton, attribute: kAXEnabledAttribute as CFString), !isEnabled {
-            return false
+            return .failed(didSwitchSpace: didSwitchSpace)
         }
+
+        // 押下直後に同期的に届く破棄通知を取りこぼさないよう、押下前に追跡対象へ登録しておく
+        let resolvedCGWindowID = target.cgWindowID ?? entry.cgWindowID
+        trackedCloseTargetsByEntryID[entry.id] = TrackedCloseTarget(
+            entryID: entry.id,
+            pid: entry.pid,
+            cgWindowID: resolvedCGWindowID,
+            axElement: target.axElement
+        )
 
         let pressStatus = AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
         guard pressStatus == .success else {
-            return false
-        }
-
-        // 非同期のウィンドウ破棄に対応するため、短時間（最大約150ms）消滅をポーリング確認する
-        let maxAttempts = 10
-        for _ in 0..<maxAttempts {
-            try? await Task.sleep(for: .milliseconds(15))
-            if !isAXWindowAlive(target.axElement, pid: entry.pid) {
+            trackedCloseTargetsByEntryID.removeValue(forKey: entry.id)
+            let isAliveAfterFailure = await checkAXWindowAliveInBackground(target.axElement, pid: entry.pid)
+            if !isAliveAfterFailure {
                 removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: target.axElement)
-                return true
+                cachedWindowMenuByPID.removeValue(forKey: entry.pid)
+                return .alreadyClosed(didSwitchSpace: didSwitchSpace)
             }
+            return .failed(didSwitchSpace: didSwitchSpace)
         }
 
-        // 未保存変更の確認ダイアログ（シート）表示などで依然として開いている場合は残存とみなす
-        return false
+        // 押下中に既に破棄通知が処理されて追跡対象から除去済みであれば即座に完了扱いとする
+        if trackedCloseTargetsByEntryID[entry.id] == nil {
+            return .alreadyClosed(didSwitchSpace: didSwitchSpace)
+        }
+
+        return .requested(didSwitchSpace: didSwitchSpace)
     }
 
-    /// 指定された PID のアプリケーションに対して通常の終了要求を送信し、プロセス終了を確認して返す
+    /// 指定された PID のアプリケーションに対して通常の終了要求（強制終了ではない）を送出し、要求フェーズの結果を返す
     /// - Parameter pid: 終了対象のプロセス ID
-    /// - Returns: アプリケーションが終了したことを確認できた場合は true、確認ダイアログ等で残存した場合は false
-    public func terminateApplication(pid: Int32) async -> Bool {
+    /// - Returns: 要求送出成功・すでに終了済み・送出失敗のいずれかを表す結果
+    public func requestTerminateApplication(pid: Int32) async -> WindowCloseRequestResult {
         guard let app = NSRunningApplication(processIdentifier: pid) else {
-            cachedWindowsByPID.removeValue(forKey: pid)
-            cachedWindowMenuByPID.removeValue(forKey: pid)
-            unregisterObserver(for: pid)
-            return true
+            cleanupTerminatedPID(pid)
+            return Self.resolveTerminateRequestResult(
+                hasRunningApp: false,
+                isAlreadyTerminated: true,
+                terminateAccepted: false,
+                isTerminatedImmediately: true
+            )
         }
         if app.isTerminated {
-            cachedWindowsByPID.removeValue(forKey: pid)
-            cachedWindowMenuByPID.removeValue(forKey: pid)
-            unregisterObserver(for: pid)
-            return true
+            cleanupTerminatedPID(pid)
+            return Self.resolveTerminateRequestResult(
+                hasRunningApp: true,
+                isAlreadyTerminated: true,
+                terminateAccepted: false,
+                isTerminatedImmediately: true
+            )
         }
 
         // 通常のアプリ終了要求（Command+Q 相当）を送信し、強制終了（forceTerminate）は行わない
-        guard app.terminate() else {
+        let accepted = app.terminate()
+        let terminatedImmediately = accepted && app.isTerminated
+        if terminatedImmediately {
+            cleanupTerminatedPID(pid)
+        }
+        return Self.resolveTerminateRequestResult(
+            hasRunningApp: true,
+            isAlreadyTerminated: false,
+            terminateAccepted: accepted,
+            isTerminatedImmediately: terminatedImmediately
+        )
+    }
+
+    /// 指定されたウィンドウが現在も生存しているかをバックグラウンドで非同期確認する（フォールバック生存確認用）
+    /// - Parameter entry: 確認対象のウィンドウ項目
+    /// - Returns: まだ生存している場合は true、閉じられて消滅している場合は false
+    public func isWindowAlive(_ entry: WindowEntry) async -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated else {
+            cleanupTerminatedPID(entry.pid)
             return false
         }
 
-        // 非同期の終了処理（最大約500ms）をポーリングして終了を確認する
-        let maxAttempts = 25
-        for _ in 0..<maxAttempts {
-            try? await Task.sleep(for: .milliseconds(20))
-            if app.isTerminated {
-                cachedWindowsByPID.removeValue(forKey: pid)
-                cachedWindowMenuByPID.removeValue(forKey: pid)
-                unregisterObserver(for: pid)
+        let targetAXElement: AXUIElement?
+        if let tracked = trackedCloseTargetsByEntryID[entry.id] {
+            targetAXElement = tracked.axElement
+        } else if let list = cachedWindowsByPID[entry.pid] {
+            targetAXElement = list.first(where: { $0.id == entry.id })?.axElement
+                ?? entry.cgWindowID.flatMap { cgID in list.first(where: { $0.cgWindowID == cgID })?.axElement }
+        } else {
+            targetAXElement = nil
+        }
+
+        if let targetAXElement {
+            let isAlive = await checkAXWindowAliveInBackground(targetAXElement, pid: entry.pid)
+            if !isAlive {
+                removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: targetAXElement)
+                cachedWindowMenuByPID.removeValue(forKey: entry.pid)
+                trackedCloseTargetsByEntryID.removeValue(forKey: entry.id)
+            }
+            return isAlive
+        }
+
+        // キャッシュ・追跡対象に不在の場合は、対応 CGWindowID の生存有無で最終判定する
+        if let cgWindowID = entry.cgWindowID {
+            let surviving = await fetchSurvivingCGWindowIDsInBackground(for: entry.pid)
+            if surviving.contains(cgWindowID) {
                 return true
             }
         }
-
-        // 未保存変更のダイアログ等で終了がキャンセル・保留された場合は残存とみなす
+        trackedCloseTargetsByEntryID.removeValue(forKey: entry.id)
         return false
+    }
+
+    /// 指定された PID のアプリケーションが現在も稼働中かを確認する（フォールバック生存確認用）
+    /// - Parameter pid: 確認対象のプロセス ID
+    /// - Returns: 稼働中の場合は true、終了済みの場合は false
+    public func isApplicationRunning(pid: Int32) async -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
+            cleanupTerminatedPID(pid)
+            return false
+        }
+        return true
+    }
+
+    /// AX 対象が未解決だった場合のウィンドウ終了要求結果を純粋ロジックで決定する
+    /// - Parameters:
+    ///   - isAppTerminated: 所有アプリケーションが終了済みか
+    ///   - cgWindowID: 対象ウィンドウに紐付いていた CoreGraphics ウィンドウ ID（不明時は nil）
+    ///   - survivingCGWindowIDs: 現在 WindowServer 上に生存している該当 PID の CGWindowID 集合
+    ///   - didSwitchSpace: 解決試行中に別スペース一時遷移を行ったか
+    /// - Returns: すでに消滅済みと判定できれば `.alreadyClosed`、それ以外は `.failed`
+    nonisolated static func resolveCloseRequestResultOnUnresolvedTarget(
+        isAppTerminated: Bool,
+        cgWindowID: UInt32?,
+        survivingCGWindowIDs: Set<UInt32>,
+        didSwitchSpace: Bool
+    ) -> WindowCloseRequestResult {
+        if isAppTerminated {
+            return .alreadyClosed(didSwitchSpace: didSwitchSpace)
+        }
+        if let cgWindowID, !survivingCGWindowIDs.contains(cgWindowID) {
+            return .alreadyClosed(didSwitchSpace: didSwitchSpace)
+        }
+        return .failed(didSwitchSpace: didSwitchSpace)
+    }
+
+    /// アプリ通常終了要求の結果を純粋ロジックで決定する
+    /// - Parameters:
+    ///   - hasRunningApp: 対象 PID に対応する稼働中アプリオブジェクトが存在したか
+    ///   - isAlreadyTerminated: 終了要求前にすでに終了済みだったか
+    ///   - terminateAccepted: `NSRunningApplication.terminate()` が要求を受理したか
+    ///   - isTerminatedImmediately: 要求直後にすでに終了状態になったか
+    /// - Returns: 要求フェーズの結果 (`WindowCloseRequestResult`)
+    nonisolated static func resolveTerminateRequestResult(
+        hasRunningApp: Bool,
+        isAlreadyTerminated: Bool,
+        terminateAccepted: Bool,
+        isTerminatedImmediately: Bool
+    ) -> WindowCloseRequestResult {
+        if !hasRunningApp || isAlreadyTerminated {
+            return .alreadyClosed()
+        }
+        guard terminateAccepted else {
+            return .failed()
+        }
+        return isTerminatedImmediately ? .alreadyClosed() : .requested()
+    }
+
+    /// 終了済み PID に紐付くキャッシュ・オブザーバ・クローズ追跡情報を一括解放する
+    /// - Parameter pid: 終了したプロセス ID
+    private func cleanupTerminatedPID(_ pid: Int32) {
+        unregisterObserver(for: pid)
+        cachedWindowsByPID.removeValue(forKey: pid)
+        cachedWindowMenuByPID.removeValue(forKey: pid)
+        trackedCloseTargetsByEntryID = trackedCloseTargetsByEntryID.filter { $0.value.pid != pid }
     }
 
     // MARK: - 内部ヘルパー
@@ -1275,9 +1433,7 @@ public final class WindowService: WindowServicing {
             .union(observersByPID.keys)
             .subtracting(activeAppPIDs)
         for pid in stalePIDs {
-            unregisterObserver(for: pid)
-            cachedWindowsByPID.removeValue(forKey: pid)
-            cachedWindowMenuByPID.removeValue(forKey: pid)
+            cleanupTerminatedPID(pid)
             menuEnrichmentTargetPIDs.remove(pid)
             scanGenerationByPID.removeValue(forKey: pid)
         }
@@ -1876,16 +2032,16 @@ public final class WindowService: WindowServicing {
 
     /// 別操作スペースに存在し未キャッシュのウィンドウに対し、必要に応じてスペース移動を行って AXUIElement を解決する
     /// - Parameter entry: クローズ対象のウィンドウ項目
-    /// - Returns: 解決されたキャッシュエントリ（取得できない場合は nil）
-    private func resolveCachedWindowWithSpaceFallback(_ entry: WindowEntry) async -> CachedAXWindow? {
+    /// - Returns: 解決されたキャッシュエントリと、別スペース一時遷移を行ったかのタプル
+    private func resolveCachedWindowWithSpaceFallback(_ entry: WindowEntry) async -> (window: CachedAXWindow?, didSwitchSpace: Bool) {
         if let resolved = resolveCachedWindowForClose(entry) {
-            return resolved
+            return (resolved, false)
         }
 
         // 別 Space 上のウィンドウ（cg-* 等）で AXUIElement が未取得の場合、
         // 「ウィンドウ」メニュー経由（利用可能なら）＋アプリアクティブ化で対象 Space へ遷移させる
         guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated else {
-            return nil
+            return (nil, false)
         }
 
         if !entry.windowTitle.isEmpty,
@@ -1899,26 +2055,50 @@ public final class WindowService: WindowServicing {
         for _ in 0..<maxAttempts {
             try? await Task.sleep(for: .milliseconds(40))
             if let resolved = resolveCachedWindowForClose(entry) {
-                return resolved
+                return (resolved, true)
             }
         }
-        return nil
+        return (nil, true)
     }
 
-    /// 指定された AXUIElement ウィンドウが現在もアプリケーション上に存在しているかを判定する
+    /// 指定された AXUIElement ウィンドウの生存確認をバックグラウンドワーカーキュー上で非同期実行する
     /// - Parameters:
     ///   - axElement: 確認対象の AXUIElement
     ///   - pid: 所有プロセスの PID
     /// - Returns: ウィンドウがまだ生存している場合は true、閉じられて消滅している場合は false
-    private func isAXWindowAlive(_ axElement: AXUIElement, pid: Int32) -> Bool {
-        if let app = NSRunningApplication(processIdentifier: pid), app.isTerminated {
-            return false
+    private func checkAXWindowAliveInBackground(_ axElement: AXUIElement, pid: Int32) async -> Bool {
+        let wrapped = SendableAXElement(value: axElement)
+        let queue = axWorkerQueue
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                let alive = Self.isAXWindowAliveInProcess(wrapped.value, pid: pid)
+                continuation.resume(returning: alive)
+            }
         }
+    }
 
+    /// 指定 PID の生存中 CGWindowID 集合をバックグラウンドワーカーキュー上で非同期取得する
+    /// - Parameter pid: 所有プロセスの PID
+    /// - Returns: 生存中の CGWindowID 集合
+    private func fetchSurvivingCGWindowIDsInBackground(for pid: Int32) async -> Set<UInt32> {
+        let queue = axWorkerQueue
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: Self.fetchSurvivingCGWindowIDs(for: pid))
+            }
+        }
+    }
+
+    /// 指定された AXUIElement ウィンドウが現在もアプリケーション上に存在しているかを判定する（バックグラウンド実行安全）
+    /// - Parameters:
+    ///   - axElement: 確認対象の AXUIElement
+    ///   - pid: 所有プロセスの PID
+    /// - Returns: ウィンドウがまだ生存している場合は true、閉じられて消滅している場合は false
+    private nonisolated static func isAXWindowAliveInProcess(_ axElement: AXUIElement, pid: Int32) -> Bool {
         let appElement = AXUIElementCreateApplication(pid)
-        Self.applyMessagingTimeout(to: appElement)
-        let (axWindows, windowsAttributeSucceeded) = Self.collectAXWindowsWithStatus(for: appElement)
-        if let knownResult = Self.evaluateAXWindowLivenessFromList(
+        applyMessagingTimeout(to: appElement)
+        let (axWindows, windowsAttributeSucceeded) = collectAXWindowsWithStatus(for: appElement)
+        if let knownResult = evaluateAXWindowLivenessFromList(
             windowsAttributeSucceeded: windowsAttributeSucceeded,
             containsTarget: axWindows.contains { CFEqual($0, axElement) }
         ) {
@@ -1926,7 +2106,7 @@ public final class WindowService: WindowServicing {
         }
 
         // ウィンドウ一覧取得に失敗した場合は対象要素のロール読み取り可否で生存確認する
-        Self.applyMessagingTimeout(to: axElement)
+        applyMessagingTimeout(to: axElement)
         var roleRef: CFTypeRef?
         return AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleRef) == .success
     }
@@ -2030,7 +2210,13 @@ public final class WindowService: WindowServicing {
         guard AXUIElementGetPid(element, &pid) == .success, pid != 0 else { return }
 
         if notification == kAXUIElementDestroyedNotification {
+            var destroyedCandidates: [(windowID: String, cgWindowID: UInt32?)] = []
+
             if var list = cachedWindowsByPID[pid] {
+                let matchedCached = list.filter { CFEqual($0.axElement, element) }
+                for cached in matchedCached {
+                    destroyedCandidates.append((windowID: cached.id, cgWindowID: cached.cgWindowID))
+                }
                 list.removeAll { CFEqual($0.axElement, element) }
                 if list.isEmpty {
                     cachedWindowsByPID.removeValue(forKey: pid)
@@ -2038,6 +2224,25 @@ public final class WindowService: WindowServicing {
                     cachedWindowsByPID[pid] = list
                 }
             }
+
+            let matchedTrackedKeys = trackedCloseTargetsByEntryID.compactMap { key, target -> String? in
+                guard target.pid == pid, CFEqual(target.axElement, element) else { return nil }
+                return key
+            }
+            for key in matchedTrackedKeys {
+                if let tracked = trackedCloseTargetsByEntryID.removeValue(forKey: key) {
+                    destroyedCandidates.append((windowID: tracked.entryID, cgWindowID: tracked.cgWindowID))
+                }
+            }
+
+            let events = Self.makeDestroyedWindowLifecycleEvents(
+                from: destroyedCandidates,
+                pid: pid
+            )
+            for event in events {
+                onWindowLifecycleEvent?(event)
+            }
+
             // ウィンドウ破棄直後に古いメニュー項目キャッシュが裏方 CGWindow へ割り当てられるのを防ぐ
             cachedWindowMenuByPID.removeValue(forKey: pid)
             scheduleBackgroundRefresh(
@@ -2071,6 +2276,30 @@ public final class WindowService: WindowServicing {
             activatedAt: isActivationEvent ? now : nil,
             allowDisplaySpanningReplacement: true
         )
+    }
+
+    /// 破棄されたキャッシュ・追跡対象ウィンドウ群から重複排除したリアルタイム通知イベント一覧を構築する
+    /// - Parameters:
+    ///   - candidates: 一致したウィンドウ ID と CGWindow ID の組一覧
+    ///   - pid: 所有プロセスの PID
+    /// - Returns: 通知すべき `WindowLifecycleEvent` 配列（対象ウィンドウに一致しない子要素破棄時は空配列）
+    nonisolated static func makeDestroyedWindowLifecycleEvents(
+        from candidates: [(windowID: String, cgWindowID: UInt32?)],
+        pid: Int32
+    ) -> [WindowLifecycleEvent] {
+        var seenWindowIDs = Set<String>()
+        var events: [WindowLifecycleEvent] = []
+        for candidate in candidates {
+            guard seenWindowIDs.insert(candidate.windowID).inserted else { continue }
+            events.append(
+                .windowClosed(
+                    windowID: candidate.windowID,
+                    cgWindowID: candidate.cgWindowID,
+                    pid: pid
+                )
+            )
+        }
+        return events
     }
 
     /// 今回スキャンから消えたキャッシュ要素を「同一スペース内のタブ切り替えで消えた旧タブ」として削除すべきか判定する

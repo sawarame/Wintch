@@ -51,4 +51,69 @@ struct SwitcherSelectionTests {
         #expect(SwitcherSelection.indexAfterRemoval(current: 0, remainingCount: 0) == 0)
         #expect(SwitcherSelection.indexAfterRemoval(current: -1, remainingCount: 3) == 0)
     }
+
+    /// 遅延完了や外部イベントで他項目が除外された場合に選択カーソルが対象項目へ追従することを検証する
+    @Test("他項目除外時は選択中ウィンドウやアプリ起動候補へ追従し、選択中項目自身の除外時は同位置・新末尾へ補正する")
+    func indexAfterExternalRemovalTracksSelectedItemAndFallsBackSafely() {
+        // 1. 選択中ウィンドウより前の項目が除外された場合、選択中ウィンドウの新位置へ追従する
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 2,
+                previousTarget: .window(id: "w3"),
+                remainingWindowIDs: ["w2", "w3"]
+            ) == 1
+        )
+
+        // 2. 選択中ウィンドウより後ろの項目が除外された場合も選択中ウィンドウを維持する
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 0,
+                previousTarget: .window(id: "w1"),
+                remainingWindowIDs: ["w1", "w2"]
+            ) == 0
+        )
+
+        // 3. ランチャーでアプリ起動候補を選択中に上部のウィンドウが除外されても、同じアプリ起動候補へ追従する
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 3,
+                previousTarget: .app(id: "app-beta"),
+                remainingWindowIDs: ["w2"],
+                remainingAppIDs: ["app-alpha", "app-beta", "app-gamma"]
+            ) == 2
+        )
+
+        // 4. 選択中だったウィンドウ自身が除外された場合は同じインデックス（末尾削除時は新末尾）へ補正する
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 1,
+                previousTarget: .window(id: "w2"),
+                remainingWindowIDs: ["w1", "w3"]
+            ) == 1
+        )
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 2,
+                previousTarget: .window(id: "w3"),
+                remainingWindowIDs: ["w1", "w2"]
+            ) == 1
+        )
+
+        // 5. 全件 0 になった場合や対象不明時も安全に 0 へ丸める
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 0,
+                previousTarget: .window(id: "w1"),
+                remainingWindowIDs: [],
+                remainingAppIDs: []
+            ) == 0
+        )
+        #expect(
+            SwitcherSelection.indexAfterExternalRemoval(
+                previousIndex: 1,
+                previousTarget: nil,
+                remainingWindowIDs: ["w1"]
+            ) == 0
+        )
+    }
 }
