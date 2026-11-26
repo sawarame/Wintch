@@ -205,82 +205,92 @@ public struct SwitcherListView: View {
         )
     }
 
+    /// リスト最上部（上部余白・先頭見出し行を含む y == 0）へ確実に復帰するための固定スクロールアンカー ID
+    private static let topScrollAnchorID = "__wintch_list_top_anchor__"
+
     /// ウィンドウ候補および（ランチャー検索時の）アプリ起動候補を統合表示する縦型スクロールリスト
     private var resultListView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(spacing: 4) {
-                    // ForEach 要素の id と ScrollViewReader の scrollTo 対象 ID を一致させるため単一モデルで描画する
-                    ForEach(listRows) { row in
-                        switch row {
-                        case let .appGroupHeader(_, applicationName, representativePID, matchedAppNameRanges, isFirstGroup):
-                            appGroupHeaderView(
-                                applicationName: applicationName,
-                                icon: viewModel.icon(for: representativePID),
-                                matchedRanges: matchedAppNameRanges,
-                                isFirstGroup: isFirstGroup
-                            )
+                VStack(spacing: 0) {
+                    // LazyVStack 外の y == 0 位置に常駐アンカーを置き、検索更新や先頭復帰時の見積もり高さズレを防ぐ
+                    Color.clear
+                        .frame(height: 0)
+                        .id(Self.topScrollAnchorID)
 
-                        case let .window(index, result):
-                            let isClosing = viewModel.isClosingWindow(id: result.entry.id)
-                            Group {
-                                if isNormalIconGroupedStyle {
-                                    SwitcherGroupedIconRowView(
-                                        result: result,
-                                        icon: viewModel.icon(for: result.entry.pid),
-                                        isSelected: index == viewModel.selectedIndex,
-                                        isClosing: isClosing,
-                                        language: viewModel.resolvedLanguage
-                                    )
-                                } else if usesCaptureRowStyle {
-                                    SwitcherCaptureRowView(
-                                        result: result,
-                                        thumbnail: viewModel.isCaptureActiveForCurrentMode
-                                            ? viewModel.thumbnail(for: result.entry)
-                                            : nil,
-                                        icon: viewModel.icon(for: result.entry.pid),
-                                        isSelected: index == viewModel.selectedIndex,
-                                        isClosing: isClosing,
-                                        showsAppHeader: !isGrouped,
-                                        language: viewModel.resolvedLanguage
-                                    )
-                                } else {
-                                    SwitcherRowView(
-                                        result: result,
-                                        icon: viewModel.icon(for: result.entry.pid),
-                                        isSelected: index == viewModel.selectedIndex,
-                                        isClosing: isClosing,
-                                        showsAppInfo: !isGrouped,
-                                        language: viewModel.resolvedLanguage
-                                    )
+                    LazyVStack(spacing: 4) {
+                        // ForEach 要素の id と ScrollViewReader の scrollTo 対象 ID を一致させるため単一モデルで描画する
+                        ForEach(listRows) { row in
+                            switch row {
+                            case let .appGroupHeader(_, applicationName, representativePID, matchedAppNameRanges, isFirstGroup):
+                                appGroupHeaderView(
+                                    applicationName: applicationName,
+                                    icon: viewModel.icon(for: representativePID),
+                                    matchedRanges: matchedAppNameRanges,
+                                    isFirstGroup: isFirstGroup
+                                )
+
+                            case let .window(index, result):
+                                let isClosing = viewModel.isClosingWindow(id: result.entry.id)
+                                Group {
+                                    if isNormalIconGroupedStyle {
+                                        SwitcherGroupedIconRowView(
+                                            result: result,
+                                            icon: viewModel.icon(for: result.entry.pid),
+                                            isSelected: index == viewModel.selectedIndex,
+                                            isClosing: isClosing,
+                                            language: viewModel.resolvedLanguage
+                                        )
+                                    } else if usesCaptureRowStyle {
+                                        SwitcherCaptureRowView(
+                                            result: result,
+                                            thumbnail: viewModel.isCaptureActiveForCurrentMode
+                                                ? viewModel.thumbnail(for: result.entry)
+                                                : nil,
+                                            icon: viewModel.icon(for: result.entry.pid),
+                                            isSelected: index == viewModel.selectedIndex,
+                                            isClosing: isClosing,
+                                            showsAppHeader: !isGrouped,
+                                            language: viewModel.resolvedLanguage
+                                        )
+                                    } else {
+                                        SwitcherRowView(
+                                            result: result,
+                                            icon: viewModel.icon(for: result.entry.pid),
+                                            isSelected: index == viewModel.selectedIndex,
+                                            isClosing: isClosing,
+                                            showsAppInfo: !isGrouped,
+                                            language: viewModel.resolvedLanguage
+                                        )
+                                    }
                                 }
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                viewModel.selectAndActivate(at: index)
-                            }
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewModel.selectAndActivate(at: index)
+                                }
 
-                        case let .launchSectionHeader(title, hasPrecedingWindows):
-                            appLaunchSectionHeader(
-                                title: title,
-                                hasPrecedingWindows: hasPrecedingWindows
-                            )
+                            case let .launchSectionHeader(title, hasPrecedingWindows):
+                                appLaunchSectionHeader(
+                                    title: title,
+                                    hasPrecedingWindows: hasPrecedingWindows
+                                )
 
-                        case let .appLaunch(unifiedIndex, result):
-                            AppLaunchRowView(
-                                result: result,
-                                icon: viewModel.icon(forAppURL: result.app.bundleURL),
-                                isSelected: unifiedIndex == viewModel.selectedIndex,
-                                launchBadgeTitle: viewModel.strings.launcherLaunchBadge
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                viewModel.selectAndActivate(at: unifiedIndex)
+                            case let .appLaunch(unifiedIndex, result):
+                                AppLaunchRowView(
+                                    result: result,
+                                    icon: viewModel.icon(forAppURL: result.app.bundleURL),
+                                    isSelected: unifiedIndex == viewModel.selectedIndex,
+                                    launchBadgeTitle: viewModel.strings.launcherLaunchBadge
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewModel.selectAndActivate(at: unifiedIndex)
+                                }
                             }
                         }
                     }
+                    .padding(10)
                 }
-                .padding(10)
             }
             .frame(maxHeight: maxScrollHeight)
             .fixedSize(horizontal: false, vertical: true)
@@ -394,22 +404,25 @@ public struct SwitcherListView: View {
         using proxy: ScrollViewProxy,
         animated: Bool
     ) {
-        // 先頭候補（index == 0）へ戻る際は、グルーピング見出し行と上部余白を含めて確実に最上部（y == 0）へクランプさせる
+        // 先頭候補（index == 0）へ戻る際は、LazyVStack 外の上端アンカーへ anchor: .top で確実に最上部（y == 0）へ復帰させる
         let targetID: String
-        if index == 0, let firstRowID = listRows.first?.id {
-            targetID = firstRowID
+        let anchor: UnitPoint
+        if index == 0, !listRows.isEmpty {
+            targetID = Self.topScrollAnchorID
+            anchor = .top
         } else if let resolvedID = scrollTargetID(for: index) {
             targetID = resolvedID
+            anchor = .center
         } else {
             return
         }
 
         if animated {
             withAnimation(.easeOut(duration: 0.08)) {
-                proxy.scrollTo(targetID, anchor: .center)
+                proxy.scrollTo(targetID, anchor: anchor)
             }
         } else {
-            proxy.scrollTo(targetID, anchor: .center)
+            proxy.scrollTo(targetID, anchor: anchor)
         }
     }
 

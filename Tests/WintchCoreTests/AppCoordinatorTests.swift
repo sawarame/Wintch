@@ -549,7 +549,7 @@ struct AppCoordinatorTests {
         windowService.simulateCapturePrefetchNeeded(.initialScanCompleted)
 
         // デフォルトデバウンス（300ms）経過後に事前取得が実行されキャッシュへ保存される
-        for _ in 0..<80 where captureService.cachedThumbnails[801] == nil {
+        for _ in 0..<200 where captureService.cachedThumbnails[801] == nil {
             try? await Task.sleep(for: .milliseconds(15))
         }
         #expect(captureService.cachedThumbnails[801] === prefetchedImage)

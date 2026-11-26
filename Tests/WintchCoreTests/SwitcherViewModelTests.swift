@@ -3059,7 +3059,7 @@ struct SwitcherViewModelTests {
         windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
         windowService.simulateCapturePrefetchNeeded(.windowCreated)
 
-        for _ in 0..<50 where captureService.capturedRequestWindowIDs.isEmpty {
+        for _ in 0..<200 where captureService.capturedRequestWindowIDs.isEmpty {
             try? await Task.sleep(for: .milliseconds(10))
         }
         try? await Task.sleep(for: .milliseconds(40))
@@ -3122,7 +3122,10 @@ struct SwitcherViewModelTests {
 
         // 2. キャプチャ表示型へ切り替えても画面収録権限が未許可なら権限要求やキャプチャは実行しない
         viewModel.updateNormalDisplayStyle(.capture)
-        try? await Task.sleep(for: .milliseconds(45))
+        // 高負荷な並列テスト環境でもデバウンス後の権限確認到達を確実に待機する
+        for _ in 0..<200 where screenRecordingService.currentStatusCallCount == 0 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         #expect(screenRecordingService.currentStatusCallCount > 0)
         #expect(screenRecordingService.requestPermissionCallCount == 0)
         #expect(captureService.capturedRequestWindowIDs.isEmpty)

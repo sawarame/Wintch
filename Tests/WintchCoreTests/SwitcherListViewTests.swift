@@ -112,6 +112,21 @@ struct SwitcherListViewTests {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
     }
 
+    /// 指定条件が成立するまでメインランループを段階的に回して待機するヘルパー（CI 高負荷環境でのタイミング揺らぎ対策）
+    /// - Parameters:
+    ///   - timeout: 最大待機時間（秒）
+    ///   - condition: 成立を待つ条件クロージャ
+    @MainActor
+    private func waitForRunLoopCondition(
+        timeout: TimeInterval = 1.0,
+        condition: () -> Bool
+    ) {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+    }
+
     /// 検索ランチャーで方向キー下移動・アプリ起動候補セクション跨ぎ移動・上移動・循環移動時にスクロール位置が追従することを検証する
     @Test("検索ランチャーで方向キー移動・セクション跨ぎ・循環移動に合わせてリストが自動スクロール追従する")
     @MainActor
@@ -200,7 +215,7 @@ struct SwitcherListViewTests {
 
         // 検索語を変更すると先頭候補（selectedIndex == 0）が見える位置へスクロールが復帰すること
         viewModel.updateSearchQuery("SampleApp")
-        pumpMainRunLoop(for: 0.15)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y < 10 }
         #expect(viewModel.selectedIndex == 0)
         #expect(scrollView.contentView.bounds.origin.y < 10)
 
@@ -211,7 +226,7 @@ struct SwitcherListViewTests {
             viewModel.moveSelection(.down)
             pumpMainRunLoop(for: 0.02)
         }
-        pumpMainRunLoop(for: 0.2)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y > 180 }
         #expect(scrollView.contentView.bounds.origin.y > 180)
 
         viewModel.cancel(reason: .cancelled)
@@ -220,9 +235,9 @@ struct SwitcherListViewTests {
 
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
         panel.show(mode: .launcher, activateApp: false)
-        pumpMainRunLoop(for: 0.15)
-
         let reopenedScrollView = try #require(findScrollView(in: hostingView))
+        waitForRunLoopCondition { reopenedScrollView.contentView.bounds.origin.y < 10 }
+
         #expect(viewModel.selectedIndex == 0)
         #expect(reopenedScrollView.contentView.bounds.origin.y < 10)
     }
