@@ -70,6 +70,9 @@ public final class WindowService: WindowServicing {
     /// OS 通知等でウィンドウ破棄またはアプリ終了を検知した際に呼ばれるリアルタイム通知ハンドラ
     public var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)?
 
+    /// 事前キャプチャ（未キャッシュサムネイルのバックグラウンド取得）が望ましいイベント完了時に呼ばれる通知ハンドラ
+    public var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)?
+
     /// 終了要求を送出済みのウィンドウ追跡マップ（WindowEntry.id キー）
     private var trackedCloseTargetsByEntryID: [String: TrackedCloseTarget] = [:]
 
@@ -110,6 +113,9 @@ public final class WindowService: WindowServicing {
 
     /// PID ごとの最新バックグラウンドスキャン世代カウンタ（古い結果による上書き防止用）
     private var scanGenerationByPID: [Int32: UInt64] = [:]
+
+    /// PID ごとに後続リフレッシュへ引き継ぐ保留中の事前キャプチャ契機（連続 AX 通知による上書き消失防止用）
+    private var pendingPrefetchReasonByPID: [Int32: WindowCapturePrefetchReason] = [:]
 
     /// メニュー補完（別スペース候補等）が必要と判定された PID 集合
     private var menuEnrichmentTargetPIDs: Set<Int32> = []
@@ -215,7 +221,7 @@ public final class WindowService: WindowServicing {
             guard pid != ProcessInfo.processInfo.processIdentifier else { continue }
             registerObserver(for: pid)
         }
-        scheduleBackgroundScanAllRegularApps(debounce: nil)
+        scheduleBackgroundScanAllRegularApps(debounce: nil, prefetchReasonOnCompletion: .initialScanCompleted)
 
         let center = NSWorkspace.shared.notificationCenter
 
@@ -236,7 +242,8 @@ public final class WindowService: WindowServicing {
                     self.scheduleBackgroundRefresh(
                         for: pid,
                         markFrontmostAsActive: isActive,
-                        debounce: nil
+                        debounce: nil,
+                        prefetchReasonOnCompletion: .applicationLaunched
                     )
                 }
             }
@@ -284,7 +291,10 @@ public final class WindowService: WindowServicing {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.hasPendingSpaceChange = true
-                    self?.scheduleBackgroundScanAllRegularApps(debounce: Self.spaceChangeDebounceDuration)
+                    self?.scheduleBackgroundScanAllRegularApps(
+                        debounce: Self.spaceChangeDebounceDuration,
+                        prefetchReasonOnCompletion: .activeSpaceChanged
+                    )
                 }
             }
         )
@@ -310,6 +320,7 @@ public final class WindowService: WindowServicing {
         }
         pendingMenuRefreshTasksByPID.removeAll()
         scanGenerationByPID.removeAll()
+        pendingPrefetchReasonByPID.removeAll()
         menuEnrichmentTargetPIDs.removeAll()
 
         let center = NSWorkspace.shared.notificationCenter
@@ -541,7 +552,7 @@ public final class WindowService: WindowServicing {
                         axRole: cached.role,
                         axSubrole: cached.subrole,
                         hasAXInfo: true,
-                        isOnScreen: matchedCG?.info.isOnscreen,
+                        isOnScreen: matchedCG?.info.isOnscreen ?? (resolvedCGID != nil ? resolvedCGIsOnscreen : nil),
                         lastActivatedAt: cached.lastActivatedAt,
                         zOrderIndex: matchedCG?.zOrder ?? Int.max
                     )
@@ -1043,8 +1054,13 @@ public final class WindowService: WindowServicing {
     }
 
     /// 起動中の全通常アプリを最大同時実行数付きで並列バックグラウンドスキャンし、結果を順次キャッシュへ反映する
-    /// - Parameter debounce: 連続発生時のデバウンス待機時間（即時実行時は nil）
-    private func scheduleBackgroundScanAllRegularApps(debounce: Duration?) {
+    /// - Parameters:
+    ///   - debounce: 連続発生時のデバウンス待機時間（即時実行時は nil）
+    ///   - prefetchReasonOnCompletion: スキャン完了後にサムネイル事前取得を促す契機種別（不要時は nil）
+    private func scheduleBackgroundScanAllRegularApps(
+        debounce: Duration?,
+        prefetchReasonOnCompletion: WindowCapturePrefetchReason? = nil
+    ) {
         pendingSpaceScanTask?.cancel()
         pendingSpaceScanTask = Task { @MainActor [weak self] in
             if let debounce {
@@ -1129,6 +1145,9 @@ public final class WindowService: WindowServicing {
             guard !Task.isCancelled, self.isObserving else { return }
             self.hasPendingSpaceChange = false
             self.hasCompletedInitialBackgroundScan = true
+            if let prefetchReasonOnCompletion {
+                self.onCapturePrefetchNeeded?(prefetchReasonOnCompletion)
+            }
         }
     }
 
@@ -1141,6 +1160,7 @@ public final class WindowService: WindowServicing {
     ///   - activatedAt: 記録するアクティブ時刻（任意）
     ///   - allowDisplaySpanningReplacement: 同一スペース内のタブ切り替えとしてディスプレイ占有級置換を許可するか
     ///   - includeMenuItems: ウィンドウメニュー項目の再取得も同時に行うか
+    ///   - prefetchReasonOnCompletion: 更新完了後にサムネイル事前取得を促す契機種別（不要時は nil）
     private func scheduleBackgroundRefresh(
         for pid: Int32,
         markFrontmostAsActive: Bool,
@@ -1148,9 +1168,13 @@ public final class WindowService: WindowServicing {
         activatedElement: SendableAXElement? = nil,
         activatedAt: Date? = nil,
         allowDisplaySpanningReplacement: Bool = false,
-        includeMenuItems: Bool = false
+        includeMenuItems: Bool = false,
+        prefetchReasonOnCompletion: WindowCapturePrefetchReason? = nil
     ) {
         pendingRefreshTasksByPID[pid]?.cancel()
+        if let prefetchReasonOnCompletion {
+            pendingPrefetchReasonByPID[pid] = prefetchReasonOnCompletion
+        }
         let generation = bumpScanGeneration(for: pid)
         let workerQueue = axWorkerQueue
         let shouldFetchMenu = includeMenuItems || menuEnrichmentTargetPIDs.contains(pid)
@@ -1189,6 +1213,9 @@ public final class WindowService: WindowServicing {
                     axElement: activatedElement.value,
                     date: activatedAt
                 )
+            }
+            if let pendingReason = self.pendingPrefetchReasonByPID.removeValue(forKey: pid) {
+                self.onCapturePrefetchNeeded?(pendingReason)
             }
         }
     }
@@ -1421,6 +1448,9 @@ public final class WindowService: WindowServicing {
 
             if let focusedElement = result.0 {
                 self.updateMRUTimestamp(pid: pid, axElement: focusedElement.value, date: capturedNow)
+            }
+            if let pendingReason = self.pendingPrefetchReasonByPID.removeValue(forKey: pid) {
+                self.onCapturePrefetchNeeded?(pendingReason)
             }
         }
     }
@@ -2196,6 +2226,7 @@ public final class WindowService: WindowServicing {
     private func unregisterObserver(for pid: Int32) {
         pendingRefreshTasksByPID.removeValue(forKey: pid)?.cancel()
         pendingMenuRefreshTasksByPID.removeValue(forKey: pid)?.cancel()
+        pendingPrefetchReasonByPID.removeValue(forKey: pid)
         guard let observer = observersByPID.removeValue(forKey: pid) else { return }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
     }
@@ -2268,14 +2299,31 @@ public final class WindowService: WindowServicing {
         }
 
         let debounce = isStructureOrStateEvent ? Self.focusChangeDebounceDuration : Self.titleChangeDebounceDuration
+        let prefetchReason = Self.capturePrefetchReason(forAXNotification: notification)
         scheduleBackgroundRefresh(
             for: pid,
             markFrontmostAsActive: false,
             debounce: debounce,
             activatedElement: isActivationEvent ? SendableAXElement(value: element) : nil,
             activatedAt: isActivationEvent ? now : nil,
-            allowDisplaySpanningReplacement: true
+            allowDisplaySpanningReplacement: true,
+            prefetchReasonOnCompletion: prefetchReason
         )
+    }
+
+    /// AXObserver 通知種別からバックグラウンド事前キャプチャを促すべき契機を判定する純粋関数
+    /// - Parameter notification: 受信した AX 通知名
+    /// - Returns: 事前キャプチャ対象となる契機種別（対象外通知は nil）
+    nonisolated static func capturePrefetchReason(
+        forAXNotification notification: String
+    ) -> WindowCapturePrefetchReason? {
+        if notification == kAXWindowCreatedNotification {
+            return .windowCreated
+        }
+        if notification == kAXWindowDeminiaturizedNotification {
+            return .windowDeminiaturized
+        }
+        return nil
     }
 
     /// 破棄されたキャッシュ・追跡対象ウィンドウ群から重複排除したリアルタイム通知イベント一覧を構築する

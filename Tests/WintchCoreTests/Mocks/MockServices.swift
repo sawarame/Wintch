@@ -7,6 +7,8 @@ import Foundation
 final class MockWindowService: WindowServicing {
     /// OS 通知を模擬したリアルタイムライフサイクルイベント通知ハンドラ
     var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)?
+    /// OS 通知を模擬したバックグラウンド事前キャプチャ契機通知ハンドラ
+    var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)?
     /// startObserving の呼び出し回数
     var startObservingCallCount = 0
     /// stopObserving の呼び出し回数
@@ -167,6 +169,12 @@ final class MockWindowService: WindowServicing {
     /// - Parameter pid: 終了したプロセスの PID
     func simulateApplicationTerminated(pid: Int32) {
         onWindowLifecycleEvent?(.applicationTerminated(pid: pid))
+    }
+
+    /// テストからバックグラウンド事前キャプチャ契機通知を模擬発火する
+    /// - Parameter reason: 模擬発火する契機種別
+    func simulateCapturePrefetchNeeded(_ reason: WindowCapturePrefetchReason) {
+        onCapturePrefetchNeeded?(reason)
     }
 }
 
@@ -521,6 +529,13 @@ final class MockWindowCaptureService: WindowCaptureServicing {
     func cachedThumbnail(for cgWindowID: UInt32) -> NSImage? {
         cachedThumbnailLookupOrder.append(cgWindowID)
         return cachedThumbnails[cgWindowID]
+    }
+
+    /// 指定ウィンドウのサムネイルがキャッシュ済みかを副作用なしで確認する
+    /// - Parameter cgWindowID: CoreGraphics ウィンドウ ID
+    /// - Returns: キャッシュに保持されていれば true
+    func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool {
+        cachedThumbnails[cgWindowID] != nil
     }
 
     /// 非同期キャプチャ取得を実行し、完了ごとにコールバックとキャッシュ更新を行う

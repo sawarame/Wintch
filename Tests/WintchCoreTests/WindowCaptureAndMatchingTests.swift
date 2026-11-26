@@ -890,4 +890,60 @@ struct WindowCaptureAndMatchingTests {
             ) == nil
         )
     }
+
+    /// hasCachedThumbnail がキャッシュの有無を正しく返しつつ、LRU のアクセス順序を変更しないことを検証する
+    @Test("WindowCaptureService.hasCachedThumbnail は LRU 順序を変更せずにキャッシュ存在を判定する")
+    @MainActor
+    func hasCachedThumbnailDoesNotMutateLRUOrder() {
+        let service = WindowCaptureService(maxCacheCount: 3)
+        let img1 = NSImage(size: NSSize(width: 10, height: 10))
+        let img2 = NSImage(size: NSSize(width: 10, height: 10))
+        let img3 = NSImage(size: NSSize(width: 10, height: 10))
+
+        service.storeInCache(img1, for: 10)
+        service.storeInCache(img2, for: 20)
+        service.storeInCache(img3, for: 30)
+        #expect(service.cacheOrder == [10, 20, 30])
+
+        #expect(service.hasCachedThumbnail(for: 10) == true)
+        #expect(service.hasCachedThumbnail(for: 99) == false)
+        // 存在確認のみでは最古エントリ (10) が末尾へ移動しないこと
+        #expect(service.cacheOrder == [10, 20, 30])
+    }
+
+    /// uncachedOnScreenPrefetchWindowIDs が現在スペース表示中かつ未キャッシュの通常ウィンドウのみを
+    /// MRU 順・重複除外済みで抽出し、別スペース・最小化・既キャッシュ・表示状態不明を除外することを検証する
+    @Test("uncachedOnScreenPrefetchWindowIDs は現在表示中かつ未キャッシュのウィンドウ ID のみを抽出する")
+    @MainActor
+    func uncachedOnScreenPrefetchWindowIDsSelectsOnlyVisibleUncachedWindows() {
+        let entries = [
+            WindowEntry(id: "cached-on", cgWindowID: 10, pid: 1, applicationName: "App", windowTitle: "CachedOn", isMinimized: false, isOnScreen: true),
+            WindowEntry(id: "uncached-on-1", cgWindowID: 11, pid: 1, applicationName: "App", windowTitle: "UncachedOn1", isMinimized: false, isOnScreen: true),
+            WindowEntry(id: "offscreen", cgWindowID: 12, pid: 1, applicationName: "App", windowTitle: "Offscreen", isMinimized: false, isOnScreen: false),
+            WindowEntry(id: "unknown-visibility", cgWindowID: 13, pid: 1, applicationName: "App", windowTitle: "Unknown", isMinimized: false, isOnScreen: nil),
+            WindowEntry(id: "minimized", cgWindowID: 14, pid: 1, applicationName: "App", windowTitle: "Minimized", isMinimized: true, isOnScreen: true),
+            WindowEntry(id: "no-cgid", cgWindowID: nil, pid: 1, applicationName: "App", windowTitle: "NoCG", isMinimized: false, isOnScreen: true),
+            WindowEntry(id: "duplicate-id", cgWindowID: 11, pid: 1, applicationName: "App", windowTitle: "Dup", isMinimized: false, isOnScreen: true),
+            WindowEntry(id: "uncached-on-2", cgWindowID: 15, pid: 2, applicationName: "App2", windowTitle: "UncachedOn2", isMinimized: false, isOnScreen: true)
+        ]
+        let cachedIDs: Set<UInt32> = [10]
+
+        let targetIDs = SwitcherViewModel.uncachedOnScreenPrefetchWindowIDs(
+            from: entries,
+            isCached: { cachedIDs.contains($0) }
+        )
+
+        #expect(targetIDs == [11, 15])
+    }
+
+    /// AXObserver 通知種別からの事前キャプチャ契機判定が、ウィンドウ作成と最小化解除のみを対象とすることを検証する
+    @Test("WindowService.capturePrefetchReason はウィンドウ作成と最小化解除のみ事前取得対象とする")
+    func capturePrefetchReasonForAXNotificationMapsOnlyCreationAndDeminiaturization() {
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXWindowCreatedNotification) == .windowCreated)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXWindowDeminiaturizedNotification) == .windowDeminiaturized)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXFocusedWindowChangedNotification) == nil)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXMainWindowChangedNotification) == nil)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXTitleChangedNotification) == nil)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXWindowMiniaturizedNotification) == nil)
+    }
 }

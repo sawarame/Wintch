@@ -3013,4 +3013,321 @@ struct SwitcherViewModelTests {
         #expect(viewModel.closingWindowIDs.isEmpty)
         viewModel.cancel()
     }
+
+    /// イベント駆動のバックグラウンド事前取得が連続通知をデバウンス集約し、
+    /// 現在スペース上の未キャッシュ通常ウィンドウのみを取得・キャッシュして別スペース移動後の初回表示に即反映することを検証する
+    @Test("バックグラウンド事前取得はデバウンス集約で現在スペースの未キャッシュのみ取得し別スペース移動後も即表示できる")
+    @MainActor
+    func backgroundCapturePrefetchDebouncesFetchesOnlyUncachedAndShowsImmediatelyFromOtherSpace() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        let cachedOtherSpaceImage = NSImage(size: NSSize(width: 60, height: 40))
+        let prefetchedImage = NSImage(size: NSSize(width: 120, height: 80))
+        let closedWindowImage = NSImage(size: NSSize(width: 50, height: 50))
+        captureService.cachedThumbnails[101] = cachedOtherSpaceImage
+        captureService.cachedThumbnails[999] = closedWindowImage
+        captureService.stubbedAsyncThumbnails[102] = prefetchedImage
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w-other-cached", cgWindowID: 101, pid: 10, applicationName: "AppA", title: "OtherSpaceCached", isOnScreen: false, lastActivatedAt: now),
+            RawWindowCandidate(id: "w-current-uncached", cgWindowID: 102, pid: 20, applicationName: "AppB", title: "CurrentUncached", isOnScreen: true, lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "w-other-uncached", cgWindowID: 103, pid: 30, applicationName: "AppC", title: "OtherSpaceUncached", isOnScreen: false, lastActivatedAt: now.addingTimeInterval(-20)),
+            RawWindowCandidate(id: "w-minimized", cgWindowID: 104, pid: 40, applicationName: "AppD", title: "Minimized", isMinimized: true, isOnScreen: true, lastActivatedAt: now.addingTimeInterval(-30))
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false,
+            capturePrefetchDebounceDuration: .milliseconds(35),
+            isBackgroundCapturePrefetchEnabled: true
+        )
+
+        // スペース切替とウィンドウ作成が連続発火してもデバウンスで 1 回に集約される
+        windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
+        windowService.simulateCapturePrefetchNeeded(.windowCreated)
+
+        for _ in 0..<50 where captureService.capturedRequestWindowIDs.isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        try? await Task.sleep(for: .milliseconds(40))
+
+        #expect(captureService.capturedRequestWindowIDs == [[102]])
+        // 閉じ済み (999) のみ整理され、別スペースの生存キャッシュ (101) と新規事前取得 (102) は保持される
+        #expect(captureService.cachedThumbnails[999] == nil)
+        #expect(captureService.cachedThumbnails[101] === cachedOtherSpaceImage)
+        #expect(captureService.cachedThumbnails[102] === prefetchedImage)
+        // LRU 順を崩す cachedThumbnail ではなく副作用なしの hasCachedThumbnail で判定されていること
+        #expect(captureService.cachedThumbnailLookupOrder.isEmpty)
+
+        // その後、102 が別スペース (isOnScreen == false) に移った状態で初めてパネルを開いても即座にサムネイルが表示される
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w-other-cached", cgWindowID: 101, pid: 10, applicationName: "AppA", title: "OtherSpaceCached", isOnScreen: true, lastActivatedAt: now),
+            RawWindowCandidate(id: "w-current-uncached", cgWindowID: 102, pid: 20, applicationName: "AppB", title: "CurrentUncached", isOnScreen: false, lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.thumbnail(for: viewModel.entries[1]) === prefetchedImage)
+        viewModel.cancel()
+    }
+
+    /// 双方が非キャプチャ表示型のときは画面収録権限確認や事前取得を一切行わず、
+    /// キャプチャ表示型でも画面収録権限未許可時は OS ダイアログを誘発せず安全にスキップすることを検証する
+    @Test("バックグラウンド事前取得はオプトイン無効時および権限未許可時に完全に抑止される")
+    @MainActor
+    func backgroundCapturePrefetchRespectsOptInAndPermissionDenied() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .denied
+        let captureService = MockWindowCaptureService()
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 501, pid: 10, applicationName: "Safari", title: "Home", isOnScreen: true, lastActivatedAt: Date())
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .list,
+            launcherDisplayStyle: .list,
+            capturePrefetchDebounceDuration: .milliseconds(15),
+            isBackgroundCapturePrefetchEnabled: true
+        )
+
+        // 1. 双方が非キャプチャ（リスト型）の間は権限確認も事前取得も一切呼ばれない
+        windowService.simulateCapturePrefetchNeeded(.initialScanCompleted)
+        windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
+        try? await Task.sleep(for: .milliseconds(45))
+        #expect(screenRecordingService.currentStatusCallCount == 0)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+
+        // 2. キャプチャ表示型へ切り替えても画面収録権限が未許可なら権限要求やキャプチャは実行しない
+        viewModel.updateNormalDisplayStyle(.capture)
+        try? await Task.sleep(for: .milliseconds(45))
+        #expect(screenRecordingService.currentStatusCallCount > 0)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+    }
+
+    /// パネル閉鎖後も進行中のキャプチャがメモリキャッシュ格納まで継続完了して次回表示に反映され、
+    /// 一方で非キャプチャ表示形式への切り替え時は進行中タスクが即座にキャンセル・キャッシュ破棄されることを検証する
+    @Test("パネル閉鎖後もキャプチャをキャッシュ格納まで継続し非キャプチャ切替時は即キャンセル・破棄する")
+    @MainActor
+    func panelDismissalContinuesCaptureIntoCacheAndCancelsOnNonCaptureSwitch() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w1", cgWindowID: 601, pid: 10, applicationName: "AppA", title: "Win1", isOnScreen: true, lastActivatedAt: now),
+            RawWindowCandidate(id: "w2", cgWindowID: 602, pid: 20, applicationName: "AppB", title: "Win2", isOnScreen: true, lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+
+        let continuedImage = NSImage(size: NSSize(width: 100, height: 70))
+        var firstCaptureGate: CheckedContinuation<Void, Never>?
+        var firstCaptureFinished = false
+        var secondPanelCaptureFinished = false
+        var wasCancelledOnDismiss = false
+        var callCount = 0
+
+        captureService.captureHandler = { _, onCaptured in
+            callCount += 1
+            if callCount == 1 {
+                await withCheckedContinuation { cont in
+                    firstCaptureGate = cont
+                }
+                wasCancelledOnDismiss = Task.isCancelled
+                if !Task.isCancelled {
+                    onCaptured(602, continuedImage)
+                }
+                firstCaptureFinished = true
+            } else if callCount == 2 {
+                secondPanelCaptureFinished = true
+            }
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false,
+            capturePrefetchDebounceDuration: .milliseconds(20),
+            isBackgroundCapturePrefetchEnabled: true
+        )
+
+        // 1. パネルを開いてキャプチャ開始（ゲート到達）を確認した直後にパネルを閉じる
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        for _ in 0..<100 where firstCaptureGate == nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(firstCaptureGate != nil)
+        viewModel.cancel()
+        #expect(viewModel.isPresented == false)
+
+        // 2. 閉鎖後もキャプチャタスクはキャンセルされず完了し、メモリキャッシュへ格納される（閉鎖済み UI には反映しない）
+        let gate1 = firstCaptureGate
+        firstCaptureGate = nil
+        gate1?.resume()
+        for _ in 0..<100 where !firstCaptureFinished {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(firstCaptureFinished == true)
+        #expect(wasCancelledOnDismiss == false)
+        #expect(captureService.cachedThumbnails[602] === continuedImage)
+        #expect(viewModel.capturedThumbnails.isEmpty)
+
+        // 3. 次回パネルを開くと、閉鎖後に継続保存されたサムネイルが即座に表示される
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        for _ in 0..<100 where !secondPanelCaptureFinished {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(secondPanelCaptureFinished == true)
+        #expect(viewModel.thumbnail(for: viewModel.entries[1]) === continuedImage)
+        viewModel.cancel()
+
+        // 4. 進行中に非キャプチャ表示形式（リスト型）へ切り替えた場合はタスクがキャンセルされキャッシュも全破棄される
+        var thirdCaptureGate: CheckedContinuation<Void, Never>?
+        var thirdCaptureFinished = false
+        var wasCancelledOnNonCapture = false
+        captureService.captureHandler = { _, _ in
+            await withCheckedContinuation { cont in
+                thirdCaptureGate = cont
+            }
+            wasCancelledOnNonCapture = Task.isCancelled
+            thirdCaptureFinished = true
+        }
+
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        for _ in 0..<100 where thirdCaptureGate == nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(thirdCaptureGate != nil)
+        viewModel.cancel()
+        viewModel.updateNormalDisplayStyle(.list)
+
+        let gate3 = thirdCaptureGate
+        thirdCaptureGate = nil
+        gate3?.resume()
+        for _ in 0..<100 where !thirdCaptureFinished {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(thirdCaptureFinished == true)
+        #expect(wasCancelledOnNonCapture == true)
+        #expect(captureService.cachedThumbnails.isEmpty)
+        #expect(captureService.clearCacheCallCount >= 1)
+    }
+
+    /// パネル閉鎖後の継続キャプチャ実行中に別スペース切替が発生した場合、重複実行せずに
+    /// 継続キャプチャ完了後に新スペースの未キャッシュウィンドウを繰り越し事前取得することを検証する
+    @Test("継続キャプチャ実行中のスペース切替事前取得は完了後に繰り越し実行される")
+    @MainActor
+    func capturePrefetchDuringInFlightPanelRefreshDefersUntilCompletion() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w-space-a", cgWindowID: 701, pid: 10, applicationName: "AppA", title: "SpaceA", isOnScreen: true, lastActivatedAt: now)
+        ]
+
+        let imageA = NSImage(size: NSSize(width: 80, height: 60))
+        let imageB = NSImage(size: NSSize(width: 80, height: 60))
+        var refreshGate: CheckedContinuation<Void, Never>?
+        var deferredPrefetchCompleted = false
+        var callIndex = 0
+
+        captureService.captureHandler = { windowIDs, onCaptured in
+            callIndex += 1
+            if callIndex == 1 {
+                await withCheckedContinuation { cont in
+                    refreshGate = cont
+                }
+                if windowIDs.contains(701) {
+                    onCaptured(701, imageA)
+                }
+            } else {
+                if windowIDs.contains(702) {
+                    onCaptured(702, imageB)
+                }
+                deferredPrefetchCompleted = true
+            }
+        }
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: false,
+            capturePrefetchDebounceDuration: .milliseconds(15),
+            isBackgroundCapturePrefetchEnabled: true
+        )
+
+        // パネルを開いてすぐ閉じ、継続キャプチャを実行中状態にする
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        for _ in 0..<100 where refreshGate == nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(refreshGate != nil)
+        viewModel.cancel()
+
+        // 継続キャプチャ中に別スペースへ切り替わった状態を模擬する
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "w-space-a", cgWindowID: 701, pid: 10, applicationName: "AppA", title: "SpaceA", isOnScreen: false, lastActivatedAt: now),
+            RawWindowCandidate(id: "w-space-b", cgWindowID: 702, pid: 20, applicationName: "AppB", title: "SpaceB", isOnScreen: true, lastActivatedAt: now.addingTimeInterval(-10))
+        ]
+        windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
+        try? await Task.sleep(for: .milliseconds(40))
+
+        // 継続キャプチャ中はまだ 2 回目のキャプチャは重複起動されない
+        #expect(captureService.capturedRequestWindowIDs.count == 1)
+
+        // 継続キャプチャ完了後に繰り越し事前取得が自動で走り、新スペースの 702 がキャッシュされる
+        let gate = refreshGate
+        refreshGate = nil
+        gate?.resume()
+        for _ in 0..<100 where !deferredPrefetchCompleted {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(deferredPrefetchCompleted == true)
+        #expect(captureService.capturedRequestWindowIDs == [[701], [702]])
+        #expect(captureService.cachedThumbnails[701] === imageA)
+        #expect(captureService.cachedThumbnails[702] === imageB)
+    }
 }

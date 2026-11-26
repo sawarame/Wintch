@@ -81,6 +81,13 @@ public final class WindowCaptureService: WindowCaptureServicing {
         return image
     }
 
+    /// 指定ウィンドウのサムネイルがメモリキャッシュに存在するかを確認する（LRU 順序は変更しない）
+    /// - Parameter cgWindowID: 確認対象の CoreGraphics ウィンドウ ID
+    /// - Returns: キャッシュに保持されていれば true
+    public func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool {
+        thumbnailCache[cgWindowID] != nil
+    }
+
     /// 指定ウィンドウ群の最新サムネイルを非同期取得し、完了したものから順次通知する
     /// - Parameters:
     ///   - cgWindowIDs: 取得対象の CoreGraphics ウィンドウ ID 配列

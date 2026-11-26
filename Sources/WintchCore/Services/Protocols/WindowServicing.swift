@@ -36,11 +36,30 @@ public enum WindowLifecycleEvent: Equatable, Sendable {
     case applicationTerminated(pid: Int32)
 }
 
+/// バックグラウンドでのウィンドウサムネイル事前取得を促す契機種別
+public enum WindowCapturePrefetchReason: Equatable, Sendable {
+    /// 監視開始直後の初期バックグラウンドスキャンが完了した
+    case initialScanCompleted
+    /// 操作スペース（フルスクリーン空間含む）の切り替えに伴う再走査が完了した
+    case activeSpaceChanged
+    /// 新しいウィンドウの作成を検知してキャッシュ更新が完了した
+    case windowCreated
+    /// 新しい通常アプリケーションの起動を検知してキャッシュ更新が完了した
+    case applicationLaunched
+    /// 最小化されていたウィンドウの復元を検知してキャッシュ更新が完了した
+    case windowDeminiaturized
+    /// 設定またはメニューバーからキャプチャ表示型が新たに有効化された
+    case displayStyleEnabled
+}
+
 /// ウィンドウ情報の収集・監視・切り替え操作を提供するサービス契約
 @MainActor
 public protocol WindowServicing: AnyObject {
     /// OS 通知等でウィンドウ破棄またはアプリ終了を検知した際に呼ばれるリアルタイム通知ハンドラ
     var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)? { get set }
+
+    /// 事前キャプチャ（未キャッシュサムネイルのバックグラウンド取得）が望ましいイベント完了時に呼ばれる通知ハンドラ
+    var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)? { get set }
 
     /// 現在の監視状態を開始する（AXObserver およびワークスペース通知の登録）
     func startObserving()
@@ -82,6 +101,12 @@ public protocol WindowServicing: AnyObject {
 }
 
 public extension WindowServicing {
+    /// デフォルト実装として未接続の通知ハンドラを扱う（テストモック互換用）
+    var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)? {
+        get { nil }
+        set {}
+    }
+
     /// デフォルト実装として空配列を返す（テストモック互換用）
     /// - Returns: ディスプレイ矩形配列
     func currentDisplayBounds() -> [WindowBounds] {
