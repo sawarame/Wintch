@@ -504,4 +504,72 @@ struct AppCoordinatorTests {
         #expect(store.storedGroupLauncherByApp == true)
         #expect(store.saveGroupLauncherByAppCallCount == 1)
     }
+
+    /// AppCoordinator の権限状態遷移に連動してバックグラウンド事前キャプチャが有効化・停止されることを検証する
+    @Test("AppCoordinator は権限許可時に事前キャプチャを有効化し監視中断・権限剥奪時に停止する")
+    @MainActor
+    func coordinatorEnablesAndStopsBackgroundCapturePrefetchAcrossPermissionLifecycle() async {
+        let store = MockPreferencesStore()
+        store.storedNormalDisplayStyle = .capture
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        permissionService.stubbedStatus = .granted
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+        let captureService = MockWindowCaptureService()
+
+        let prefetchedImage = NSImage(size: NSSize(width: 90, height: 60))
+        captureService.stubbedAsyncThumbnails[801] = prefetchedImage
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 801,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Docs",
+                isOnScreen: true,
+                lastActivatedAt: Date()
+            )
+        ]
+
+        let coordinator = AppCoordinator(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            preferencesStore: store,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService
+        )
+
+        coordinator.start()
+        windowService.simulateCapturePrefetchNeeded(.initialScanCompleted)
+
+        // デフォルトデバウンス（300ms）経過後に事前取得が実行されキャッシュへ保存される
+        for _ in 0..<80 where captureService.cachedThumbnails[801] == nil {
+            try? await Task.sleep(for: .milliseconds(15))
+        }
+        #expect(captureService.cachedThumbnails[801] === prefetchedImage)
+
+        // 権限剥奪／監視中断後は事前取得が無効化され、新規未キャッシュウィンドウ通知でも実行されない
+        hotKeyMonitor.simulateMonitoringInterrupted()
+        let requestCountAfterRevoke = captureService.capturedRequestWindowIDs.count
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w2",
+                cgWindowID: 802,
+                pid: 20,
+                applicationName: "Notes",
+                title: "Memo",
+                isOnScreen: true,
+                lastActivatedAt: Date()
+            )
+        ]
+        windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
+        try? await Task.sleep(for: .milliseconds(360))
+        #expect(captureService.capturedRequestWindowIDs.count == requestCountAfterRevoke)
+    }
 }

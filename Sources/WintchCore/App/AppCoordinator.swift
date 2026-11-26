@@ -344,6 +344,7 @@ public final class AppCoordinator {
     /// アプリケーションを安全に終了する
     public func quit() {
         automaticUpdateCheckTask?.cancel()
+        switcherViewModel.stopBackgroundCaptureWork()
         hotKeyMonitor.stopMonitoring()
         windowService.stopObserving()
         permissionService.stopMonitoring()
@@ -395,6 +396,7 @@ public final class AppCoordinator {
             permissionGuideViewModel.syncStatus(.granted)
             isPermissionGuidePresented = false
             permissionWindow?.orderOut(nil)
+            switcherViewModel.enableBackgroundCapturePrefetch()
             windowService.startObserving()
             // 権限誘導画面の表示中に保留していた起動時自動チェックの更新通知があればここで提示する
             if let pending = pendingAutomaticUpdate {
@@ -417,6 +419,7 @@ public final class AppCoordinator {
         settingsViewModel.refreshStatus(permissionStatus: .denied)
         permissionGuideViewModel.syncStatus(.denied)
         switcherViewModel.cancel()
+        switcherViewModel.stopBackgroundCaptureWork()
         hotKeyMonitor.stopMonitoring()
         windowService.stopObserving()
         isPermissionGuidePresented = true

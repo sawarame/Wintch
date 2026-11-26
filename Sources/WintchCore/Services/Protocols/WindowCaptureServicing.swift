@@ -9,6 +9,11 @@ public protocol WindowCaptureServicing: AnyObject {
     /// - Returns: キャッシュ済みのサムネイル画像（未保持の場合は nil）
     func cachedThumbnail(for cgWindowID: UInt32) -> NSImage?
 
+    /// 指定ウィンドウのサムネイルがメモリキャッシュに存在するかを確認する（LRU 順序は変更しない）
+    /// - Parameter cgWindowID: 確認対象の CoreGraphics ウィンドウ ID
+    /// - Returns: キャッシュに保持されていれば true
+    func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool
+
     /// 指定ウィンドウ群の最新サムネイルを非同期取得し、完了したものから順次通知する
     /// - Parameters:
     ///   - cgWindowIDs: 取得対象の CoreGraphics ウィンドウ ID 配列
@@ -30,4 +35,13 @@ public protocol WindowCaptureServicing: AnyObject {
 
     /// 保持している全サムネイルキャッシュをメモリから破棄する（リスト型への復帰時など）
     func clearCache()
+}
+
+public extension WindowCaptureServicing {
+    /// デフォルト実装としてキャッシュ取得結果の有無を返す（テストモック互換用）
+    /// - Parameter cgWindowID: 確認対象の CoreGraphics ウィンドウ ID
+    /// - Returns: キャッシュに保持されていれば true
+    func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool {
+        cachedThumbnail(for: cgWindowID) != nil
+    }
 }

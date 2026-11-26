@@ -219,16 +219,33 @@ public final class SwitcherViewModel {
     private let screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)?
     /// ウィンドウサムネイルキャプチャサービス（キャプチャ表示型選択時のみ使用）
     private let windowCaptureService: (any WindowCaptureServicing)?
+    /// サムネイルキャプチャ時の上限ピクセルサイズ
+    private static let captureMaxPixelSize = CGSize(width: 432, height: 270)
+
     /// 1 ウィンドウ項目あたりのローディングスピナー表示上限時間（既定値は 5 秒）
     private let closeLoadingTimeout: Duration
     /// スピナー表示中のフォールバック生存確認ポーリング間隔（既定値は 80ms）
     private let closePollInterval: Duration
     /// スピナー上限到達後にパネル表示中の遅延完了を検知するための低頻度確認間隔（既定値は 500ms）
     private let postTimeoutPollInterval: Duration
+    /// バックグラウンド事前キャプチャの連続イベント集約用デバウンス待機時間（既定値は 300ms）
+    private let capturePrefetchDebounceDuration: Duration
     /// インストール済みアプリ一覧のバックグラウンド更新タスク
     private var installedAppsRefreshTask: Task<Void, Never>?
-    /// ウィンドウサムネイルのバックグラウンド取得タスク
+    /// ウィンドウサムネイルのバックグラウンド取得タスク（パネル表示契機・閉鎖後もキャッシュ格納まで継続）
     private var captureRefreshTask: Task<Void, Never>?
+    /// パネル由来キャプチャタスクの世代カウンタ（旧タスク完了時の状態上書き防止用）
+    private var captureRefreshGeneration: Int = 0
+    /// パネル由来キャプチャタスクが現在実行中かどうか
+    private var isCaptureRefreshInFlight: Bool = false
+    /// イベント駆動のバックグラウンド事前キャプチャタスク
+    private var capturePrefetchTask: Task<Void, Never>?
+    /// バックグラウンド事前キャプチャタスクの世代カウンタ
+    private var capturePrefetchGeneration: Int = 0
+    /// パネル由来キャプチャの継続完了後に繰り越し実行する事前取得契機
+    private var pendingPrefetchReasonAfterRefresh: WindowCapturePrefetchReason?
+    /// ウィンドウ監視イベントに基づくバックグラウンド事前キャプチャが有効化されているかどうか
+    private var isBackgroundCapturePrefetchEnabled: Bool
     /// 終了要求送出済みウィンドウ ID ごとの非同期完了監視タスク
     private var closeMonitorTasksByWindowID: [String: Task<Void, Never>] = [:]
 
@@ -249,6 +266,8 @@ public final class SwitcherViewModel {
     ///   - closeLoadingTimeout: 1 項目あたりのローディングスピナー表示上限時間（既定値は 5 秒）
     ///   - closePollInterval: スピナー表示中のフォールバック生存確認間隔（既定値は 80ms）
     ///   - postTimeoutPollInterval: スピナー上限到達後の低頻度フォールバック確認間隔（既定値は 500ms）
+    ///   - capturePrefetchDebounceDuration: バックグラウンド事前キャプチャのデバウンス待機時間（既定値は 300ms）
+    ///   - isBackgroundCapturePrefetchEnabled: 初期化時点でバックグラウンド事前キャプチャを有効化するか（既定値は false）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -264,7 +283,9 @@ public final class SwitcherViewModel {
         resolvedLanguage: ResolvedAppLanguage = .japanese,
         closeLoadingTimeout: Duration = .seconds(5),
         closePollInterval: Duration = .milliseconds(80),
-        postTimeoutPollInterval: Duration = .milliseconds(500)
+        postTimeoutPollInterval: Duration = .milliseconds(500),
+        capturePrefetchDebounceDuration: Duration = .milliseconds(300),
+        isBackgroundCapturePrefetchEnabled: Bool = false
     ) {
         self.windowService = windowService
         self.hotKeyMonitor = hotKeyMonitor
@@ -281,10 +302,16 @@ public final class SwitcherViewModel {
         self.closeLoadingTimeout = closeLoadingTimeout
         self.closePollInterval = closePollInterval
         self.postTimeoutPollInterval = postTimeoutPollInterval
+        self.capturePrefetchDebounceDuration = capturePrefetchDebounceDuration
+        self.isBackgroundCapturePrefetchEnabled = isBackgroundCapturePrefetchEnabled
 
         // パネル表示中に OS 通知で検知したウィンドウ破棄・アプリ終了をリアルタイムに一覧へ反映する
         self.windowService.onWindowLifecycleEvent = { [weak self] event in
             self?.handleWindowLifecycleEvent(event)
+        }
+        // スペース切替・起動スキャン・ウィンドウ作成等の完了時に未キャッシュサムネイルを静かに事前取得する
+        self.windowService.onCapturePrefetchNeeded = { [weak self] reason in
+            self?.scheduleBackgroundCapturePrefetch(reason: reason)
         }
     }
 
@@ -317,14 +344,31 @@ public final class SwitcherViewModel {
         scheduleInstalledAppsRefresh()
     }
 
+    /// ウィンドウ監視イベントに応じたバックグラウンド事前キャプチャを有効化する
+    public func enableBackgroundCapturePrefetch() {
+        isBackgroundCapturePrefetchEnabled = true
+    }
+
+    /// 権限剥奪・監視停止・アプリ終了時に進行中のバックグラウンド事前取得および継続キャプチャを即座に停止する
+    public func stopBackgroundCaptureWork() {
+        isBackgroundCapturePrefetchEnabled = false
+        cancelAllBackgroundCaptureTasks()
+    }
+
     /// 通常スイッチャーの表示形式を更新し、通常・ランチャーの双方が非キャプチャとなった場合は一時キャプチャキャッシュを即時破棄する
     /// - Parameter style: 新しい表示形式
     public func updateNormalDisplayStyle(_ style: SwitcherDisplayStyle) {
+        let wasUsingCapture = usesCaptureDisplayStyle
         normalDisplayStyle = style
         if !usesCaptureDisplayStyle {
             clearCaptureState(clearServiceCache: true)
-        } else if style != .capture && mode == .normal {
-            clearCaptureState(clearServiceCache: false)
+        } else {
+            if style != .capture && mode == .normal {
+                clearCaptureState(clearServiceCache: false)
+            }
+            if !wasUsingCapture && isBackgroundCapturePrefetchEnabled {
+                scheduleBackgroundCapturePrefetch(reason: .displayStyleEnabled)
+            }
         }
         if style.usesGridLayout && !displayedResults.isEmpty {
             recalculateGridColumnCount()
@@ -334,11 +378,17 @@ public final class SwitcherViewModel {
     /// 検索ランチャーの表示形式を更新し、通常・ランチャーの双方が非キャプチャとなった場合は一時キャプチャキャッシュを即時破棄する
     /// - Parameter style: 新しい検索ランチャー表示形式
     public func updateLauncherDisplayStyle(_ style: LauncherDisplayStyle) {
+        let wasUsingCapture = usesCaptureDisplayStyle
         launcherDisplayStyle = style
         if !usesCaptureDisplayStyle {
             clearCaptureState(clearServiceCache: true)
-        } else if style != .capture && mode == .launcher {
-            clearCaptureState(clearServiceCache: false)
+        } else {
+            if style != .capture && mode == .launcher {
+                clearCaptureState(clearServiceCache: false)
+            }
+            if !wasUsingCapture && isBackgroundCapturePrefetchEnabled {
+                scheduleBackgroundCapturePrefetch(reason: .displayStyleEnabled)
+            }
         }
     }
 
@@ -405,13 +455,32 @@ public final class SwitcherViewModel {
     /// 進行中のキャプチャ取得タスクと画面保持サムネイルを破棄する
     /// - Parameter clearServiceCache: キャプチャサービス側の共有メモリキャッシュも全破棄する場合は true
     private func clearCaptureState(clearServiceCache: Bool) {
-        captureRefreshTask?.cancel()
-        captureRefreshTask = nil
+        if clearServiceCache {
+            cancelAllBackgroundCaptureTasks()
+        } else {
+            captureRefreshGeneration += 1
+            captureRefreshTask?.cancel()
+            captureRefreshTask = nil
+            isCaptureRefreshInFlight = false
+        }
         capturedThumbnails.removeAll()
         isScreenRecordingGranted = true
         if clearServiceCache {
             windowCaptureService?.clearCache()
         }
+    }
+
+    /// 進行中のパネル由来キャプチャおよびバックグラウンド事前取得タスクをすべてキャンセルし状態を初期化する
+    private func cancelAllBackgroundCaptureTasks() {
+        captureRefreshGeneration += 1
+        captureRefreshTask?.cancel()
+        captureRefreshTask = nil
+        isCaptureRefreshInFlight = false
+
+        capturePrefetchGeneration += 1
+        capturePrefetchTask?.cancel()
+        capturePrefetchTask = nil
+        pendingPrefetchReasonAfterRefresh = nil
     }
 
     /// グリッド表示（アイコン型・キャプチャ表示型）で現在適用されている列数を更新する
@@ -973,8 +1042,8 @@ public final class SwitcherViewModel {
         closeMonitorTasksByWindowID.removeAll()
         installedAppsRefreshTask?.cancel()
         installedAppsRefreshTask = nil
-        captureRefreshTask?.cancel()
-        captureRefreshTask = nil
+        // パネル閉鎖後も進行中のキャプチャはメモリキャッシュ格納完了までバックグラウンドで継続する
+        // （閉鎖済みパネルの UI 状態への誤反映は presentationGeneration / mode ガードで防止する）
         shouldActivateAppForCurrentSession = false
         mode = .inactive
         hotKeyMonitor.activeMode = .inactive
@@ -993,7 +1062,16 @@ public final class SwitcherViewModel {
     /// バックグラウンドでウィンドウの最新サムネイルを非同期取得し、同一セッションかつ表示中項目にのみ反映する
     /// - Parameter entries: キャプチャ対象のウィンドウ項目一覧
     private func scheduleWindowCaptureRefresh(for entries: [WindowEntry]) {
+        // パネル表示中の優先度順キャプチャを最優先するため、進行中の事前取得および前回の継続タスクを差し替える
+        capturePrefetchGeneration += 1
+        capturePrefetchTask?.cancel()
+        capturePrefetchTask = nil
+        pendingPrefetchReasonAfterRefresh = nil
+
+        captureRefreshGeneration += 1
         captureRefreshTask?.cancel()
+        captureRefreshTask = nil
+        isCaptureRefreshInFlight = false
         guard let windowCaptureService else { return }
 
         let targetIDs = Self.prioritizedCaptureWindowIDs(
@@ -1004,9 +1082,24 @@ public final class SwitcherViewModel {
 
         let capturedMode = mode
         let capturedGeneration = presentationGeneration
-        let maxPixelSize = CGSize(width: 432, height: 270)
+        let refreshGeneration = captureRefreshGeneration
+        let maxPixelSize = Self.captureMaxPixelSize
+        isCaptureRefreshInFlight = true
 
         captureRefreshTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.captureRefreshGeneration == refreshGeneration {
+                    self.isCaptureRefreshInFlight = false
+                    self.captureRefreshTask = nil
+                    if let pendingReason = self.pendingPrefetchReasonAfterRefresh {
+                        self.pendingPrefetchReasonAfterRefresh = nil
+                        if self.mode == .inactive {
+                            self.scheduleBackgroundCapturePrefetch(reason: pendingReason)
+                        }
+                    }
+                }
+            }
+
             await windowCaptureService.captureThumbnails(
                 for: targetIDs,
                 maxPixelSize: maxPixelSize
@@ -1038,6 +1131,112 @@ public final class SwitcherViewModel {
                 self.onSearchResultsUpdated?()
             }
         }
+    }
+
+    /// 起動時・操作スペース切替時・ウィンドウ作成時などの契機で、現在表示中の未キャッシュサムネイルをデバウンス付きで事前取得する
+    /// - Parameter reason: 事前取得を要求する契機種別
+    public func scheduleBackgroundCapturePrefetch(reason: WindowCapturePrefetchReason) {
+        // オプトイン原則: 通常・ランチャー双方が非キャプチャ時は権限確認含め一切実行しない
+        guard isBackgroundCapturePrefetchEnabled,
+              usesCaptureDisplayStyle,
+              windowCaptureService != nil else {
+            return
+        }
+
+        capturePrefetchGeneration += 1
+        let prefetchGeneration = capturePrefetchGeneration
+        capturePrefetchTask?.cancel()
+        let debounceDuration = capturePrefetchDebounceDuration
+
+        capturePrefetchTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.capturePrefetchGeneration == prefetchGeneration {
+                    self.capturePrefetchTask = nil
+                }
+            }
+
+            if debounceDuration > .zero {
+                try? await Task.sleep(for: debounceDuration)
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  self.capturePrefetchGeneration == prefetchGeneration else {
+                return
+            }
+            await self.performBackgroundCapturePrefetch(reason: reason)
+        }
+    }
+
+    /// 現在操作スペース上の未キャッシュ通常ウィンドウのみを対象にバックグラウンド事前キャプチャを実行する
+    /// - Parameter reason: 実行契機種別
+    private func performBackgroundCapturePrefetch(reason: WindowCapturePrefetchReason) async {
+        guard isBackgroundCapturePrefetchEnabled,
+              usesCaptureDisplayStyle,
+              let windowCaptureService else {
+            return
+        }
+        // パネル表示中はパネル側の MRU 優先キャプチャを妨げない
+        guard mode == .inactive else {
+            return
+        }
+        // パネル閉鎖後の継続キャプチャが実行中の場合は重複実行を避け、完了後に繰り越し実行する
+        if isCaptureRefreshInFlight {
+            pendingPrefetchReasonAfterRefresh = reason
+            return
+        }
+        // アクセシビリティ権限および画面収録権限が許可済みの場合のみ実行し、OS ダイアログを誘発しない
+        guard permissionService.currentStatus() == .granted,
+              let screenRecordingPermissionService,
+              screenRecordingPermissionService.currentStatus() == .granted else {
+            return
+        }
+
+        let rawCandidates = windowService.fetchRawWindowCandidates()
+        let screenBounds = windowService.currentDisplayBounds()
+        let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
+        let sorted = WindowSorter.sortByMRU(filtered)
+
+        // 全操作スペースの生存ウィンドウ ID 集合で閉じ済み分のキャッシュのみ整理し、別スペースのキャッシュは保持する
+        let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
+        windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+
+        let targetIDs = Self.uncachedOnScreenPrefetchWindowIDs(
+            from: sorted,
+            isCached: { windowCaptureService.hasCachedThumbnail(for: $0) }
+        )
+        guard !targetIDs.isEmpty else { return }
+
+        await windowCaptureService.captureThumbnails(
+            for: targetIDs,
+            maxPixelSize: Self.captureMaxPixelSize
+        ) { _, _ in
+            // 事前取得では WindowCaptureService 内のメモリキャッシュ格納のみ行い、UI 状態は更新しない
+        }
+    }
+
+    /// 現在操作スペース上で画面表示中（isOnScreen == true かつ非最小化）のうち、
+    /// メモリキャッシュ未保持の CGWindow ID のみを MRU 順で抽出する
+    /// - Parameters:
+    ///   - entries: 全操作スペースの有効ウィンドウ項目一覧（MRU 順）
+    ///   - isCached: 指定 CGWindow ID がキャッシュ済みかを判定する副作用なしクロージャ
+    /// - Returns: 事前取得対象となる未キャッシュ CGWindow ID 配列（重複除外済み）
+    static func uncachedOnScreenPrefetchWindowIDs(
+        from entries: [WindowEntry],
+        isCached: (UInt32) -> Bool
+    ) -> [UInt32] {
+        var seen: Set<UInt32> = []
+        var result: [UInt32] = []
+        for entry in entries {
+            guard let windowID = entry.cgWindowID,
+                  entry.isOnScreen == true,
+                  !entry.isMinimized,
+                  !isCached(windowID),
+                  seen.insert(windowID).inserted else {
+                continue
+            }
+            result.append(windowID)
+        }
+        return result
     }
 
     /// 画面表示中かつ未キャッシュのウィンドウを最優先し、取得不要な別スペース/最小化キャッシュ済みを省いたキャプチャ対象 ID 順を返す
