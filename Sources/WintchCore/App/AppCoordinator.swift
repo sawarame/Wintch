@@ -461,10 +461,9 @@ public final class AppCoordinator {
         }
 
         switcherViewModel.onSearchResultsUpdated = { [weak self] in
-            // SwiftUI の状態更新に伴うレイアウト反映後にパネル上端固定リサイズを行う
-            Task { @MainActor [weak self] in
-                self?.switcherPanel?.updateAnchoredHeightIfNeeded()
-            }
+            // 検索結果や表示構成の変化に伴い、サイズ通知（onContentSizeChanged）による
+            // 単一リサイズ経路が新しい高さへ追従できるよう安定化サイクルをリセットする
+            self?.switcherPanel?.beginContentResizeCycle()
         }
 
         switcherViewModel.onPermissionDenied = { [weak self] in

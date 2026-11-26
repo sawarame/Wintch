@@ -75,6 +75,29 @@ public enum SwitcherGridLayout {
         return min(itemCount, clampedFitColumns)
     }
 
+    /// 項目数・列数・表示形式からグリッド全体の確定コンテンツ高さを算出する
+    /// 固定高さタイル／カードで構成されるグリッドで `ScrollView` の高さを確定させ、`.fixedSize` 由来の再計測ループを防ぐために使用する
+    /// - Parameters:
+    ///   - itemCount: 表示するウィンドウ項目の総数
+    ///   - columns: 1 行あたりの列数（1 以上）
+    ///   - style: 計算対象の表示形式（`.icon` または `.capture`）
+    /// - Returns: グリッド外側の余白と行間スペーシングを含むコンテンツ高さ（ポイント）
+    public static func contentHeight(
+        itemCount: Int,
+        columns: Int,
+        style: SwitcherDisplayStyle = .capture
+    ) -> CGFloat {
+        guard itemCount > 0 else {
+            return gridPadding * 2
+        }
+        let safeColumns = max(columns, 1)
+        let rows = (itemCount + safeColumns - 1) / safeColumns
+        let tileHeight = (style == .icon) ? iconTileHeight : cardHeight
+        return CGFloat(rows) * tileHeight
+            + CGFloat(max(rows - 1, 0)) * cardSpacing
+            + gridPadding * 2
+    }
+
     /// 現在の選択インデックスを指定された矢印方向へグリッド上で循環移動する
     /// - Parameters:
     ///   - current: 現在の選択インデックス

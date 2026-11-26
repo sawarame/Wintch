@@ -51,6 +51,18 @@ public struct SwitcherCaptureGridView: View {
         )
     }
 
+    /// 固定カード高さから確定算出されるスクロール領域の表示高さ
+    private var scrollHeight: CGFloat {
+        min(
+            SwitcherGridLayout.contentHeight(
+                itemCount: viewModel.displayedResults.count,
+                columns: columnsCount,
+                style: .capture
+            ),
+            maxScrollHeight
+        )
+    }
+
     /// LazyVGrid に渡す固定幅カラム配列
     private var gridColumns: [GridItem] {
         Array(
@@ -73,8 +85,12 @@ public struct SwitcherCaptureGridView: View {
         .frame(width: panelWidth)
         .background(
             GeometryReader { proxy in
+                let roundedSize = CGSize(
+                    width: proxy.size.width.rounded(),
+                    height: proxy.size.height.rounded()
+                )
                 Color.clear
-                    .onChange(of: proxy.size) { _, newSize in
+                    .onChange(of: roundedSize) { _, newSize in
                         onContentSizeChanged?(newSize)
                     }
             }
@@ -131,8 +147,7 @@ public struct SwitcherCaptureGridView: View {
                 }
                 .padding(SwitcherGridLayout.gridPadding)
             }
-            .frame(maxHeight: maxScrollHeight)
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(height: scrollHeight)
             .onAppear {
                 scrollToSelectedItem(using: proxy, animated: false)
             }
