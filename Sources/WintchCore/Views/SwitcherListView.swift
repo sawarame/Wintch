@@ -213,9 +213,10 @@ public struct SwitcherListView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 0) {
-                    // LazyVStack 外の y == 0 位置に常駐アンカーを置き、検索更新や先頭復帰時の見積もり高さズレを防ぐ
+                    // 上部余白（10pt）を兼ねる非ゼロ高さの常駐アンカーを LazyVStack 外の y == 0 に置き、
+                    // 長距離スクロールや検索更新時でも height == 0 無視や見積もり高さズレなしに最上部へ復帰させる
                     Color.clear
-                        .frame(height: 0)
+                        .frame(height: 10)
                         .id(Self.topScrollAnchorID)
 
                     LazyVStack(spacing: 4) {
@@ -289,7 +290,8 @@ public struct SwitcherListView: View {
                             }
                         }
                     }
-                    .padding(10)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
                 }
             }
             .frame(maxHeight: maxScrollHeight)

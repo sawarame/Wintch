@@ -161,7 +161,7 @@ struct SwitcherListViewTests {
             viewModel.moveSelection(.down)
             pumpMainRunLoop(for: 0.03)
         }
-        pumpMainRunLoop(for: 0.2)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y > 200 }
 
         #expect(viewModel.selectedIndex == 20)
         let scrolledDownY = scrollView.contentView.bounds.origin.y
@@ -173,14 +173,14 @@ struct SwitcherListViewTests {
             viewModel.moveSelection(.up)
             pumpMainRunLoop(for: 0.03)
         }
-        pumpMainRunLoop(for: 0.2)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y < 10 }
 
         #expect(viewModel.selectedIndex == 0)
         #expect(scrollView.contentView.bounds.origin.y < 10)
 
         // 先頭（0）から上方向キーで末尾（29）へ循環移動した場合も末尾付近まで大きくスクロール追従すること
         viewModel.moveSelection(.up)
-        pumpMainRunLoop(for: 0.25)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y > scrolledDownY }
 
         #expect(viewModel.selectedIndex == 29)
         let wrappedBottomY = scrollView.contentView.bounds.origin.y
@@ -188,7 +188,7 @@ struct SwitcherListViewTests {
 
         // 末尾（29）から下方向キーで先頭（0）へ循環移動した場合も先頭へ戻ること
         viewModel.moveSelection(.down)
-        pumpMainRunLoop(for: 0.25)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y < 10 }
 
         #expect(viewModel.selectedIndex == 0)
         #expect(scrollView.contentView.bounds.origin.y < 10)
@@ -270,7 +270,7 @@ struct SwitcherListViewTests {
             viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
             pumpMainRunLoop(for: 0.02)
         }
-        pumpMainRunLoop(for: 0.2)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y > 200 }
 
         #expect(viewModel.selectedIndex == 18)
         #expect(scrollView.contentView.bounds.origin.y > 200)
@@ -280,7 +280,7 @@ struct SwitcherListViewTests {
             viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: true))
             pumpMainRunLoop(for: 0.02)
         }
-        pumpMainRunLoop(for: 0.2)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y < 10 }
 
         #expect(viewModel.selectedIndex == 0)
         #expect(scrollView.contentView.bounds.origin.y < 10)
@@ -402,7 +402,7 @@ struct SwitcherListViewTests {
             scrollableVM.moveSelection(.down)
             pumpMainRunLoop(for: 0.03)
         }
-        pumpMainRunLoop(for: 0.2)
+        waitForRunLoopCondition { scrollView.contentView.bounds.origin.y > 200 }
 
         #expect(scrollableVM.selectedIndex == 15)
         #expect(scrollView.contentView.bounds.origin.y > 200)
