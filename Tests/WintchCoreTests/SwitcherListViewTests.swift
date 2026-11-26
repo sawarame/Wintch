@@ -625,7 +625,9 @@ struct SwitcherListViewTests {
             let (panel, hostingView) = try makeHostedPanel(for: viewModel)
             defer { panel.hidePanel(restorePreviousApp: false) }
 
-            let sizeBeforeClose = hostingView.fittingSize
+            let sizeBeforeClose = panel.measuredContentSize()
+            #expect(sizeBeforeClose.width > 0)
+            #expect(sizeBeforeClose.height > 0)
             #expect(findProgressIndicators(in: hostingView).isEmpty)
 
             // クローズ処理開始中: 対象行にスピナーが 1 件だけ描画され、パネル寸法は変化しない
@@ -634,9 +636,8 @@ struct SwitcherListViewTests {
             }
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(80))
-            hostingView.layoutSubtreeIfNeeded()
 
-            let sizeDuringClose = hostingView.fittingSize
+            let sizeDuringClose = panel.measuredContentSize()
             #expect(viewModel.isClosingWindow == true)
             #expect(findProgressIndicators(in: hostingView).count == 1)
             #expect(sizeDuringClose.width == sizeBeforeClose.width)
@@ -751,5 +752,198 @@ struct SwitcherListViewTests {
         }
         #expect(panel.appliedResizeCountForTesting == 1)
         #expect(abs(panel.frame.maxY - initialTopY) <= 1.0)
+    }
+
+    /// 通常スイッチャーおよび検索ランチャーの全表示形式（グルーピング ON/OFF 含む）で、
+    /// 初回表示時の `panel.frame.size` がコンテンツ実寸と一致し、初期サイズ（680×240pt）で見切れないことを検証する
+    @Test("全表示形式の初回表示でパネル枠がコンテンツ実寸と一致し見切れが発生しない")
+    @MainActor
+    func allDisplayStylesMatchMeasuredContentSizeWithoutClipping() throws {
+        struct Scenario {
+            let mode: SwitcherMode
+            let normalStyle: SwitcherDisplayStyle
+            let launcherStyle: LauncherDisplayStyle
+            let grouped: Bool
+            let placement: SwitcherPanelVerticalPlacement
+        }
+
+        let scenarios: [Scenario] = [
+            Scenario(mode: .normal, normalStyle: .list, launcherStyle: .list, grouped: false, placement: .upperAnchored),
+            Scenario(mode: .normal, normalStyle: .list, launcherStyle: .list, grouped: true, placement: .upperAnchored),
+            Scenario(mode: .normal, normalStyle: .icon, launcherStyle: .list, grouped: false, placement: .upperAnchored),
+            Scenario(mode: .normal, normalStyle: .icon, launcherStyle: .list, grouped: true, placement: .upperAnchored),
+            Scenario(mode: .normal, normalStyle: .capture, launcherStyle: .list, grouped: false, placement: .centered),
+            Scenario(mode: .normal, normalStyle: .capture, launcherStyle: .list, grouped: true, placement: .upperAnchored),
+            Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .list, grouped: false, placement: .upperAnchored),
+            Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .list, grouped: true, placement: .upperAnchored),
+            Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .capture, grouped: false, placement: .upperAnchored),
+            Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .capture, grouped: true, placement: .upperAnchored)
+        ]
+
+        // 大画面サイズを指定し、初期矩形（680×240pt）より明確に大きくなる条件で検証する
+        let largeScreenSize = CGSize(width: 1920, height: 1050)
+        let expectedListWidth = SwitcherPanelLayout.listPanelWidth(availableScreenWidth: largeScreenSize.width)
+        #expect(expectedListWidth == 800)
+
+        for scenario in scenarios {
+            let viewModel = makeViewModel(
+                windowCount: 15,
+                appCount: 5,
+                launcherDisplayStyle: scenario.launcherStyle,
+                screenRecordingStatus: .granted
+            )
+            viewModel.updateNormalDisplayStyle(scenario.normalStyle)
+            viewModel.updateNormalSwitcherGrouping(scenario.grouped)
+            viewModel.updateLauncherGrouping(scenario.grouped)
+            viewModel.updateAvailableScreenSize(largeScreenSize)
+
+            if scenario.mode == .launcher {
+                viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+            } else {
+                viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+            }
+
+            var panelRef: SwitcherPanel?
+            let contentView = SwitcherContentView(
+                viewModel: viewModel,
+                onContentSizeChanged: { newSize in
+                    panelRef?.updateAnchoredSize(to: newSize)
+                }
+            )
+            let panel = SwitcherPanel(contentView: contentView)
+            panelRef = panel
+            panel.alphaValue = 0
+            panel.ignoresMouseEvents = true
+            panel.show(mode: scenario.mode, activateApp: false, verticalPlacement: scenario.placement)
+            defer { panel.hidePanel(restorePreviousApp: false) }
+
+            let measured = panel.measuredContentSize()
+            let normalized = SwitcherPanelResizeStabilizer.normalizedSize(from: measured)
+
+            // 計測サイズおよび表示直後のパネル実寸が正のサイズで一致し、初期 680×240pt のままクリップされないこと
+            #expect(measured.width > 0)
+            #expect(measured.height > 0)
+            #expect(abs(panel.frame.width - normalized.width) <= 1.0)
+            #expect(abs(panel.frame.height - normalized.height) <= 1.0)
+
+            if viewModel.usesGridLayoutForCurrentMode {
+                let columns = SwitcherGridLayout.columnsCount(
+                    itemCount: viewModel.displayedResults.count,
+                    availableScreenWidth: largeScreenSize.width,
+                    style: scenario.normalStyle
+                )
+                let tileWidth = (scenario.normalStyle == .icon)
+                    ? SwitcherGridLayout.iconTileWidth
+                    : SwitcherGridLayout.cardWidth
+                let expectedGridWidth = CGFloat(columns) * tileWidth
+                    + CGFloat(max(columns - 1, 0)) * SwitcherGridLayout.cardSpacing
+                    + SwitcherGridLayout.gridPadding * 2
+                #expect(abs(panel.frame.width - expectedGridWidth.rounded()) <= 1.0)
+                #expect(panel.frame.height > 240)
+            } else {
+                #expect(abs(panel.frame.width - expectedListWidth) <= 1.0)
+                #expect(panel.frame.height > 400)
+            }
+
+            // 中央配置（グルーピング OFF のキャプチャ表示型）では初回から実サイズ基準の中央座標へ配置されること
+            if scenario.placement == .centered {
+                let mouseLocation = NSEvent.mouseLocation
+                if let targetScreen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) })
+                    ?? NSScreen.main
+                    ?? NSScreen.screens.first {
+                    let expectedOrigin = SwitcherPanelLayout.panelOrigin(
+                        panelSize: panel.frame.size,
+                        in: targetScreen.visibleFrame,
+                        placement: .centered
+                    )
+                    #expect(abs(panel.frame.origin.x - expectedOrigin.x.rounded()) <= 1.0)
+                    #expect(abs(panel.frame.origin.y - expectedOrigin.y.rounded()) <= 1.0)
+                }
+            }
+        }
+    }
+
+    /// 同一の SwitcherPanel を使い回して空状態・再表示・モード切替・表示形式切替を行った際も、
+    /// 前回サイズが残らず毎回コンテンツ実寸へ正しく追従することを検証する
+    @Test("空状態からの再表示やモード・表示形式切替でも前回サイズが残らず実寸へ追従する")
+    @MainActor
+    func reopenAndModeSwitchUpdatePanelSizeWithoutStaleClipping() throws {
+        let viewModel = makeViewModel(
+            windowCount: 15,
+            appCount: 10,
+            launcherDisplayStyle: .capture,
+            screenRecordingStatus: .granted
+        )
+        let screenSize = CGSize(width: 1920, height: 1050)
+        viewModel.updateAvailableScreenSize(screenSize)
+        viewModel.updateLauncherGrouping(true)
+        viewModel.updateNormalSwitcherGrouping(true)
+
+        var panelRef: SwitcherPanel?
+        let contentView = SwitcherContentView(
+            viewModel: viewModel,
+            onContentSizeChanged: { newSize in
+                panelRef?.updateAnchoredSize(to: newSize)
+            }
+        )
+        let panel = SwitcherPanel(contentView: contentView)
+        panelRef = panel
+        viewModel.onSearchResultsUpdated = {
+            panelRef?.beginContentResizeCycle()
+        }
+        panel.alphaValue = 0
+        panel.ignoresMouseEvents = true
+        defer { panel.hidePanel(restorePreviousApp: false) }
+
+        // 1. 検索ランチャーを開いて 0 件クエリでコンパクト高さへ縮小し、そのまま閉じる
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        panel.show(mode: .launcher, activateApp: false, verticalPlacement: .upperAnchored)
+        pumpMainRunLoop(for: 0.08)
+        let fullLauncherHeight = panel.frame.height
+        #expect(fullLauncherHeight > 400)
+
+        viewModel.updateSearchQuery("zzzzzz_no_match")
+        waitForRunLoopCondition { panel.frame.height < 200 }
+        let emptyLauncherHeight = panel.frame.height
+        #expect(emptyLauncherHeight < 200)
+
+        viewModel.cancel(reason: .cancelled)
+        panel.hidePanel(restorePreviousApp: false)
+        pumpMainRunLoop(for: 0.05)
+
+        // 2. 再度ランチャーを開くと、空状態のコンパクト高さが残らず全件表示の高さへ即座に復帰すること
+        viewModel.handleHotKeyEvent(.launcherTriggerPressed)
+        panel.show(mode: .launcher, activateApp: false, verticalPlacement: .upperAnchored)
+        let reopenedMeasured = SwitcherPanelResizeStabilizer.normalizedSize(from: panel.measuredContentSize())
+        #expect(abs(panel.frame.width - reopenedMeasured.width) <= 1.0)
+        #expect(abs(panel.frame.height - reopenedMeasured.height) <= 1.0)
+        #expect(panel.frame.height > 400)
+
+        viewModel.cancel(reason: .cancelled)
+        panel.hidePanel(restorePreviousApp: false)
+        pumpMainRunLoop(for: 0.05)
+
+        // 3. 通常スイッチャー（グルーピング OFF・アイコン型グリッド）へ切り替えて表示しても実寸へ追従すること
+        viewModel.updateNormalSwitcherGrouping(false)
+        viewModel.updateNormalDisplayStyle(.icon)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        panel.show(mode: .normal, activateApp: false, verticalPlacement: .upperAnchored)
+        let iconGridMeasured = SwitcherPanelResizeStabilizer.normalizedSize(from: panel.measuredContentSize())
+        #expect(abs(panel.frame.width - iconGridMeasured.width) <= 1.0)
+        #expect(abs(panel.frame.height - iconGridMeasured.height) <= 1.0)
+        #expect(panel.frame.width > 800)
+
+        viewModel.cancel(reason: .cancelled)
+        panel.hidePanel(restorePreviousApp: false)
+        pumpMainRunLoop(for: 0.05)
+
+        // 4. 通常スイッチャー（グルーピング OFF・キャプチャ表示型グリッド）へ切り替えても実寸へ追従すること
+        viewModel.updateNormalDisplayStyle(.capture)
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        panel.show(mode: .normal, activateApp: false, verticalPlacement: .centered)
+        let captureGridMeasured = SwitcherPanelResizeStabilizer.normalizedSize(from: panel.measuredContentSize())
+        #expect(abs(panel.frame.width - captureGridMeasured.width) <= 1.0)
+        #expect(abs(panel.frame.height - captureGridMeasured.height) <= 1.0)
+        #expect(panel.frame.height > 400)
     }
 }

@@ -308,7 +308,9 @@ struct SwitcherCaptureGridViewTests {
             }
             hostingView.layoutSubtreeIfNeeded()
 
-            let sizeBeforeClose = hostingView.fittingSize
+            let sizeBeforeClose = panel.measuredContentSize()
+            #expect(sizeBeforeClose.width > 0)
+            #expect(sizeBeforeClose.height > 0)
             let indicatorsBefore = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
             #expect(indicatorsBefore.isEmpty)
 
@@ -317,9 +319,8 @@ struct SwitcherCaptureGridViewTests {
             }
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(80))
-            hostingView.layoutSubtreeIfNeeded()
 
-            let sizeDuringClose = hostingView.fittingSize
+            let sizeDuringClose = panel.measuredContentSize()
             let indicatorsDuring = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
             #expect(viewModel.isClosingWindow(id: "g2") == true)
             #expect(indicatorsDuring.count == 1)
