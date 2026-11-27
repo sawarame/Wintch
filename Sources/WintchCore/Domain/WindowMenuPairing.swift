@@ -201,7 +201,7 @@ public enum WindowMenuCandidatePairing {
                     continue
                 }
                 if let fuzzyIdx = unmatchedMenuItems.firstIndex(where: {
-                    titlesMatch(cgName, $0.title)
+                    titlesMatch(cgName, $0.title, applicationName: candidate.applicationName)
                 }) {
                     let matchedItem = unmatchedMenuItems.remove(at: fuzzyIdx)
                     axCandidates[idx] = replacingTitle(of: candidate, with: matchedItem.title)
@@ -211,7 +211,9 @@ public enum WindowMenuCandidatePairing {
                 continue
             }
             if let fallbackIdx = unmatchedMenuItems.firstIndex(where: { item in
-                !pairableCGNames.contains(where: { titlesMatch($0, item.title) })
+                !pairableCGNames.contains(where: {
+                    titlesMatch($0, item.title, applicationName: candidate.applicationName)
+                })
             }) ?? unmatchedMenuItems.indices.first {
                 let matchedItem = unmatchedMenuItems.remove(at: fallbackIdx)
                 axCandidates[idx] = replacingTitle(of: candidate, with: matchedItem.title)
@@ -235,36 +237,119 @@ public enum WindowMenuCandidatePairing {
         // （極小 1x1 やツールバー帯・無名空き殻窓に貴重なメニュータイトルが奪われるのを防ぐ）
         let pairableCGIndices = cgCandidates.indices.filter { WindowFilter.isValid(cgCandidates[$0]) }
         let sortedPairableIndices = pairableCGIndices.sorted { lhsIdx, rhsIdx in
-            cgCandidatePriority(cgCandidates[lhsIdx]) < cgCandidatePriority(cgCandidates[rhsIdx])
+            cgCandidatePriority(cgCandidates[lhsIdx], unmatchedMenuItems: unmatchedMenuItems)
+                < cgCandidatePriority(cgCandidates[rhsIdx], unmatchedMenuItems: unmatchedMenuItems)
         }
 
         let pairCount = min(unmatchedMenuItems.count, sortedPairableIndices.count, remainingMenuCapacity)
         let selectedCGs = sortedPairableIndices.prefix(pairCount).map { cgCandidates[$0] }
-        let selectedMenus = Array(unmatchedMenuItems.prefix(pairCount))
-        let pairedCGCandidates = pairCGsWithMenuItems(selectedCGs, menuItems: selectedMenus)
+        // unmatchedMenuItems 全体を渡して cgWindowName 一致を優先解決し、先頭切り捨てによるタイトル取り違えを防ぐ
+        let pairedCGCandidates = pairCGsWithMenuItems(selectedCGs, menuItems: unmatchedMenuItems)
 
         // Window メニューで全実ウィンドウを把握できるアプリにおいて、
         // ペア数を超過して残った cg-* 候補は裏方の不可視/ゴーストウィンドウであるため除外する
         return axCandidates + pairedCGCandidates
     }
 
-    /// ウィンドウタイトル同士が一致するか判定する（Chrome 等による中央省略「…」の補助照合を含む）
+    /// ウィンドウタイトル同士が一致するか判定する（中央省略「…」およびアプリ名／プロファイル名サフィックス差分の補助照合を含む）
     /// - Parameters:
     ///   - fullOrCandidate: AX ウィンドウ等から得たタイトル
     ///   - menuTitle: Window メニューから得たタイトル（または比較先タイトル）
+    ///   - applicationName: 所有アプリケーションの表示名（Chrome 等の「 - Google Chrome - Profile」サフィックス除去に使用。省略時は nil）
     /// - Returns: 同一ウィンドウのタイトルとみなせる場合は true
-    public static func titlesMatch(_ fullOrCandidate: String, _ menuTitle: String) -> Bool {
+    public static func titlesMatch(
+        _ fullOrCandidate: String,
+        _ menuTitle: String,
+        applicationName: String? = nil
+    ) -> Bool {
         let a = fullOrCandidate.trimmingCharacters(in: .whitespacesAndNewlines)
         let b = menuTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !a.isEmpty, !b.isEmpty else { return false }
-        if a == b { return true }
+        if matchesExactOrEllipsis(a, b) {
+            return true
+        }
 
-        // 片方が単一の中央省略記号「…」を含む場合、前後両端の一致で照合する
-        if matchesEllipsisPattern(candidate: a, patternWithEllipsis: b)
-            || matchesEllipsisPattern(candidate: b, patternWithEllipsis: a) {
+        // アプリ名サフィックス（例: Chrome の " - Google Chrome - Profile"）が片方または双方に付く場合をベースタイトルで照合する
+        let strippedA = strippingApplicationSuffix(from: a, applicationName: applicationName)
+        let strippedB = strippingApplicationSuffix(from: b, applicationName: applicationName)
+        if let strippedA, matchesExactOrEllipsis(strippedA, b) {
+            return true
+        }
+        if let strippedB, matchesExactOrEllipsis(a, strippedB) {
+            return true
+        }
+        if let strippedA, let strippedB, matchesExactOrEllipsis(strippedA, strippedB) {
             return true
         }
         return false
+    }
+
+    /// ウィンドウタイトル末尾に付加されたアプリ名／プロファイル名サフィックスを安全に取り除いたベースタイトルを返す
+    /// - Parameters:
+    ///   - title: 対象のウィンドウタイトル
+    ///   - applicationName: 所有アプリケーションの表示名（例: "Google Chrome"）
+    /// - Returns: サフィックスを除去できた場合は非空のベースタイトル、該当しない場合は nil
+    public static func strippingApplicationSuffix(
+        from title: String,
+        applicationName: String?
+    ) -> String? {
+        guard let appName = trimmedNonEmpty(applicationName) else {
+            return nil
+        }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            return nil
+        }
+
+        // 末尾に最も近い「区切り文字 + アプリ名」を探索し、後続が終端・プロファイル名・括弧修飾の場合のみサフィックスとみなす
+        let separators = [" - ", " — ", " – "]
+        var bestLowerBound: String.Index?
+
+        for separator in separators {
+            let token = separator + appName
+            guard let range = trimmedTitle.range(of: token, options: .backwards) else {
+                continue
+            }
+            let remainder = trimmedTitle[range.upperBound...]
+            guard isAllowedApplicationSuffixRemainder(remainder) else {
+                continue
+            }
+            let prefix = trimmedTitle[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prefix.isEmpty else {
+                continue
+            }
+            if bestLowerBound == nil || range.lowerBound > bestLowerBound! {
+                bestLowerBound = range.lowerBound
+            }
+        }
+
+        guard let lowerBound = bestLowerBound else {
+            return nil
+        }
+        let baseTitle = trimmedTitle[..<lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return baseTitle.isEmpty ? nil : baseTitle
+    }
+
+    /// 2つのトリム済みタイトルが完全一致または省略パターン一致するか判定する
+    /// - Parameters:
+    ///   - lhs: 比較元のタイトル
+    ///   - rhs: 比較先のタイトル
+    /// - Returns: 一致する場合は true
+    private static func matchesExactOrEllipsis(_ lhs: String, _ rhs: String) -> Bool {
+        if lhs == rhs { return true }
+        return matchesEllipsisPattern(candidate: lhs, patternWithEllipsis: rhs)
+            || matchesEllipsisPattern(candidate: rhs, patternWithEllipsis: lhs)
+    }
+
+    /// アプリ名サフィックスの後続文字列が、プロファイル名やシークレット表記等の正当な修飾形式かを判定する
+    /// - Parameter remainder: アプリ名より後ろに残った部分文字列
+    /// - Returns: サフィックスの続きとして許容できる形式であれば true
+    private static func isAllowedApplicationSuffixRemainder(_ remainder: Substring) -> Bool {
+        if remainder.isEmpty {
+            return true
+        }
+        let allowedPrefixes = [" - ", " — ", " – ", " (", "（", "("]
+        return allowedPrefixes.contains { remainder.hasPrefix($0) }
     }
 
     /// AX 候補群が既にカバーしているタイトル分をメニュー項目列から差し引き、未捕捉のメニュー項目のみを返す
@@ -276,29 +361,54 @@ public enum WindowMenuCandidatePairing {
         menuItems: [WindowMenuItemSnapshot],
         axCandidates: [RawWindowCandidate]
     ) -> [WindowMenuItemSnapshot] {
-        var remainingAXTitles = axCandidates.compactMap { candidate -> String? in
-            guard let title = candidate.title?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !title.isEmpty else {
-                return nil
-            }
-            return title
+        // 1 つの AX 候補が消費するメニュー項目は最大 1 件とし、title と cgWindowName の両方を照合に活用する
+        struct AXCoverageSlot {
+            let title: String?
+            let cgWindowName: String?
+            let applicationName: String
         }
 
-        // まず完全一致を優先消費し、残りで省略一致を消費する
+        var remainingSlots = axCandidates.compactMap { candidate -> AXCoverageSlot? in
+            let title = trimmedNonEmpty(candidate.title)
+            let cgName = trimmedNonEmpty(candidate.cgWindowName)
+            guard title != nil || cgName != nil else {
+                return nil
+            }
+            return AXCoverageSlot(
+                title: title,
+                cgWindowName: cgName,
+                applicationName: candidate.applicationName
+            )
+        }
+
+        // 1. まず title または cgWindowName との完全一致を優先消費する
         var consumedMenuIndices = Set<Int>()
         for (menuPos, item) in menuItems.enumerated() {
             let trimmedMenuTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let exactIdx = remainingAXTitles.firstIndex(of: trimmedMenuTitle) {
-                remainingAXTitles.remove(at: exactIdx)
+            if let exactIdx = remainingSlots.firstIndex(where: { slot in
+                slot.title == trimmedMenuTitle || slot.cgWindowName == trimmedMenuTitle
+            }) {
+                remainingSlots.remove(at: exactIdx)
                 consumedMenuIndices.insert(menuPos)
             }
         }
 
+        // 2. 残りで省略一致およびアプリ名／プロファイル名サフィックス除去一致を消費する
         var unmatched: [WindowMenuItemSnapshot] = []
         for (menuPos, item) in menuItems.enumerated() {
             guard !consumedMenuIndices.contains(menuPos) else { continue }
-            if let fuzzyIdx = remainingAXTitles.firstIndex(where: { titlesMatch($0, item.title) }) {
-                remainingAXTitles.remove(at: fuzzyIdx)
+            if let fuzzyIdx = remainingSlots.firstIndex(where: { slot in
+                if let title = slot.title,
+                   titlesMatch(title, item.title, applicationName: slot.applicationName) {
+                    return true
+                }
+                if let cgName = slot.cgWindowName,
+                   titlesMatch(cgName, item.title, applicationName: slot.applicationName) {
+                    return true
+                }
+                return false
+            }) {
+                remainingSlots.remove(at: fuzzyIdx)
                 continue
             }
             unmatched.append(item)
@@ -307,20 +417,35 @@ public enum WindowMenuCandidatePairing {
     }
 
     /// CGWindow 候補同士のペアリング優先順位タプルを構築する（小さいほど優先）
-    /// - Parameter candidate: 比較対象の CGWindow 補完候補
+    /// - Parameters:
+    ///   - candidate: 比較対象の CGWindow 補完候補
+    ///   - unmatchedMenuItems: 未消費のウィンドウメニュー項目一覧
     /// - Returns: 比較可能な優先順位タプル
-    private static func cgCandidatePriority(_ candidate: RawWindowCandidate) -> (Int, Int, Int, Int, Int) {
+    private static func cgCandidatePriority(
+        _ candidate: RawWindowCandidate,
+        unmatchedMenuItems: [WindowMenuItemSnapshot]
+    ) -> (Int, Int, Int, Int, Int, Int) {
         let onScreenPriority = (candidate.isOnScreen == true) ? 0 : 1
         let layerPriority = (candidate.layer == 0) ? 0 : 1
-        let hasCGNamePriority = (trimmedNonEmpty(candidate.cgWindowName) != nil) ? 0 : 1
+        let cgName = trimmedNonEmpty(candidate.cgWindowName)
+        let matchesMenuPriority: Int
+        if let cgName,
+           unmatchedMenuItems.contains(where: {
+               titlesMatch(cgName, $0.title, applicationName: candidate.applicationName)
+           }) {
+            matchesMenuPriority = 0
+        } else {
+            matchesMenuPriority = 1
+        }
+        let hasCGNamePriority = (cgName != nil) ? 0 : 1
         let auxiliaryShapePenalty = isAuxiliaryPopupShape(candidate) ? 1 : 0
-        return (onScreenPriority, layerPriority, hasCGNamePriority, auxiliaryShapePenalty, candidate.zOrderIndex)
+        return (onScreenPriority, layerPriority, matchesMenuPriority, hasCGNamePriority, auxiliaryShapePenalty, candidate.zOrderIndex)
     }
 
     /// 選出済み CGWindow 候補群とメニュー項目群を、cgWindowName 一致を優先して 1 対 1 でペアリングする
     /// - Parameters:
     ///   - cgCandidates: ペアリング対象に選出された CGWindow 候補配列
-    ///   - menuItems: 割り当て対象のメニュー項目配列（同件数）
+    ///   - menuItems: 割り当て候補の未消費メニュー項目配列（cgCandidates.count 以上）
     /// - Returns: タイトル割り当て済みの候補配列
     private static func pairCGsWithMenuItems(
         _ cgCandidates: [RawWindowCandidate],
@@ -340,11 +465,12 @@ public enum WindowMenuCandidatePairing {
             }
         }
 
-        // 2. cgWindowName とメニュータイトルの省略一致を次に結び付ける
+        // 2. cgWindowName とメニュータイトルの省略一致・サフィックス除去一致を次に結び付ける
         for cgIdx in cgCandidates.indices where assignedTitles[cgIdx] == nil {
             guard let cgName = trimmedNonEmpty(cgCandidates[cgIdx].cgWindowName) else { continue }
+            let appName = cgCandidates[cgIdx].applicationName
             if let pos = remainingMenuIndices.firstIndex(where: {
-                titlesMatch(cgName, menuItems[$0].title)
+                titlesMatch(cgName, menuItems[$0].title, applicationName: appName)
             }) {
                 let menuIdx = remainingMenuIndices.remove(at: pos)
                 assignedTitles[cgIdx] = menuItems[menuIdx].title
@@ -393,16 +519,18 @@ public enum WindowMenuCandidatePairing {
     ///   - title: 照合対象のウィンドウタイトル
     ///   - items: 抽出済みのウィンドウメニュー項目一覧
     ///   - preferUnchecked: チェックマークが付いていない項目を優先するか（別スペース遷移時は true）
+    ///   - applicationName: 所有アプリケーションの表示名（アプリ名／プロファイル名サフィックス差分の補助照合用。省略時は nil）
     /// - Returns: 一致したメニュー項目のインデックス（見つからない場合は nil）
     public static func matchingMenuItemIndex(
         for title: String,
         in items: [WindowMenuItemSnapshot],
-        preferUnchecked: Bool
+        preferUnchecked: Bool,
+        applicationName: String? = nil
     ) -> Int? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // 別スペースへの遷移時は未チェック項目群（完全一致 → 省略一致）を最優先で照合する
+        // 別スペースへの遷移時は未チェック項目群（完全一致 → 省略／サフィックス一致）を最優先で照合する
         if preferUnchecked {
             if let uncheckedExact = items.indices.first(where: {
                 !items[$0].isChecked
@@ -411,7 +539,8 @@ public enum WindowMenuCandidatePairing {
                 return uncheckedExact
             }
             if let uncheckedFuzzy = items.indices.first(where: {
-                !items[$0].isChecked && titlesMatch(items[$0].title, trimmed)
+                !items[$0].isChecked
+                    && titlesMatch(items[$0].title, trimmed, applicationName: applicationName)
             }) {
                 return uncheckedFuzzy
             }
@@ -423,7 +552,7 @@ public enum WindowMenuCandidatePairing {
             return exact
         }
         return items.indices.first(where: {
-            titlesMatch(items[$0].title, trimmed)
+            titlesMatch(items[$0].title, trimmed, applicationName: applicationName)
         })
     }
 

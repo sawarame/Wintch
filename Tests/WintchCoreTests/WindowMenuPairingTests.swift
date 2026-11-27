@@ -660,6 +660,250 @@ struct WindowMenuPairingTests {
         #expect(result[0].title == "Design File – Figma")
     }
 
+    /// Chrome 等の AX タイトル末尾に「 - Google Chrome - <プロファイル名>」が付く場合でも、
+    /// ウィンドウメニューの既捕捉タイトルを正しく消費し、別スペースの 2 枚目ウィンドウへ 1 枚目のタイトルが重複割り当てされないことを検証する
+    @Test("Chromeのプロファイル名サフィックス付きAXタイトルを正しく消費し別スペース窓の重複表示を防ぐ")
+    func consumesChromeProfileSuffixedAXTitleWithoutDuplicatingIntoSecondWindow() {
+        let menuItems = [
+            WindowMenuItemSnapshot(
+                title: "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3",
+                identifier: "makeKeyAndOrderFront:",
+                mark: "✓",
+                index: 27
+            ),
+            WindowMenuItemSnapshot(
+                title: "拡張機能",
+                identifier: "makeKeyAndOrderFront:",
+                mark: nil,
+                index: 28
+            )
+        ]
+
+        // 1. 画面収録権限なし（cgWindowName == nil）でも applicationName サフィックス除去で既捕捉項目を消費し、2 枚目を「拡張機能」に割り当てる
+        let withoutCGNameCandidates = [
+            RawWindowCandidate(
+                id: "ax-11516-1",
+                cgWindowID: 785,
+                pid: 11516,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3 - Google Chrome - Yasushi",
+                cgWindowName: nil,
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                zOrderIndex: 16
+            ),
+            RawWindowCandidate(
+                id: "cg-2107",
+                cgWindowID: 2107,
+                pid: 11516,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                cgWindowName: nil,
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axRole: nil,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 42
+            )
+        ]
+        let withoutCGNameResult = WindowMenuCandidatePairing.applyMenuTitles(
+            to: withoutCGNameCandidates,
+            menuItems: menuItems
+        )
+        #expect(withoutCGNameResult.count == 2)
+        #expect(withoutCGNameResult[0].id == "ax-11516-1")
+        #expect(withoutCGNameResult[1].id == "cg-2107")
+        #expect(withoutCGNameResult[1].title == "拡張機能")
+
+        // 2. 画面収録権限あり（cgWindowName あり）では AX 側 cgWindowName による完全一致消費と CG 側一致が機能する
+        let withCGNameCandidates = [
+            RawWindowCandidate(
+                id: "ax-11516-1",
+                cgWindowID: 785,
+                pid: 11516,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3 - Google Chrome - Yasushi",
+                cgWindowName: "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                zOrderIndex: 16
+            ),
+            RawWindowCandidate(
+                id: "cg-2107",
+                cgWindowID: 2107,
+                pid: 11516,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                cgWindowName: "拡張機能",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axRole: nil,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 42
+            )
+        ]
+        let withCGNameResult = WindowMenuCandidatePairing.applyMenuTitles(
+            to: withCGNameCandidates,
+            menuItems: menuItems
+        )
+        #expect(withCGNameResult.count == 2)
+        #expect(withCGNameResult[1].id == "cg-2107")
+        #expect(withCGNameResult[1].title == "拡張機能")
+    }
+
+    /// AX キャッシュのタイトルが古く未消費メニュー項目が 2 件残った場合でも、
+    /// 先頭切り捨てを行わず cgWindowName と一致するメニュー項目を正しくペアリングすることを検証する
+    @Test("未消費メニューが枠数を超えてもcgWindowName一致項目を先頭切り捨てせず正しくペアリングする")
+    func pairsCGWindowNameAgainstFullUnmatchedMenuListWithoutPrematureTruncation() {
+        let candidates = [
+            RawWindowCandidate(
+                id: "ax-11516-stale",
+                cgWindowID: 785,
+                pid: 11516,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: "古いキャッシュタイトル - Google Chrome - Yasushi",
+                cgWindowName: nil,
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axRole: "AXWindow",
+                axSubrole: "AXStandardWindow",
+                hasAXInfo: true,
+                isOnScreen: false,
+                zOrderIndex: 16
+            ),
+            RawWindowCandidate(
+                id: "cg-2107",
+                cgWindowID: 2107,
+                pid: 11516,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                cgWindowName: "拡張機能",
+                layer: 0,
+                bounds: WindowBounds(x: 0, y: 88, width: 1920, height: 992),
+                axRole: nil,
+                axSubrole: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                zOrderIndex: 42
+            )
+        ]
+        let menuItems = [
+            WindowMenuItemSnapshot(title: "遷移後の新タイトル", identifier: "makeKeyAndOrderFront:", mark: "✓", index: 1),
+            WindowMenuItemSnapshot(title: "拡張機能", identifier: "makeKeyAndOrderFront:", mark: nil, index: 2)
+        ]
+
+        let result = WindowMenuCandidatePairing.applyMenuTitles(to: candidates, menuItems: menuItems)
+        #expect(result.count == 2)
+        #expect(result[1].id == "cg-2107")
+        #expect(result[1].title == "拡張機能")
+    }
+
+    /// titlesMatch および strippingApplicationSuffix が Chrome 等のアプリ名・プロファイル名・括弧修飾サフィックスと
+    /// 中央省略の組み合わせを正しく照合しつつ、無関係なハイフン付きタイトルを誤一致させないことを検証する
+    @Test("titlesMatch がアプリ名・プロファイル名サフィックス差分と省略を安全に照合する")
+    func titlesMatchHandlesApplicationAndProfileSuffixesSafely() {
+        // 1. プロファイル名付き・単体アプリ名・シークレット括弧修飾・本文中にアプリ名を含むケース
+        #expect(
+            WindowMenuCandidatePairing.titlesMatch(
+                "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3 - Google Chrome - Yasushi",
+                "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3",
+                applicationName: "Google Chrome"
+            )
+        )
+        #expect(
+            WindowMenuCandidatePairing.titlesMatch(
+                "拡張機能 - Google Chrome",
+                "拡張機能",
+                applicationName: "Google Chrome"
+            )
+        )
+        #expect(
+            WindowMenuCandidatePairing.titlesMatch(
+                "シークレットタブ - Google Chrome (Incognito)",
+                "シークレットタブ",
+                applicationName: "Google Chrome"
+            )
+        )
+        #expect(
+            WindowMenuCandidatePairing.titlesMatch(
+                "Google Chrome - ダウンロード - Google Chrome - Yasushi",
+                "Google Chrome - ダウンロード",
+                applicationName: "Google Chrome"
+            )
+        )
+        // 2. サフィックス + 中央省略の組み合わせ
+        #expect(
+            WindowMenuCandidatePairing.titlesMatch(
+                "非常に長いページタイトルの前半部分と後半の詳細画面 - Google Chrome - Yasushi",
+                "非常に長いページタイ…後半の詳細画面",
+                applicationName: "Google Chrome"
+            )
+        )
+        // 3. 無関係なサフィックスや本文途中のアプリ名は誤一致させない
+        #expect(
+            !WindowMenuCandidatePairing.titlesMatch(
+                "GitHub - Issues",
+                "GitHub",
+                applicationName: "Google Chrome"
+            )
+        )
+        #expect(
+            !WindowMenuCandidatePairing.titlesMatch(
+                "Compare A - Google Chrome vs Safari",
+                "Compare A",
+                applicationName: "Google Chrome"
+            )
+        )
+    }
+
+    /// 別スペース遷移後のフォローアップ照合（matchWindowIndex）で、メニュー由来のベースタイトルが
+    /// プロファイル名サフィックス付き AX タイトルと一致し、不要なメニュー展開フォールバックを防止できることを検証する
+    @Test("matchWindowIndex はアプリ名・プロファイル名サフィックス付きAXタイトルとメニュータイトルを一致照合する")
+    func matchWindowIndexMatchesProfileSuffixedAXTitle() {
+        let items: [(id: String, title: String?)] = [
+            (id: "ax-11516-1", title: "chore: bump version to 0.1.3 · sawarame/PrefSnap@17c27c3 - Google Chrome - Yasushi"),
+            (id: "ax-11516-2", title: "拡張機能 - Google Chrome - Yasushi")
+        ]
+
+        let matched = WindowService.matchWindowIndex(
+            preferredID: "cg-2107",
+            title: "拡張機能",
+            applicationName: "Google Chrome",
+            items: items,
+            id: { $0.id },
+            windowTitle: { $0.title }
+        )
+        #expect(matched == 1)
+
+        let mismatched = WindowService.matchWindowIndex(
+            preferredID: "cg-9999",
+            title: "存在しないタブ",
+            applicationName: "Google Chrome",
+            items: items,
+            id: { $0.id },
+            windowTitle: { $0.title }
+        )
+        #expect(mismatched == nil)
+    }
+
     /// テスト用 RawWindowCandidate 生成ヘルパー
     /// - Parameters:
     ///   - id: ウィンドウ識別子

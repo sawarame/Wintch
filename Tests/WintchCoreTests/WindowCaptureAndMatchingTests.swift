@@ -406,6 +406,19 @@ struct WindowCaptureAndMatchingTests {
             excluding: []
         )
         #expect(matched?.info.windowID == 111)
+
+        // プロファイル名サフィックス付き AX タイトルでも対応する CGWindow 名と正しく一致照合すること
+        let matchedWithProfileSuffix = WindowService.selectBestCGWindowMatch(
+            axBounds: rect,
+            axTitle: "tipsを表示する · Issue #17 · sawarame/Nickmark - Google Chrome - Yasushi",
+            applicationName: "Google Chrome",
+            isMinimized: false,
+            preferOnscreen: false,
+            preferredCGWindowID: nil,
+            in: entries,
+            excluding: []
+        )
+        #expect(matchedWithProfileSuffix?.info.windowID == 111)
     }
 
     /// pruneCache が閉じ済みウィンドウのキャッシュのみ破棄して生存ウィンドウの LRU 順を維持し、
