@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import OSLog
 
 /// スイッチャーパネルの現在の表示モード
 public enum SwitcherMode: Equatable, Sendable {
@@ -25,6 +26,9 @@ public enum SwitcherDismissReason: Equatable, Sendable {
 @MainActor
 @Observable
 public final class SwitcherViewModel {
+    /// バックグラウンドキャプチャ・鮮度更新・キャッシュ整理の診断ログ出力用ロガー
+    private static let captureLogger = Logger(subsystem: "dev.wintch.Wintch", category: "SwitcherCapture")
+
     /// 現在の表示モード
     public private(set) var mode: SwitcherMode = .inactive
 
@@ -230,6 +234,12 @@ public final class SwitcherViewModel {
     private let postTimeoutPollInterval: Duration
     /// バックグラウンド事前キャプチャの連続イベント集約用デバウンス待機時間（既定値は 300ms）
     private let capturePrefetchDebounceDuration: Duration
+    /// バックグラウンド更新で既キャッシュウィンドウを再取得する最小間隔（既定値は 5 秒）
+    private let captureRefreshCooldown: TimeInterval
+    /// 定期バックグラウンド更新ループの実行間隔（既定値は 15 秒）
+    private let periodicCaptureRefreshInterval: Duration
+    /// 鮮度判定に使用する現在時刻プロバイダ（テスト用に注入可能）
+    private let nowProvider: @Sendable () -> Date
     /// インストール済みアプリ一覧のバックグラウンド更新タスク
     private var installedAppsRefreshTask: Task<Void, Never>?
     /// ウィンドウサムネイルのバックグラウンド取得タスク（パネル表示契機・閉鎖後もキャッシュ格納まで継続）
@@ -238,13 +248,29 @@ public final class SwitcherViewModel {
     private var captureRefreshGeneration: Int = 0
     /// パネル由来キャプチャタスクが現在実行中かどうか
     private var isCaptureRefreshInFlight: Bool = false
-    /// イベント駆動のバックグラウンド事前キャプチャタスク
+    /// イベント駆動・起動時一括のバックグラウンド事前キャプチャタスク
     private var capturePrefetchTask: Task<Void, Never>?
     /// バックグラウンド事前キャプチャタスクの世代カウンタ
     private var capturePrefetchGeneration: Int = 0
-    /// パネル由来キャプチャの継続完了後に繰り越し実行する事前取得契機
-    private var pendingPrefetchReasonAfterRefresh: WindowCapturePrefetchReason?
-    /// ウィンドウ監視イベントに基づくバックグラウンド事前キャプチャが有効化されているかどうか
+    /// バックグラウンド事前キャプチャが現在 ScreenCaptureKit 取得処理を実行中かどうか
+    private var isCapturePrefetchInFlight: Bool = false
+    /// デバウンス待機中に保持している事前取得契機（全ウィンドウ一括取得の優先維持用）
+    private var pendingPrefetchReasonInDebounce: WindowCapturePrefetchReason?
+    /// パネル由来継続取得や他のバックグラウンド取得の完了後に繰り越し実行する事前取得契機
+    private var pendingPrefetchReasonAfterInFlight: WindowCapturePrefetchReason?
+    /// 15 秒間隔の定期バックグラウンド更新ループタスク
+    private var periodicCaptureRefreshTask: Task<Void, Never>?
+    /// 定期バックグラウンド更新ループの世代カウンタ
+    private var periodicCaptureRefreshGeneration: Int = 0
+    /// 定期バックグラウンド更新の 1 回分のキャプチャが現在実行中かどうか
+    private var isPeriodicCaptureInFlight: Bool = false
+    /// スリープ／ディスプレイオフ／セッション非アクティブ化により一時停止している要因集合
+    private var activeSystemCapturePauseReasons: Set<SystemCapturePauseReason> = []
+    /// 省電力・セッション状態によりバックグラウンド更新を一時停止中かどうか
+    private var isSystemCapturePaused: Bool {
+        !activeSystemCapturePauseReasons.isEmpty
+    }
+    /// ウィンドウ監視イベントに基づくバックグラウンド事前キャプチャおよび定期更新が有効化されているかどうか
     private var isBackgroundCapturePrefetchEnabled: Bool
     /// 終了要求送出済みウィンドウ ID ごとの非同期完了監視タスク
     private var closeMonitorTasksByWindowID: [String: Task<Void, Never>] = [:]
@@ -267,6 +293,9 @@ public final class SwitcherViewModel {
     ///   - closePollInterval: スピナー表示中のフォールバック生存確認間隔（既定値は 80ms）
     ///   - postTimeoutPollInterval: スピナー上限到達後の低頻度フォールバック確認間隔（既定値は 500ms）
     ///   - capturePrefetchDebounceDuration: バックグラウンド事前キャプチャのデバウンス待機時間（既定値は 300ms）
+    ///   - captureRefreshCooldown: バックグラウンド更新で既キャッシュを再取得する最小間隔（既定値は 5 秒）
+    ///   - periodicCaptureRefreshInterval: 定期バックグラウンド更新の間隔（既定値は 15 秒）
+    ///   - nowProvider: 鮮度判定に用いる現在時刻プロバイダ（既定値は `Date.init`）
     ///   - isBackgroundCapturePrefetchEnabled: 初期化時点でバックグラウンド事前キャプチャを有効化するか（既定値は false）
     public init(
         windowService: any WindowServicing,
@@ -285,6 +314,9 @@ public final class SwitcherViewModel {
         closePollInterval: Duration = .milliseconds(80),
         postTimeoutPollInterval: Duration = .milliseconds(500),
         capturePrefetchDebounceDuration: Duration = .milliseconds(300),
+        captureRefreshCooldown: TimeInterval = WindowCaptureRefreshPolicy.defaultRefreshCooldown,
+        periodicCaptureRefreshInterval: Duration = WindowCaptureRefreshPolicy.defaultPeriodicRefreshInterval,
+        nowProvider: @escaping @Sendable () -> Date = Date.init,
         isBackgroundCapturePrefetchEnabled: Bool = false
     ) {
         self.windowService = windowService
@@ -303,15 +335,26 @@ public final class SwitcherViewModel {
         self.closePollInterval = closePollInterval
         self.postTimeoutPollInterval = postTimeoutPollInterval
         self.capturePrefetchDebounceDuration = capturePrefetchDebounceDuration
+        self.captureRefreshCooldown = max(captureRefreshCooldown, 0)
+        self.periodicCaptureRefreshInterval = periodicCaptureRefreshInterval
+        self.nowProvider = nowProvider
         self.isBackgroundCapturePrefetchEnabled = isBackgroundCapturePrefetchEnabled
 
         // パネル表示中に OS 通知で検知したウィンドウ破棄・アプリ終了をリアルタイムに一覧へ反映する
         self.windowService.onWindowLifecycleEvent = { [weak self] event in
             self?.handleWindowLifecycleEvent(event)
         }
-        // スペース切替・起動スキャン・ウィンドウ作成等の完了時に未キャッシュサムネイルを静かに事前取得する
+        // スペース切替・起動スキャン・フォーカス/タイトル変更等の完了時にバックグラウンド取得・更新を行う
         self.windowService.onCapturePrefetchNeeded = { [weak self] reason in
             self?.scheduleBackgroundCapturePrefetch(reason: reason)
+        }
+        // スリープ／ディスプレイオフ／セッション非アクティブ化と復帰に応じて定期バックグラウンド更新を一時停止・再開する
+        self.windowService.onSystemCaptureAvailabilityEvent = { [weak self] event in
+            self?.handleSystemCaptureAvailabilityEvent(event)
+        }
+
+        if isBackgroundCapturePrefetchEnabled && usesCaptureDisplayStyle {
+            syncPeriodicCaptureRefreshLoop()
         }
     }
 
@@ -344,15 +387,18 @@ public final class SwitcherViewModel {
         scheduleInstalledAppsRefresh()
     }
 
-    /// ウィンドウ監視イベントに応じたバックグラウンド事前キャプチャを有効化する
+    /// ウィンドウ監視イベントに応じたバックグラウンド事前キャプチャおよび定期更新を有効化する
     public func enableBackgroundCapturePrefetch() {
         isBackgroundCapturePrefetchEnabled = true
+        activeSystemCapturePauseReasons.removeAll()
+        syncPeriodicCaptureRefreshLoop()
     }
 
-    /// 権限剥奪・監視停止・アプリ終了時に進行中のバックグラウンド事前取得および継続キャプチャを即座に停止する
+    /// 権限剥奪・監視停止・アプリ終了時に進行中のバックグラウンド事前取得・継続キャプチャ・定期更新を即座に停止しキャッシュを全破棄する
     public func stopBackgroundCaptureWork() {
         isBackgroundCapturePrefetchEnabled = false
-        cancelAllBackgroundCaptureTasks()
+        activeSystemCapturePauseReasons.removeAll()
+        clearCaptureState(clearServiceCache: true)
     }
 
     /// 通常スイッチャーの表示形式を更新し、通常・ランチャーの双方が非キャプチャとなった場合は一時キャプチャキャッシュを即時破棄する
@@ -367,6 +413,7 @@ public final class SwitcherViewModel {
                 clearCaptureState(clearServiceCache: false)
             }
             if !wasUsingCapture && isBackgroundCapturePrefetchEnabled {
+                syncPeriodicCaptureRefreshLoop()
                 scheduleBackgroundCapturePrefetch(reason: .displayStyleEnabled)
             }
         }
@@ -387,6 +434,7 @@ public final class SwitcherViewModel {
                 clearCaptureState(clearServiceCache: false)
             }
             if !wasUsingCapture && isBackgroundCapturePrefetchEnabled {
+                syncPeriodicCaptureRefreshLoop()
                 scheduleBackgroundCapturePrefetch(reason: .displayStyleEnabled)
             }
         }
@@ -470,17 +518,82 @@ public final class SwitcherViewModel {
         }
     }
 
-    /// 進行中のパネル由来キャプチャおよびバックグラウンド事前取得タスクをすべてキャンセルし状態を初期化する
+    /// 進行中のパネル由来キャプチャ、バックグラウンド事前取得、および定期更新ループをすべてキャンセルし状態を初期化する
     private func cancelAllBackgroundCaptureTasks() {
         captureRefreshGeneration += 1
         captureRefreshTask?.cancel()
         captureRefreshTask = nil
         isCaptureRefreshInFlight = false
 
+        cancelBackgroundCapturePrefetchTask()
+        stopPeriodicCaptureRefreshLoop()
+        pendingPrefetchReasonAfterInFlight = nil
+    }
+
+    /// 進行中またはデバウンス待機中のバックグラウンド事前取得タスクをキャンセルして初期化する
+    private func cancelBackgroundCapturePrefetchTask() {
         capturePrefetchGeneration += 1
         capturePrefetchTask?.cancel()
         capturePrefetchTask = nil
-        pendingPrefetchReasonAfterRefresh = nil
+        isCapturePrefetchInFlight = false
+        pendingPrefetchReasonInDebounce = nil
+    }
+
+    /// 稼働中の定期バックグラウンド更新ループを即座に停止する
+    private func stopPeriodicCaptureRefreshLoop() {
+        periodicCaptureRefreshGeneration += 1
+        periodicCaptureRefreshTask?.cancel()
+        periodicCaptureRefreshTask = nil
+        isPeriodicCaptureInFlight = false
+    }
+
+    /// 画面収録権限の実行時拒否・失効を検知した際、進行中の全バックグラウンド取得および定期更新ループを即座に停止しキャッシュを全破棄する
+    private func handleRuntimeScreenRecordingRevoked() {
+        Self.captureLogger.info("画面収録権限の実行時失効を検知したため全バックグラウンド更新を停止しキャッシュを破棄します")
+        cancelAllBackgroundCaptureTasks()
+        windowCaptureService?.clearCache()
+    }
+
+    /// OS のスリープ／ディスプレイオフ／セッション非アクティブ化と復帰に応じてバックグラウンド更新を一時停止・再開する
+    /// - Parameter event: 受信したシステム状態変化イベント
+    public func handleSystemCaptureAvailabilityEvent(_ event: SystemCaptureAvailabilityEvent) {
+        switch event {
+        case let .paused(reason):
+            activeSystemCapturePauseReasons.insert(reason)
+            Self.captureLogger.debug("システム状態により定期更新を一時停止: reason=\(String(describing: reason), privacy: .public) activeReasons=\(self.activeSystemCapturePauseReasons.count)")
+            cancelBackgroundCapturePrefetchTask()
+            stopPeriodicCaptureRefreshLoop()
+            pendingPrefetchReasonAfterInFlight = nil
+        case let .resumed(reason):
+            activeSystemCapturePauseReasons.remove(reason)
+            Self.captureLogger.debug("システム状態復帰を受信: reason=\(String(describing: reason), privacy: .public) remainingReasons=\(self.activeSystemCapturePauseReasons.count)")
+            if !isSystemCapturePaused {
+                syncPeriodicCaptureRefreshLoop()
+            }
+        }
+    }
+
+    /// OS 側の生存 CGWindow ID 集合およびフィルタ前生候補との和集合で安全にキャッシュ整理を実行する
+    /// - Parameters:
+    ///   - rawCandidates: フィルタ前の生ウィンドウ候補一覧
+    ///   - filteredEntries: フィルタ後の表示対象ウィンドウ一覧
+    ///   - context: ログ診断用の呼び出し契機名
+    private func pruneCaptureCacheSafely(
+        rawCandidates: [RawWindowCandidate],
+        filteredEntries: [WindowEntry],
+        context: String
+    ) {
+        guard let windowCaptureService else { return }
+        let survivingCGIDs = windowService.survivingCGWindowIDsForCachePruning()
+        guard let retainedIDs = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: survivingCGIDs,
+            rawCandidates: rawCandidates,
+            filteredEntries: filteredEntries
+        ) else {
+            Self.captureLogger.debug("OS 生存ウィンドウ集合が空のためキャッシュ整理をスキップ: context=\(context, privacy: .public)")
+            return
+        }
+        windowCaptureService.pruneCache(keeping: retainedIDs)
     }
 
     /// グリッド表示（アイコン型・キャプチャ表示型）で現在適用されている列数を更新する
@@ -999,16 +1112,22 @@ public final class SwitcherViewModel {
             // キャプチャ表示型では起動直後にキャッシュ済みサムネイルのみ即時反映し、表示遅延を起こさない
             var initialThumbnails: [UInt32: NSImage] = [:]
             if granted, let windowCaptureService {
-                // 閉じ済みウィンドウのキャッシュを先に破棄し、MRU 最古→最新の順で参照して
-                // 直近アクティブウィンドウが LRU 追い出し優先位置へ押し出されないようにする
-                let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
-                windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+                // OS 生存 ID・フィルタ前候補を基準に閉じ済み分のみ安全に整理し、
+                // MRU 最古→最新の順で参照して直近アクティブウィンドウが LRU 追い出し優先位置へ押し出されないようにする
+                pruneCaptureCacheSafely(
+                    rawCandidates: rawCandidates,
+                    filteredEntries: sorted,
+                    context: "present"
+                )
                 for entry in sorted.reversed() {
                     if let windowID = entry.cgWindowID,
                        let cached = windowCaptureService.cachedThumbnail(for: windowID) {
                         initialThumbnails[windowID] = cached
                     }
                 }
+                Self.captureLogger.debug(
+                    "パネル初期表示キャッシュ参照: entries=\(sorted.count) cacheHits=\(initialThumbnails.count)"
+                )
             }
             capturedThumbnails = initialThumbnails
         } else {
@@ -1025,7 +1144,12 @@ public final class SwitcherViewModel {
         onModePresentationChanged?(targetMode, nil)
 
         if shouldUseCapture && isScreenRecordingGranted {
+            if isBackgroundCapturePrefetchEnabled {
+                syncPeriodicCaptureRefreshLoop(knownScreenRecordingGranted: true)
+            }
             scheduleWindowCaptureRefresh(for: sorted)
+        } else if shouldUseCapture && !isScreenRecordingGranted {
+            stopPeriodicCaptureRefreshLoop()
         }
     }
 
@@ -1063,10 +1187,13 @@ public final class SwitcherViewModel {
     /// - Parameter entries: キャプチャ対象のウィンドウ項目一覧
     private func scheduleWindowCaptureRefresh(for entries: [WindowEntry]) {
         // パネル表示中の優先度順キャプチャを最優先するため、進行中の事前取得および前回の継続タスクを差し替える
-        capturePrefetchGeneration += 1
-        capturePrefetchTask?.cancel()
-        capturePrefetchTask = nil
-        pendingPrefetchReasonAfterRefresh = nil
+        cancelBackgroundCapturePrefetchTask()
+        pendingPrefetchReasonAfterInFlight = nil
+        // 定期更新のキャプチャが実行中であれば一時停止してパネル側取得へ譲り、完了後に安全再開する
+        let shouldRestartPeriodicAfterRefresh = isPeriodicCaptureInFlight
+        if shouldRestartPeriodicAfterRefresh {
+            stopPeriodicCaptureRefreshLoop()
+        }
 
         captureRefreshGeneration += 1
         captureRefreshTask?.cancel()
@@ -1078,7 +1205,12 @@ public final class SwitcherViewModel {
             from: entries,
             cachedThumbnails: capturedThumbnails
         )
-        guard !targetIDs.isEmpty else { return }
+        guard !targetIDs.isEmpty else {
+            if shouldRestartPeriodicAfterRefresh {
+                syncPeriodicCaptureRefreshLoop()
+            }
+            return
+        }
 
         let capturedMode = mode
         let capturedGeneration = presentationGeneration
@@ -1091,10 +1223,20 @@ public final class SwitcherViewModel {
                 if let self, self.captureRefreshGeneration == refreshGeneration {
                     self.isCaptureRefreshInFlight = false
                     self.captureRefreshTask = nil
-                    if let pendingReason = self.pendingPrefetchReasonAfterRefresh {
-                        self.pendingPrefetchReasonAfterRefresh = nil
-                        if self.mode == .inactive {
-                            self.scheduleBackgroundCapturePrefetch(reason: pendingReason)
+                    let needsFollowUp = shouldRestartPeriodicAfterRefresh || self.pendingPrefetchReasonAfterInFlight != nil
+                    if needsFollowUp {
+                        let isPermissionStillGranted = self.screenRecordingPermissionService?.currentStatus() == .granted
+                        if shouldRestartPeriodicAfterRefresh && isPermissionStillGranted {
+                            self.syncPeriodicCaptureRefreshLoop(knownScreenRecordingGranted: true)
+                        }
+                        if isPermissionStillGranted,
+                           let pendingReason = self.pendingPrefetchReasonAfterInFlight {
+                            self.pendingPrefetchReasonAfterInFlight = nil
+                            if self.mode == .inactive {
+                                self.scheduleBackgroundCapturePrefetch(reason: pendingReason)
+                            }
+                        } else if !isPermissionStillGranted {
+                            self.pendingPrefetchReasonAfterInFlight = nil
                         }
                     }
                 }
@@ -1115,14 +1257,17 @@ public final class SwitcherViewModel {
                 self.capturedThumbnails[windowID] = image
             }
 
-            // 非同期キャプチャ中に権限拒否・失効を検知した場合は、現在表示中のパネルにも即座に未許可バナーへ切り替える
+            // 非同期キャプチャ中に権限拒否・失効を検知した場合は、定期更新ループを即座に停止し表示中のパネルも未許可バナーへ切り替える
             guard let self,
                   !Task.isCancelled,
-                  self.mode == capturedMode,
-                  self.isCaptureActiveForCurrentMode,
-                  self.presentationGeneration == capturedGeneration,
                   let screenRecordingPermissionService = self.screenRecordingPermissionService,
                   screenRecordingPermissionService.currentStatus() != .granted else {
+                return
+            }
+            self.handleRuntimeScreenRecordingRevoked()
+            guard self.mode == capturedMode,
+                  self.isCaptureActiveForCurrentMode,
+                  self.presentationGeneration == capturedGeneration else {
                 return
             }
             self.isScreenRecordingGranted = false
@@ -1133,25 +1278,47 @@ public final class SwitcherViewModel {
         }
     }
 
-    /// 起動時・操作スペース切替時・ウィンドウ作成時などの契機で、現在表示中の未キャッシュサムネイルをデバウンス付きで事前取得する
+    /// 起動時・キャプチャ表示型有効化時・操作スペース切替・フォーカス／タイトル変更などの契機で、
+    /// バックグラウンドのサムネイル取得・鮮度更新をスケジュールする
     /// - Parameter reason: 事前取得を要求する契機種別
     public func scheduleBackgroundCapturePrefetch(reason: WindowCapturePrefetchReason) {
         // オプトイン原則: 通常・ランチャー双方が非キャプチャ時は権限確認含め一切実行しない
         guard isBackgroundCapturePrefetchEnabled,
               usesCaptureDisplayStyle,
+              !isSystemCapturePaused,
               windowCaptureService != nil else {
             return
         }
+        // パネル表示中はパネル側の MRU 優先キャプチャを妨げない
+        guard mode == .inactive else {
+            return
+        }
+        // パネル閉鎖後の継続取得や他のバックグラウンド取得が進行中の場合は多重起動せず、完了後に繰り越し実行する
+        if isCaptureRefreshInFlight || isCapturePrefetchInFlight || isPeriodicCaptureInFlight {
+            pendingPrefetchReasonAfterInFlight = WindowCaptureRefreshPolicy.mergePendingPrefetchReason(
+                existing: pendingPrefetchReasonAfterInFlight,
+                incoming: reason
+            )
+            return
+        }
+
+        let mergedReason = WindowCaptureRefreshPolicy.mergePendingPrefetchReason(
+            existing: pendingPrefetchReasonInDebounce,
+            incoming: reason
+        )
+        let shouldRunImmediately = WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: mergedReason)
 
         capturePrefetchGeneration += 1
         let prefetchGeneration = capturePrefetchGeneration
         capturePrefetchTask?.cancel()
-        let debounceDuration = capturePrefetchDebounceDuration
+        pendingPrefetchReasonInDebounce = mergedReason
+        let debounceDuration: Duration = shouldRunImmediately ? .zero : capturePrefetchDebounceDuration
 
         capturePrefetchTask = Task { @MainActor [weak self] in
             defer {
                 if let self, self.capturePrefetchGeneration == prefetchGeneration {
                     self.capturePrefetchTask = nil
+                    self.pendingPrefetchReasonInDebounce = nil
                 }
             }
 
@@ -1163,15 +1330,17 @@ public final class SwitcherViewModel {
                   self.capturePrefetchGeneration == prefetchGeneration else {
                 return
             }
-            await self.performBackgroundCapturePrefetch(reason: reason)
+            self.pendingPrefetchReasonInDebounce = nil
+            await self.performBackgroundCapturePrefetch(reason: mergedReason)
         }
     }
 
-    /// 現在操作スペース上の未キャッシュ通常ウィンドウのみを対象にバックグラウンド事前キャプチャを実行する
+    /// 契機種別に応じた対象ウィンドウ（起動時一括取得またはイベント駆動の現在スペース鮮度更新）をバックグラウンドでキャプチャする
     /// - Parameter reason: 実行契機種別
     private func performBackgroundCapturePrefetch(reason: WindowCapturePrefetchReason) async {
         guard isBackgroundCapturePrefetchEnabled,
               usesCaptureDisplayStyle,
+              !isSystemCapturePaused,
               let windowCaptureService else {
             return
         }
@@ -1179,32 +1348,68 @@ public final class SwitcherViewModel {
         guard mode == .inactive else {
             return
         }
-        // パネル閉鎖後の継続キャプチャが実行中の場合は重複実行を避け、完了後に繰り越し実行する
-        if isCaptureRefreshInFlight {
-            pendingPrefetchReasonAfterRefresh = reason
+        // パネル閉鎖後の継続キャプチャや他バックグラウンド取得が進行中の場合は重複実行を避け、完了後に繰り越し実行する
+        if isCaptureRefreshInFlight || isCapturePrefetchInFlight || isPeriodicCaptureInFlight {
+            pendingPrefetchReasonAfterInFlight = WindowCaptureRefreshPolicy.mergePendingPrefetchReason(
+                existing: pendingPrefetchReasonAfterInFlight,
+                incoming: reason
+            )
             return
         }
         // アクセシビリティ権限および画面収録権限が許可済みの場合のみ実行し、OS ダイアログを誘発しない
-        guard permissionService.currentStatus() == .granted,
-              let screenRecordingPermissionService,
-              screenRecordingPermissionService.currentStatus() == .granted else {
+        guard permissionService.currentStatus() == .granted else {
             return
         }
+        guard let screenRecordingPermissionService,
+              screenRecordingPermissionService.currentStatus() == .granted else {
+            stopPeriodicCaptureRefreshLoop()
+            return
+        }
+
+        // 権限許可済みが確認できたため、未稼働であれば定期バックグラウンド更新ループを開始する
+        syncPeriodicCaptureRefreshLoop(knownScreenRecordingGranted: true)
 
         let rawCandidates = windowService.fetchRawWindowCandidates()
         let screenBounds = windowService.currentDisplayBounds()
         let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
         let sorted = WindowSorter.sortByMRU(filtered)
 
-        // 全操作スペースの生存ウィンドウ ID 集合で閉じ済み分のキャッシュのみ整理し、別スペースのキャッシュは保持する
-        let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
-        windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+        // OS 生存ウィンドウ ID とフィルタ前候補を基準に、閉じ済み分のキャッシュのみ安全に整理する
+        pruneCaptureCacheSafely(
+            rawCandidates: rawCandidates,
+            filteredEntries: sorted,
+            context: "prefetch:\(String(describing: reason))"
+        )
 
-        let targetIDs = Self.uncachedOnScreenPrefetchWindowIDs(
-            from: sorted,
-            isCached: { windowCaptureService.hasCachedThumbnail(for: $0) }
+        let now = nowProvider()
+        let targetIDs: [UInt32]
+        if WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: reason) {
+            targetIDs = WindowCaptureRefreshPolicy.startupBulkPrefetchWindowIDs(
+                from: sorted,
+                isCached: { windowCaptureService.hasCachedThumbnail(for: $0) },
+                lastCapturedAt: { windowCaptureService.lastCapturedAt(for: $0) },
+                now: now,
+                cooldown: captureRefreshCooldown
+            )
+        } else {
+            targetIDs = WindowCaptureRefreshPolicy.eventPrefetchWindowIDs(
+                from: sorted,
+                isCached: { windowCaptureService.hasCachedThumbnail(for: $0) },
+                lastCapturedAt: { windowCaptureService.lastCapturedAt(for: $0) },
+                now: now,
+                cooldown: captureRefreshCooldown
+            )
+        }
+        Self.captureLogger.debug(
+            "バックグラウンド事前取得: reason=\(String(describing: reason), privacy: .public) entries=\(sorted.count) targets=\(targetIDs.count)"
         )
         guard !targetIDs.isEmpty else { return }
+
+        isCapturePrefetchInFlight = true
+        defer {
+            isCapturePrefetchInFlight = false
+            dispatchDeferredPrefetchIfNeeded()
+        }
 
         await windowCaptureService.captureThumbnails(
             for: targetIDs,
@@ -1212,6 +1417,167 @@ public final class SwitcherViewModel {
         ) { _, _ in
             // 事前取得では WindowCaptureService 内のメモリキャッシュ格納のみ行い、UI 状態は更新しない
         }
+
+        // 実行中に画面収録権限の拒否・失効を検知した場合は進行中タスクおよび定期更新ループを即座に停止する
+        if !Task.isCancelled, screenRecordingPermissionService.currentStatus() != .granted {
+            handleRuntimeScreenRecordingRevoked()
+        }
+    }
+
+    /// 現在のオプトイン設定・監視状態・省電力状態・権限に応じて定期バックグラウンド更新ループを開始または停止する
+    /// - Parameter knownScreenRecordingGranted: 呼び出し元で画面収録権限許可済みを確認済みの場合は true（重複照会回避用）
+    private func syncPeriodicCaptureRefreshLoop(knownScreenRecordingGranted: Bool? = nil) {
+        // オプトイン原則: 双方非キャプチャまたは監視停止中・一時停止中は画面収録権限確認すら行わず停止する
+        guard isBackgroundCapturePrefetchEnabled,
+              usesCaptureDisplayStyle,
+              !isSystemCapturePaused,
+              windowCaptureService != nil else {
+            stopPeriodicCaptureRefreshLoop()
+            return
+        }
+
+        guard periodicCaptureRefreshTask == nil else {
+            return
+        }
+
+        guard permissionService.currentStatus() == .granted else {
+            stopPeriodicCaptureRefreshLoop()
+            return
+        }
+
+        let isGranted: Bool
+        if let knownScreenRecordingGranted {
+            isGranted = knownScreenRecordingGranted
+        } else {
+            isGranted = screenRecordingPermissionService?.currentStatus() == .granted
+        }
+        guard isGranted else {
+            stopPeriodicCaptureRefreshLoop()
+            return
+        }
+
+        periodicCaptureRefreshGeneration += 1
+        let loopGeneration = periodicCaptureRefreshGeneration
+        let interval = periodicCaptureRefreshInterval
+
+        periodicCaptureRefreshTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.periodicCaptureRefreshGeneration == loopGeneration {
+                    self.periodicCaptureRefreshTask = nil
+                    self.isPeriodicCaptureInFlight = false
+                }
+            }
+
+            while !Task.isCancelled {
+                if interval > .zero {
+                    try? await Task.sleep(for: interval)
+                } else {
+                    await Task.yield()
+                }
+                guard let self,
+                      !Task.isCancelled,
+                      self.periodicCaptureRefreshGeneration == loopGeneration else {
+                    return
+                }
+                let shouldContinue = await self.performPeriodicCaptureRefreshTick(loopGeneration: loopGeneration)
+                if !shouldContinue {
+                    return
+                }
+            }
+        }
+    }
+
+    /// 定期バックグラウンド更新ループの 1 周期分の処理を実行する
+    /// - Parameter loopGeneration: 実行中ループの世代カウンタ
+    /// - Returns: 次周期へ継続すべき場合は true、権限失効や条件喪失で即停止すべき場合は false
+    private func performPeriodicCaptureRefreshTick(loopGeneration: Int) async -> Bool {
+        guard isBackgroundCapturePrefetchEnabled,
+              usesCaptureDisplayStyle,
+              !isSystemCapturePaused,
+              let windowCaptureService else {
+            return false
+        }
+
+        // パネル表示中または他のキャプチャタスク実行中は多重起動せず、この回をスキップして次周期へ回す
+        if mode != .inactive || isCaptureRefreshInFlight || isCapturePrefetchInFlight || isPeriodicCaptureInFlight {
+            return true
+        }
+
+        guard permissionService.currentStatus() == .granted else {
+            return false
+        }
+        guard let screenRecordingPermissionService,
+              screenRecordingPermissionService.currentStatus() == .granted else {
+            handleRuntimeScreenRecordingRevoked()
+            return false
+        }
+
+        let rawCandidates = windowService.fetchRawWindowCandidates()
+        let screenBounds = windowService.currentDisplayBounds()
+        let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
+        let sorted = WindowSorter.sortByMRU(filtered)
+
+        // OS 生存ウィンドウ ID とフィルタ前候補を基準に、一時欠落による別スペースキャッシュ誤消去を防ぐ
+        pruneCaptureCacheSafely(
+            rawCandidates: rawCandidates,
+            filteredEntries: sorted,
+            context: "periodic"
+        )
+
+        let targetIDs = WindowCaptureRefreshPolicy.periodicRefreshWindowIDs(
+            from: sorted,
+            isCached: { windowCaptureService.hasCachedThumbnail(for: $0) },
+            lastCapturedAt: { windowCaptureService.lastCapturedAt(for: $0) },
+            now: nowProvider(),
+            cooldown: captureRefreshCooldown
+        )
+        Self.captureLogger.debug(
+            "定期バックグラウンド更新: entries=\(sorted.count) targets=\(targetIDs.count)"
+        )
+        guard !targetIDs.isEmpty else {
+            return true
+        }
+
+        isPeriodicCaptureInFlight = true
+        defer {
+            if periodicCaptureRefreshGeneration == loopGeneration {
+                isPeriodicCaptureInFlight = false
+            }
+            dispatchDeferredPrefetchIfNeeded()
+        }
+
+        await windowCaptureService.captureThumbnails(
+            for: targetIDs,
+            maxPixelSize: Self.captureMaxPixelSize
+        ) { _, _ in
+            // 定期更新では WindowCaptureService 内のメモリキャッシュ格納のみ行い、UI 状態は更新しない
+        }
+
+        guard !Task.isCancelled, periodicCaptureRefreshGeneration == loopGeneration else {
+            return false
+        }
+
+        if screenRecordingPermissionService.currentStatus() != .granted {
+            handleRuntimeScreenRecordingRevoked()
+            return false
+        }
+        return true
+    }
+
+    /// 進行中タスクの完了時に繰り越されていたイベント事前取得契機があれば再スケジュールする
+    private func dispatchDeferredPrefetchIfNeeded() {
+        guard !isCaptureRefreshInFlight,
+              !isCapturePrefetchInFlight,
+              !isPeriodicCaptureInFlight,
+              mode == .inactive,
+              isBackgroundCapturePrefetchEnabled,
+              usesCaptureDisplayStyle,
+              !isSystemCapturePaused,
+              let pendingReason = pendingPrefetchReasonAfterInFlight else {
+            return
+        }
+        pendingPrefetchReasonAfterInFlight = nil
+        scheduleBackgroundCapturePrefetch(reason: pendingReason)
     }
 
     /// 現在操作スペース上で画面表示中（isOnScreen == true かつ非最小化）のうち、

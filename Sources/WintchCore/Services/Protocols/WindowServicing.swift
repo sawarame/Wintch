@@ -48,8 +48,34 @@ public enum WindowCapturePrefetchReason: Equatable, Sendable {
     case applicationLaunched
     /// 最小化されていたウィンドウの復元を検知してキャッシュ更新が完了した
     case windowDeminiaturized
+    /// アプリケーション切り替え（アクティブ化）に伴うフォーカス更新が完了した
+    case applicationActivated
+    /// ウィンドウフォーカスまたはメインウィンドウ変更に伴う更新が完了した
+    case windowFocusChanged
+    /// ウィンドウタイトル変更に伴う更新が完了した
+    case windowTitleChanged
     /// 設定またはメニューバーからキャプチャ表示型が新たに有効化された
     case displayStyleEnabled
+}
+
+/// 省電力・ユーザーセッション状態によりバックグラウンドキャプチャ更新を一時停止する要因
+public enum SystemCapturePauseReason: Hashable, Sendable {
+    /// システム本体のスリープ（`NSWorkspace.willSleepNotification`）
+    case systemSleep
+    /// ディスプレイのスリープ（`NSWorkspace.screensDidSleepNotification`）
+    case screensAsleep
+    /// ユーザーセッションの非アクティブ化（`NSWorkspace.sessionDidResignActiveNotification`）
+    case sessionInactive
+}
+
+/// OS の電源・ディスプレイ・ユーザーセッション状態の変化を表すイベント
+public enum SystemCaptureAvailabilityEvent: Equatable, Sendable {
+    /// 指定要因によりバックグラウンドキャプチャ更新を一時停止すべき状態になった
+    /// - Parameter reason: 一時停止の要因
+    case paused(SystemCapturePauseReason)
+    /// 指定要因から復帰した
+    /// - Parameter reason: 解消された一時停止要因
+    case resumed(SystemCapturePauseReason)
 }
 
 /// ウィンドウ情報の収集・監視・切り替え操作を提供するサービス契約
@@ -58,8 +84,11 @@ public protocol WindowServicing: AnyObject {
     /// OS 通知等でウィンドウ破棄またはアプリ終了を検知した際に呼ばれるリアルタイム通知ハンドラ
     var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)? { get set }
 
-    /// 事前キャプチャ（未キャッシュサムネイルのバックグラウンド取得）が望ましいイベント完了時に呼ばれる通知ハンドラ
+    /// 事前キャプチャ（未キャッシュ・鮮度低下サムネイルのバックグラウンド取得）が望ましいイベント完了時に呼ばれる通知ハンドラ
     var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)? { get set }
+
+    /// システムスリープ・ディスプレイスリープ・セッション切替などによるバックグラウンド更新可否の変化通知ハンドラ
+    var onSystemCaptureAvailabilityEvent: ((SystemCaptureAvailabilityEvent) -> Void)? { get set }
 
     /// 現在の監視状態を開始する（AXObserver およびワークスペース通知の登録）
     func startObserving()
@@ -74,6 +103,10 @@ public protocol WindowServicing: AnyObject {
     /// 現在の全ディスプレイの矩形一覧（CoreGraphics 座標系）を返す
     /// - Returns: ディスプレイ矩形配列
     func currentDisplayBounds() -> [WindowBounds]
+
+    /// キャッシュ整理用に OS（WindowServer）上で現在生存している全 CGWindow ID 集合を返す
+    /// - Returns: 生存中の CGWindow ID 集合（未対応または一時取得失敗時は nil）
+    func survivingCGWindowIDsForCachePruning() -> Set<UInt32>?
 
     /// 指定されたウィンドウを最前面にアクティブ化する（必要なら操作スペース移動・最小化解除を含む）
     /// - Parameter entry: アクティブ化対象のウィンドウ項目
@@ -107,9 +140,21 @@ public extension WindowServicing {
         set {}
     }
 
+    /// デフォルト実装として未接続のシステム状態通知ハンドラを扱う（テストモック互換用）
+    var onSystemCaptureAvailabilityEvent: ((SystemCaptureAvailabilityEvent) -> Void)? {
+        get { nil }
+        set {}
+    }
+
     /// デフォルト実装として空配列を返す（テストモック互換用）
     /// - Returns: ディスプレイ矩形配列
     func currentDisplayBounds() -> [WindowBounds] {
         []
+    }
+
+    /// デフォルト実装として nil を返す（テストモック互換用）
+    /// - Returns: 既定では nil（呼び出し元で候補ベースへフォールバック）
+    func survivingCGWindowIDsForCachePruning() -> Set<UInt32>? {
+        nil
     }
 }

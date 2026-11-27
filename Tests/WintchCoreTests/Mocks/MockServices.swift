@@ -2,6 +2,43 @@ import AppKit
 import Foundation
 @testable import WintchCore
 
+/// テスト内で現在時刻を任意のステップで進めるためのスレッドセーフな可変クロック
+final class MutableTestClock: @unchecked Sendable {
+    /// 現在のテスト時刻
+    private var current: Date
+    /// 排他制御ロック
+    private let lock = NSLock()
+
+    /// 初期時刻を指定してテストクロックを初期化する
+    /// - Parameter initial: 初期時刻
+    init(initial: Date) {
+        self.current = initial
+    }
+
+    /// 現在のテスト時刻を返す
+    var now: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    /// 現在時刻を指定秒数だけ進める
+    /// - Parameter interval: 進める秒数
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        current = current.addingTimeInterval(interval)
+        lock.unlock()
+    }
+
+    /// 現在時刻を指定時刻へ直接設定する
+    /// - Parameter date: 設定する時刻
+    func set(_ date: Date) {
+        lock.lock()
+        current = date
+        lock.unlock()
+    }
+}
+
 /// テスト用のウィンドウサービスモック
 @MainActor
 final class MockWindowService: WindowServicing {
@@ -9,12 +46,16 @@ final class MockWindowService: WindowServicing {
     var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)?
     /// OS 通知を模擬したバックグラウンド事前キャプチャ契機通知ハンドラ
     var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)?
+    /// OS 通知を模擬したスリープ／ディスプレイオフ／セッション状態変化通知ハンドラ
+    var onSystemCaptureAvailabilityEvent: ((SystemCaptureAvailabilityEvent) -> Void)?
     /// startObserving の呼び出し回数
     var startObservingCallCount = 0
     /// stopObserving の呼び出し回数
     var stopObservingCallCount = 0
     /// 返却する生ウィンドウ候補一覧
     var stubbedCandidates: [RawWindowCandidate] = []
+    /// キャッシュ整理用に返却する OS 生存 CGWindow ID 集合スタブ（nil 時は候補ベースフォールバック）
+    var stubbedSurvivingCGWindowIDs: Set<UInt32>?
     /// アクティブ化が要求されたウィンドウ履歴
     var activatedWindows: [WindowEntry] = []
     /// クローズが要求されたウィンドウ履歴
@@ -72,6 +113,12 @@ final class MockWindowService: WindowServicing {
     /// - Returns: 生ウィンドウ候補の配列
     func fetchRawWindowCandidates() -> [RawWindowCandidate] {
         stubbedCandidates
+    }
+
+    /// スタブ設定された OS 生存 CGWindow ID 集合を返す
+    /// - Returns: 生存 CGWindow ID 集合（未設定時は nil）
+    func survivingCGWindowIDsForCachePruning() -> Set<UInt32>? {
+        stubbedSurvivingCGWindowIDs
     }
 
     /// 対象ウィンドウのアクティブ化要求を記録する
@@ -175,6 +222,12 @@ final class MockWindowService: WindowServicing {
     /// - Parameter reason: 模擬発火する契機種別
     func simulateCapturePrefetchNeeded(_ reason: WindowCapturePrefetchReason) {
         onCapturePrefetchNeeded?(reason)
+    }
+
+    /// テストからスリープ／ディスプレイオフ／セッション状態変化通知を模擬発火する
+    /// - Parameter event: 模擬発火するシステム状態変化イベント
+    func simulateSystemCaptureAvailabilityEvent(_ event: SystemCaptureAvailabilityEvent) {
+        onSystemCaptureAvailabilityEvent?(event)
     }
 }
 
@@ -508,6 +561,10 @@ final class MockScreenRecordingPermissionService: ScreenRecordingPermissionServi
 final class MockWindowCaptureService: WindowCaptureServicing {
     /// メモリキャッシュとして返却するサムネイルマップ
     var cachedThumbnails: [UInt32: NSImage] = [:]
+    /// キャッシュ済みサムネイルごとの最終取得時刻マップ
+    var cachedThumbnailTimestamps: [UInt32: Date] = [:]
+    /// キャプチャ格納時にタイムスタンプを記録するための現在時刻プロバイダ
+    var nowProvider: @Sendable () -> Date = Date.init
     /// 非同期取得時に返却・差し込みを行うスタブサムネイルマップ
     var stubbedAsyncThumbnails: [UInt32: NSImage] = [:]
     /// captureThumbnails の非同期挙動を差し込む任意フック
@@ -538,6 +595,14 @@ final class MockWindowCaptureService: WindowCaptureServicing {
         cachedThumbnails[cgWindowID] != nil
     }
 
+    /// 指定ウィンドウのサムネイル最終取得時刻を副作用なしで返す
+    /// - Parameter cgWindowID: CoreGraphics ウィンドウ ID
+    /// - Returns: 記録されていれば最終取得時刻、未保持時は nil
+    func lastCapturedAt(for cgWindowID: UInt32) -> Date? {
+        guard cachedThumbnails[cgWindowID] != nil else { return nil }
+        return cachedThumbnailTimestamps[cgWindowID]
+    }
+
     /// 非同期キャプチャ取得を実行し、完了ごとにコールバックとキャッシュ更新を行う
     /// - Parameters:
     ///   - cgWindowIDs: 取得対象のウィンドウ ID 配列
@@ -551,7 +616,9 @@ final class MockWindowCaptureService: WindowCaptureServicing {
         capturedRequestWindowIDs.append(cgWindowIDs)
         if let captureHandler {
             await captureHandler(cgWindowIDs) { [weak self] windowID, image in
-                self?.cachedThumbnails[windowID] = image
+                guard let self else { return }
+                self.cachedThumbnails[windowID] = image
+                self.cachedThumbnailTimestamps[windowID] = self.nowProvider()
                 onCaptured(windowID, image)
             }
             return
@@ -560,6 +627,7 @@ final class MockWindowCaptureService: WindowCaptureServicing {
             if Task.isCancelled { break }
             if let image = stubbedAsyncThumbnails[windowID] {
                 cachedThumbnails[windowID] = image
+                cachedThumbnailTimestamps[windowID] = nowProvider()
                 onCaptured(windowID, image)
             }
         }
@@ -570,6 +638,7 @@ final class MockWindowCaptureService: WindowCaptureServicing {
     func invalidateThumbnail(for cgWindowID: UInt32) {
         invalidatedWindowIDs.append(cgWindowID)
         cachedThumbnails.removeValue(forKey: cgWindowID)
+        cachedThumbnailTimestamps.removeValue(forKey: cgWindowID)
     }
 
     /// 現在生存しているウィンドウ ID 集合に含まれないキャッシュを破棄する
@@ -578,6 +647,10 @@ final class MockWindowCaptureService: WindowCaptureServicing {
         prunedKeepingWindowIDsHistory.append(activeCGWindowIDs)
         for key in Array(cachedThumbnails.keys) where !activeCGWindowIDs.contains(key) {
             cachedThumbnails.removeValue(forKey: key)
+            cachedThumbnailTimestamps.removeValue(forKey: key)
+        }
+        for key in Array(cachedThumbnailTimestamps.keys) where !activeCGWindowIDs.contains(key) {
+            cachedThumbnailTimestamps.removeValue(forKey: key)
         }
     }
 
@@ -585,6 +658,7 @@ final class MockWindowCaptureService: WindowCaptureServicing {
     func clearCache() {
         clearCacheCallCount += 1
         cachedThumbnails.removeAll()
+        cachedThumbnailTimestamps.removeAll()
     }
 }
 

@@ -70,8 +70,11 @@ public final class WindowService: WindowServicing {
     /// OS 通知等でウィンドウ破棄またはアプリ終了を検知した際に呼ばれるリアルタイム通知ハンドラ
     public var onWindowLifecycleEvent: ((WindowLifecycleEvent) -> Void)?
 
-    /// 事前キャプチャ（未キャッシュサムネイルのバックグラウンド取得）が望ましいイベント完了時に呼ばれる通知ハンドラ
+    /// 事前キャプチャ（未キャッシュ・鮮度低下サムネイルのバックグラウンド取得）が望ましいイベント完了時に呼ばれる通知ハンドラ
     public var onCapturePrefetchNeeded: ((WindowCapturePrefetchReason) -> Void)?
+
+    /// システムスリープ・ディスプレイスリープ・セッション非アクティブ化等によるバックグラウンド更新可否の変化通知ハンドラ
+    public var onSystemCaptureAvailabilityEvent: ((SystemCaptureAvailabilityEvent) -> Void)?
 
     /// 終了要求を送出済みのウィンドウ追跡マップ（WindowEntry.id キー）
     private var trackedCloseTargetsByEntryID: [String: TrackedCloseTarget] = [:]
@@ -137,6 +140,9 @@ public final class WindowService: WindowServicing {
 
     /// 操作スペース切り替え後のバックグラウンド全体再走査が完了するまでフルスクリーン置換を抑制するフラグ
     private var hasPendingSpaceChange = false
+
+    /// 直近の `fetchCGWindowInfos()` で WindowServer 上に確認された全 CGWindow ID 集合（キャッシュ誤消去防止用）
+    private var lastObservedCGWindowIDs: Set<UInt32>?
 
     /// バックグラウンド AX IPC 呼び出しを並列実行するためのコンカレントワーカーキュー
     private nonisolated let axWorkerQueue = DispatchQueue(
@@ -298,6 +304,30 @@ public final class WindowService: WindowServicing {
                 }
             }
         )
+
+        // 省電力・セッション状態配慮: スリープ／ディスプレイオフ／セッション非アクティブ化と復帰を通知する
+        let availabilityNotifications: [(Notification.Name, SystemCaptureAvailabilityEvent)] = [
+            (NSWorkspace.willSleepNotification, .paused(.systemSleep)),
+            (NSWorkspace.didWakeNotification, .resumed(.systemSleep)),
+            (NSWorkspace.screensDidSleepNotification, .paused(.screensAsleep)),
+            (NSWorkspace.screensDidWakeNotification, .resumed(.screensAsleep)),
+            (NSWorkspace.sessionDidResignActiveNotification, .paused(.sessionInactive)),
+            (NSWorkspace.sessionDidBecomeActiveNotification, .resumed(.sessionInactive))
+        ]
+        for (name, event) in availabilityNotifications {
+            workspaceObservers.append(
+                center.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isObserving else { return }
+                        self.onSystemCaptureAvailabilityEvent?(event)
+                    }
+                }
+            )
+        }
     }
 
     /// ウィンドウ監視を停止し、監視リソースとキャッシュを解放する
@@ -335,6 +365,17 @@ public final class WindowService: WindowServicing {
         cachedWindowsByPID.removeAll()
         cachedWindowMenuByPID.removeAll()
         trackedCloseTargetsByEntryID.removeAll()
+        lastObservedCGWindowIDs = nil
+    }
+
+    /// キャッシュ整理用に OS（WindowServer）上で現在生存している全 CGWindow ID 集合を返す
+    /// - Returns: 直近の `fetchCGWindowInfos()` または最新取得で確認できた生存 CGWindow ID 集合（取得失敗時は nil）
+    public func survivingCGWindowIDsForCachePruning() -> Set<UInt32>? {
+        if let lastObservedCGWindowIDs {
+            return lastObservedCGWindowIDs
+        }
+        let infos = fetchCGWindowInfos()
+        return infos.isEmpty ? nil : Set(infos.map(\.windowID))
     }
 
     /// 現在の全操作スペース上のウィンドウ候補を収集して返す
@@ -1032,10 +1073,11 @@ public final class WindowService: WindowServicing {
     private func fetchCGWindowInfos() -> [CGWindowMeta] {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let rawList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            lastObservedCGWindowIDs = nil
             return []
         }
 
-        return rawList.compactMap { dict in
+        let metas: [CGWindowMeta] = rawList.compactMap { dict in
             guard let windowID = dict[kCGWindowNumber as String] as? UInt32,
                   let pid = dict[kCGWindowOwnerPID as String] as? Int32,
                   let layer = dict[kCGWindowLayer as String] as? Int,
@@ -1056,6 +1098,8 @@ public final class WindowService: WindowServicing {
                 name: name
             )
         }
+        lastObservedCGWindowIDs = metas.isEmpty ? nil : Set(metas.map(\.windowID))
+        return metas
     }
 
     /// 起動中の全通常アプリの AX ウィンドウをスキャンしてキャッシュを更新する（同期呼び出し用）
@@ -1467,9 +1511,8 @@ public final class WindowService: WindowServicing {
             if let focusedElement = result.0 {
                 self.updateMRUTimestamp(pid: pid, axElement: focusedElement.value, date: capturedNow)
             }
-            if let pendingReason = self.pendingPrefetchReasonByPID.removeValue(forKey: pid) {
-                self.onCapturePrefetchNeeded?(pendingReason)
-            }
+            let reason = self.pendingPrefetchReasonByPID.removeValue(forKey: pid) ?? .applicationActivated
+            self.onCapturePrefetchNeeded?(reason)
         }
     }
 
@@ -2383,9 +2426,9 @@ public final class WindowService: WindowServicing {
         )
     }
 
-    /// AXObserver 通知種別からバックグラウンド事前キャプチャを促すべき契機を判定する純粋関数
+    /// AXObserver 通知種別からバックグラウンド事前キャプチャ／鮮度更新を促すべき契機を判定する純粋関数
     /// - Parameter notification: 受信した AX 通知名
-    /// - Returns: 事前キャプチャ対象となる契機種別（対象外通知は nil）
+    /// - Returns: 事前キャプチャ・再取得対象となる契機種別（対象外通知は nil）
     nonisolated static func capturePrefetchReason(
         forAXNotification notification: String
     ) -> WindowCapturePrefetchReason? {
@@ -2394,6 +2437,13 @@ public final class WindowService: WindowServicing {
         }
         if notification == kAXWindowDeminiaturizedNotification {
             return .windowDeminiaturized
+        }
+        if notification == kAXFocusedWindowChangedNotification
+            || notification == kAXMainWindowChangedNotification {
+            return .windowFocusChanged
+        }
+        if notification == kAXTitleChangedNotification {
+            return .windowTitleChanged
         }
         return nil
     }

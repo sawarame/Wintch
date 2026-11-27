@@ -949,14 +949,223 @@ struct WindowCaptureAndMatchingTests {
         #expect(targetIDs == [11, 15])
     }
 
-    /// AXObserver 通知種別からの事前キャプチャ契機判定が、ウィンドウ作成と最小化解除のみを対象とすることを検証する
-    @Test("WindowService.capturePrefetchReason はウィンドウ作成と最小化解除のみ事前取得対象とする")
-    func capturePrefetchReasonForAXNotificationMapsOnlyCreationAndDeminiaturization() {
+    /// AXObserver 通知種別からの事前キャプチャ／更新契機判定が、
+    /// ウィンドウ作成・最小化解除・フォーカス/メインウィンドウ変更・タイトル変更を正しくマッピングすることを検証する
+    @Test("WindowService.capturePrefetchReason はウィンドウ作成・最小化解除・フォーカス・タイトル変更を契機へ変換する")
+    func capturePrefetchReasonForAXNotificationMapsExpectedEvents() {
         #expect(WindowService.capturePrefetchReason(forAXNotification: kAXWindowCreatedNotification) == .windowCreated)
         #expect(WindowService.capturePrefetchReason(forAXNotification: kAXWindowDeminiaturizedNotification) == .windowDeminiaturized)
-        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXFocusedWindowChangedNotification) == nil)
-        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXMainWindowChangedNotification) == nil)
-        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXTitleChangedNotification) == nil)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXFocusedWindowChangedNotification) == .windowFocusChanged)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXMainWindowChangedNotification) == .windowFocusChanged)
+        #expect(WindowService.capturePrefetchReason(forAXNotification: kAXTitleChangedNotification) == .windowTitleChanged)
         #expect(WindowService.capturePrefetchReason(forAXNotification: kAXWindowMiniaturizedNotification) == nil)
+    }
+
+    /// WindowCaptureService が各サムネイルの最終取得時刻を LRU 順序を変更せずに参照でき、
+    /// 無効化・整理・全破棄・LRU 追い出し時に画像と時刻の整合性を維持することを検証する
+    @Test("WindowCaptureService は最終取得時刻を LRU 不変で管理し無効化・整理・追い出し・全破棄で整合を保つ")
+    @MainActor
+    func captureServiceTracksLastCapturedAtWithoutMutatingLRUAndCleansUpConsistently() {
+        let clock = MutableTestClock(initial: Date(timeIntervalSince1970: 1_700_000_000))
+        let service = WindowCaptureService(maxCacheCount: 2, nowProvider: { clock.now })
+        let img1 = NSImage(size: NSSize(width: 10, height: 10))
+        let img2 = NSImage(size: NSSize(width: 10, height: 10))
+        let img3 = NSImage(size: NSSize(width: 10, height: 10))
+
+        let t0 = clock.now
+        service.storeInCache(img1, for: 10)
+        clock.advance(by: 3)
+        let t1 = clock.now
+        service.storeInCache(img2, for: 20)
+        #expect(service.cacheOrder == [10, 20])
+
+        // lastCapturedAt は LRU 順序を変更せずに最終取得時刻を返す
+        #expect(service.lastCapturedAt(for: 10) == t0)
+        #expect(service.lastCapturedAt(for: 20) == t1)
+        #expect(service.lastCapturedAt(for: 99) == nil)
+        #expect(service.cacheOrder == [10, 20])
+
+        // LRU 追い出し（上限 2 件へ 3 件目格納）で最古の 10 の画像・時刻がともに削除される
+        clock.advance(by: 4)
+        let t2 = clock.now
+        service.storeInCache(img3, for: 30)
+        #expect(service.cacheOrder == [20, 30])
+        #expect(service.lastCapturedAt(for: 10) == nil)
+        #expect(service.hasCachedThumbnail(for: 10) == false)
+        #expect(service.lastCapturedAt(for: 30) == t2)
+
+        // 再格納すると最終取得時刻が最新時刻へ更新される
+        clock.advance(by: 5)
+        let t3 = clock.now
+        service.storeInCache(img2, for: 20)
+        #expect(service.lastCapturedAt(for: 20) == t3)
+
+        // invalidateThumbnail で画像・時刻ともに削除される
+        service.invalidateThumbnail(for: 20)
+        #expect(service.lastCapturedAt(for: 20) == nil)
+        #expect(service.hasCachedThumbnail(for: 20) == false)
+
+        // pruneCache で除外されたウィンドウの時刻も削除される
+        service.storeInCache(img1, for: 40)
+        service.pruneCache(keeping: [40])
+        #expect(service.lastCapturedAt(for: 30) == nil)
+        #expect(service.lastCapturedAt(for: 40) != nil)
+
+        // clearCache で全時刻・全画像が破棄される
+        service.clearCache()
+        #expect(service.lastCapturedAt(for: 40) == nil)
+        #expect(service.hasCachedThumbnail(for: 40) == false)
+    }
+
+    /// WindowCaptureRefreshPolicy の起動時一括取得・イベント駆動更新・定期更新の対象選定順、
+    /// クールダウン境界判定、および契機マージが仕様どおりに動作することを検証する
+    @Test("WindowCaptureRefreshPolicy は起動時一括・イベント・定期更新の優先順とクールダウン境界を正しく判定する")
+    func captureRefreshPolicyPrioritizesTargetsAndEvaluatesCooldownAndMerging() {
+        let baseNow = Date(timeIntervalSince1970: 1_700_000_100)
+        let entries = [
+            // MRU 0: 現在スペース表示中・キャッシュ済み（クールダウン未経過: 4.9秒前）
+            WindowEntry(id: "on-fresh", cgWindowID: 1, pid: 1, applicationName: "A", windowTitle: "OnFresh", isMinimized: false, isOnScreen: true),
+            // MRU 1: 最小化・未キャッシュ
+            WindowEntry(id: "min-uncached", cgWindowID: 2, pid: 1, applicationName: "A", windowTitle: "MinUncached", isMinimized: true, isOnScreen: false),
+            // MRU 2: 現在スペース表示中・キャッシュ済み（クールダウン経過済み: 6秒前）
+            WindowEntry(id: "on-stale-newer", cgWindowID: 3, pid: 1, applicationName: "A", windowTitle: "OnStaleNewer", isMinimized: false, isOnScreen: true),
+            // MRU 3: 別スペース・未キャッシュ
+            WindowEntry(id: "off-uncached", cgWindowID: 4, pid: 1, applicationName: "A", windowTitle: "OffUncached", isMinimized: false, isOnScreen: false),
+            // MRU 4: 現在スペース表示中・未キャッシュ
+            WindowEntry(id: "on-uncached", cgWindowID: 5, pid: 1, applicationName: "A", windowTitle: "OnUncached", isMinimized: false, isOnScreen: true),
+            // MRU 5: 現在スペース表示中・キャッシュ済み（クールダウン経過済み: 20秒前・最古）
+            WindowEntry(id: "on-stale-oldest", cgWindowID: 6, pid: 1, applicationName: "A", windowTitle: "OnStaleOldest", isMinimized: false, isOnScreen: true),
+            // MRU 6: 別スペース・キャッシュ済み（クールダウン経過済みでも対象外）
+            WindowEntry(id: "off-cached", cgWindowID: 7, pid: 1, applicationName: "A", windowTitle: "OffCached", isMinimized: false, isOnScreen: false),
+            // MRU 7: 最小化・キャッシュ済み（対象外）
+            WindowEntry(id: "min-cached", cgWindowID: 8, pid: 1, applicationName: "A", windowTitle: "MinCached", isMinimized: true, isOnScreen: false),
+            // MRU 8: 重複 cgWindowID（除外される）
+            WindowEntry(id: "dup", cgWindowID: 5, pid: 1, applicationName: "A", windowTitle: "Dup", isMinimized: false, isOnScreen: true),
+            // MRU 9: 現在スペース表示中・キャッシュ済み（ちょうど 5.0 秒前 = 境界で経過扱い）
+            WindowEntry(id: "on-boundary", cgWindowID: 9, pid: 1, applicationName: "A", windowTitle: "OnBoundary", isMinimized: false, isOnScreen: true),
+            // MRU 10: オフスクリーン（isOnScreen == nil）・未キャッシュ
+            WindowEntry(id: "unknown-off-uncached", cgWindowID: 10, pid: 1, applicationName: "A", windowTitle: "UnknownOff", isMinimized: false, isOnScreen: nil)
+        ]
+
+        let timestamps: [UInt32: Date] = [
+            1: baseNow.addingTimeInterval(-4.9),
+            3: baseNow.addingTimeInterval(-6.0),
+            6: baseNow.addingTimeInterval(-20.0),
+            7: baseNow.addingTimeInterval(-30.0),
+            8: baseNow.addingTimeInterval(-30.0),
+            9: baseNow.addingTimeInterval(-5.0)
+        ]
+
+        // 1. 起動時・切替時一括取得: 現在スペース未キャッシュ(5) -> 現在スペースクールダウン経過済み MRU順(3, 6, 9) -> 別スペース未キャッシュ(4, 10) -> 最小化未キャッシュ(2)
+        let startupIDs = WindowCaptureRefreshPolicy.startupBulkPrefetchWindowIDs(
+            from: entries,
+            isCached: { timestamps[$0] != nil },
+            lastCapturedAt: { timestamps[$0] },
+            now: baseNow,
+            cooldown: 5.0
+        )
+        #expect(startupIDs == [5, 3, 6, 9, 4, 10, 2])
+
+        // 2. イベント駆動更新: 現在スペース未キャッシュ(5) -> 現在スペースクールダウン経過済み MRU順(3, 6, 9) のみ
+        let eventIDs = WindowCaptureRefreshPolicy.eventPrefetchWindowIDs(
+            from: entries,
+            isCached: { timestamps[$0] != nil },
+            lastCapturedAt: { timestamps[$0] },
+            now: baseNow,
+            cooldown: 5.0
+        )
+        #expect(eventIDs == [5, 3, 6, 9])
+
+        // 3. 定期更新: 現在スペース未キャッシュ(5) -> 現在スペースクールダウン経過済み 古いキャッシュ順(6:20秒前, 3:6秒前, 9:5秒前)
+        let periodicIDs = WindowCaptureRefreshPolicy.periodicRefreshWindowIDs(
+            from: entries,
+            isCached: { timestamps[$0] != nil },
+            lastCapturedAt: { timestamps[$0] },
+            now: baseNow,
+            cooldown: 5.0
+        )
+        #expect(periodicIDs == [5, 6, 3, 9])
+
+        // 4. 時刻逆転時はクールダウン未経過扱い
+        #expect(
+            WindowCaptureRefreshPolicy.isCooldownElapsed(
+                lastCapturedAt: baseNow.addingTimeInterval(2.0),
+                now: baseNow,
+                cooldown: 5.0
+            ) == false
+        )
+
+        // 5. 即時一括取得判定と契機マージ（一括取得契機は通常イベントで降格されない）
+        #expect(WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: .initialScanCompleted) == true)
+        #expect(WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: .displayStyleEnabled) == true)
+        #expect(WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: .applicationActivated) == false)
+        #expect(WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: .windowFocusChanged) == false)
+        #expect(WindowCaptureRefreshPolicy.isImmediateBulkPrefetch(reason: .windowTitleChanged) == false)
+        #expect(
+            WindowCaptureRefreshPolicy.mergePendingPrefetchReason(
+                existing: .initialScanCompleted,
+                incoming: .windowTitleChanged
+            ) == .initialScanCompleted
+        )
+        #expect(
+            WindowCaptureRefreshPolicy.mergePendingPrefetchReason(
+                existing: .windowFocusChanged,
+                incoming: .displayStyleEnabled
+            ) == .displayStyleEnabled
+        )
+    }
+
+    /// cacheRetentionWindowIDs が OS 生存 CGWindow ID およびフィルタ前候補を保持対象に含め、
+    /// 一時的なフィルタ欠落でのキャッシュ誤消去と OS 側空応答時の全破棄を防ぐことを検証する
+    @Test("WindowCaptureRefreshPolicy.cacheRetentionWindowIDs は OS 生存 ID とフィルタ前候補を保護し空応答時は整理を抑止する")
+    func cacheRetentionWindowIDsProtectsTransientlyFilteredAndOSSurvivingWindows() {
+        let rawCandidates = [
+            // タイトル空で Chrome プロファイル等により WindowFilter から一時除外される別スペース窓を想定
+            RawWindowCandidate(
+                id: "cg-301",
+                cgWindowID: 301,
+                pid: 10,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                hasAXInfo: false,
+                isOnScreen: false
+            ),
+            RawWindowCandidate(
+                id: "w-101",
+                cgWindowID: 101,
+                pid: 20,
+                applicationName: "Safari",
+                title: "Docs",
+                isOnScreen: true
+            )
+        ]
+        let filteredEntries = [
+            WindowEntry(id: "w-101", cgWindowID: 101, pid: 20, applicationName: "Safari", windowTitle: "Docs", isOnScreen: true)
+        ]
+
+        // 1. OS 生存 ID に 401（別スペースで一時的に rawCandidates にも出なかった生存窓）が含まれる場合、101 / 301 / 401 すべて保護される
+        let withOSSurviving = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: [101, 401],
+            rawCandidates: rawCandidates,
+            filteredEntries: filteredEntries
+        )
+        #expect(withOSSurviving == [101, 301, 401])
+
+        // 2. OS 生存 ID が nil（フォールバック）でも、フィルタ前の 301 は保護される
+        let withoutOSSurviving = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: nil,
+            rawCandidates: rawCandidates,
+            filteredEntries: filteredEntries
+        )
+        #expect(withoutOSSurviving == [101, 301])
+
+        // 3. OS 生存 ID が空かつ候補も空の場合は、一時異常による全キャッシュ誤破棄を防ぐため nil（整理スキップ）を返す
+        let emptyOSResponse = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: [],
+            rawCandidates: [],
+            filteredEntries: []
+        )
+        #expect(emptyOSResponse == nil)
     }
 }
