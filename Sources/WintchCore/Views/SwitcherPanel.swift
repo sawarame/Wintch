@@ -41,9 +41,15 @@ public final class SwitcherPanel: NSPanel {
     /// テスト検証用：現在の表示セッション中に実際に `setFrame` を適用した回数
     internal private(set) var appliedResizeCountForTesting: Int = 0
 
+    /// パネル内にホストしている SwiftUI コンテンツのホスティングビュー
+    private let hostingView: NSHostingView<SwitcherContentView>
+
     /// パネルを初期化する
     /// - Parameter contentView: パネル内にホストする SwiftUI コンテンツビュー
     public init(contentView: SwitcherContentView) {
+        let hostingView = NSHostingView(rootView: contentView)
+        self.hostingView = hostingView
+
         super.init(
             contentRect: NSRect(
                 x: 0,
@@ -67,7 +73,6 @@ public final class SwitcherPanel: NSPanel {
         self.hasShadow = true
         self.hidesOnDeactivate = false
 
-        let hostingView = NSHostingView(rootView: contentView)
         // NSHostingView の自動ウィンドウサイズ制約が SwitcherPanel 側の上端固定 setFrame と
         // 競合・押し戻し（リサイズフィードバックループ）を起こさないよう、サイズ制御をパネル側へ一本化する
         hostingView.sizingOptions = []
@@ -79,6 +84,29 @@ public final class SwitcherPanel: NSPanel {
         hostingView.layer?.cornerCurve = .continuous
         hostingView.layer?.masksToBounds = true
         self.contentView = hostingView
+    }
+
+    /// `sizingOptions = []` の環境でも SwiftUI コンテンツの理想サイズを正確に計測して返す
+    /// 通常時は自動ウィンドウサイズ制約との競合を防ぐため `sizingOptions = []` を維持し、
+    /// 計測の瞬間のみ `.intrinsicContentSize` を一時有効化して最新状態の理想サイズを取得する
+    /// - Returns: 計測された SwiftUI コンテンツのサイズ
+    internal func measuredContentSize() -> CGSize {
+        let previousOptions = hostingView.sizingOptions
+        let wasApplyingFrameUpdate = isApplyingFrameUpdate
+        isApplyingFrameUpdate = true
+        hostingView.sizingOptions = [.intrinsicContentSize]
+        defer {
+            hostingView.sizingOptions = previousOptions
+            isApplyingFrameUpdate = wasApplyingFrameUpdate
+        }
+
+        hostingView.invalidateIntrinsicContentSize()
+        hostingView.layoutSubtreeIfNeeded()
+        let intrinsic = hostingView.intrinsicContentSize
+        if intrinsic.width > 0 && intrinsic.height > 0 {
+            return intrinsic
+        }
+        return hostingView.fittingSize
     }
 
     /// コンテンツ構成（検索結果・グルーピング・言語等）の変化開始を通知し、リサイズ安定化サイクルをリセットする
@@ -213,13 +241,13 @@ public final class SwitcherPanel: NSPanel {
             onPrepareScreenSize?(visibleSize)
         }
 
-        if let hostingView = contentView {
-            hostingView.layoutSubtreeIfNeeded()
-            let fittingSize = hostingView.fittingSize
-            if fittingSize.width > 0 && fittingSize.height > 0 {
-                let normalized = SwitcherPanelResizeStabilizer.normalizedSize(from: fittingSize)
-                setContentSize(normalized)
-            }
+        let measuredSize = measuredContentSize()
+        if measuredSize.width > 0 && measuredSize.height > 0 {
+            let normalized = SwitcherPanelResizeStabilizer.normalizedSize(from: measuredSize)
+            // 表示準備時の初期サイズ適用中に発生する同期レイアウト再入を遮断する
+            isApplyingFrameUpdate = true
+            setContentSize(normalized)
+            isApplyingFrameUpdate = false
         }
 
         if let screenFrame = targetScreen?.visibleFrame {
@@ -253,14 +281,14 @@ public final class SwitcherPanel: NSPanel {
 
     /// 表示中に上端位置を固定したままコンテンツ高さの変化に応じて下方向へリサイズする
     public func updateAnchoredHeightIfNeeded() {
-        guard isVisible, currentMode != .inactive, anchoredTopY != nil, !isApplyingFrameUpdate, let hostingView = contentView else {
+        guard isVisible, currentMode != .inactive, anchoredTopY != nil, !isApplyingFrameUpdate else {
             return
         }
 
-        hostingView.layoutSubtreeIfNeeded()
-        let fittingSize = hostingView.fittingSize
-        let targetWidth = fittingSize.width > 0 ? fittingSize.width : frame.width
-        updateAnchoredSize(to: CGSize(width: targetWidth, height: fittingSize.height))
+        let measuredSize = measuredContentSize()
+        let targetWidth = measuredSize.width > 0 ? measuredSize.width : frame.width
+        let targetHeight = measuredSize.height > 0 ? measuredSize.height : frame.height
+        updateAnchoredSize(to: CGSize(width: targetWidth, height: targetHeight))
     }
 
     /// パネルを非表示にし、必要であれば直前アプリへフォーカスを戻す

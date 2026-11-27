@@ -119,7 +119,7 @@ public struct SwitcherListView: View {
                     height: proxy.size.height.rounded()
                 )
                 Color.clear
-                    .onChange(of: roundedSize) { oldSize, newSize in
+                    .onChange(of: roundedSize, initial: true) { oldSize, newSize in
                         onContentSizeChanged?(newSize)
                         if abs(oldSize.height - newSize.height) >= 1.0 {
                             onContentHeightChanged?(newSize.height)

@@ -74,7 +74,7 @@ public struct SwitcherIconGridView: View {
                         height: proxy.size.height.rounded()
                     )
                     Color.clear
-                        .onChange(of: roundedSize) { _, newSize in
+                        .onChange(of: roundedSize, initial: true) { _, newSize in
                             onContentSizeChanged?(newSize)
                         }
                 }
