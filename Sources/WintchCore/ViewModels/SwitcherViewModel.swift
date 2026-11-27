@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import OSLog
 
 /// スイッチャーパネルの現在の表示モード
 public enum SwitcherMode: Equatable, Sendable {
@@ -25,6 +26,9 @@ public enum SwitcherDismissReason: Equatable, Sendable {
 @MainActor
 @Observable
 public final class SwitcherViewModel {
+    /// バックグラウンドキャプチャ・鮮度更新・キャッシュ整理の診断ログ出力用ロガー
+    private static let captureLogger = Logger(subsystem: "dev.wintch.Wintch", category: "SwitcherCapture")
+
     /// 現在の表示モード
     public private(set) var mode: SwitcherMode = .inactive
 
@@ -545,6 +549,7 @@ public final class SwitcherViewModel {
 
     /// 画面収録権限の実行時拒否・失効を検知した際、進行中の全バックグラウンド取得および定期更新ループを即座に停止しキャッシュを全破棄する
     private func handleRuntimeScreenRecordingRevoked() {
+        Self.captureLogger.info("画面収録権限の実行時失効を検知したため全バックグラウンド更新を停止しキャッシュを破棄します")
         cancelAllBackgroundCaptureTasks()
         windowCaptureService?.clearCache()
     }
@@ -555,15 +560,40 @@ public final class SwitcherViewModel {
         switch event {
         case let .paused(reason):
             activeSystemCapturePauseReasons.insert(reason)
+            Self.captureLogger.debug("システム状態により定期更新を一時停止: reason=\(String(describing: reason), privacy: .public) activeReasons=\(self.activeSystemCapturePauseReasons.count)")
             cancelBackgroundCapturePrefetchTask()
             stopPeriodicCaptureRefreshLoop()
             pendingPrefetchReasonAfterInFlight = nil
         case let .resumed(reason):
             activeSystemCapturePauseReasons.remove(reason)
+            Self.captureLogger.debug("システム状態復帰を受信: reason=\(String(describing: reason), privacy: .public) remainingReasons=\(self.activeSystemCapturePauseReasons.count)")
             if !isSystemCapturePaused {
                 syncPeriodicCaptureRefreshLoop()
             }
         }
+    }
+
+    /// OS 側の生存 CGWindow ID 集合およびフィルタ前生候補との和集合で安全にキャッシュ整理を実行する
+    /// - Parameters:
+    ///   - rawCandidates: フィルタ前の生ウィンドウ候補一覧
+    ///   - filteredEntries: フィルタ後の表示対象ウィンドウ一覧
+    ///   - context: ログ診断用の呼び出し契機名
+    private func pruneCaptureCacheSafely(
+        rawCandidates: [RawWindowCandidate],
+        filteredEntries: [WindowEntry],
+        context: String
+    ) {
+        guard let windowCaptureService else { return }
+        let survivingCGIDs = windowService.survivingCGWindowIDsForCachePruning()
+        guard let retainedIDs = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: survivingCGIDs,
+            rawCandidates: rawCandidates,
+            filteredEntries: filteredEntries
+        ) else {
+            Self.captureLogger.debug("OS 生存ウィンドウ集合が空のためキャッシュ整理をスキップ: context=\(context, privacy: .public)")
+            return
+        }
+        windowCaptureService.pruneCache(keeping: retainedIDs)
     }
 
     /// グリッド表示（アイコン型・キャプチャ表示型）で現在適用されている列数を更新する
@@ -1082,16 +1112,22 @@ public final class SwitcherViewModel {
             // キャプチャ表示型では起動直後にキャッシュ済みサムネイルのみ即時反映し、表示遅延を起こさない
             var initialThumbnails: [UInt32: NSImage] = [:]
             if granted, let windowCaptureService {
-                // 閉じ済みウィンドウのキャッシュを先に破棄し、MRU 最古→最新の順で参照して
-                // 直近アクティブウィンドウが LRU 追い出し優先位置へ押し出されないようにする
-                let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
-                windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+                // OS 生存 ID・フィルタ前候補を基準に閉じ済み分のみ安全に整理し、
+                // MRU 最古→最新の順で参照して直近アクティブウィンドウが LRU 追い出し優先位置へ押し出されないようにする
+                pruneCaptureCacheSafely(
+                    rawCandidates: rawCandidates,
+                    filteredEntries: sorted,
+                    context: "present"
+                )
                 for entry in sorted.reversed() {
                     if let windowID = entry.cgWindowID,
                        let cached = windowCaptureService.cachedThumbnail(for: windowID) {
                         initialThumbnails[windowID] = cached
                     }
                 }
+                Self.captureLogger.debug(
+                    "パネル初期表示キャッシュ参照: entries=\(sorted.count) cacheHits=\(initialThumbnails.count)"
+                )
             }
             capturedThumbnails = initialThumbnails
         } else {
@@ -1338,9 +1374,12 @@ public final class SwitcherViewModel {
         let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
         let sorted = WindowSorter.sortByMRU(filtered)
 
-        // 全操作スペースの生存ウィンドウ ID 集合で閉じ済み分のキャッシュのみ整理し、別スペースのキャッシュは保持する
-        let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
-        windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+        // OS 生存ウィンドウ ID とフィルタ前候補を基準に、閉じ済み分のキャッシュのみ安全に整理する
+        pruneCaptureCacheSafely(
+            rawCandidates: rawCandidates,
+            filteredEntries: sorted,
+            context: "prefetch:\(String(describing: reason))"
+        )
 
         let now = nowProvider()
         let targetIDs: [UInt32]
@@ -1361,6 +1400,9 @@ public final class SwitcherViewModel {
                 cooldown: captureRefreshCooldown
             )
         }
+        Self.captureLogger.debug(
+            "バックグラウンド事前取得: reason=\(String(describing: reason), privacy: .public) entries=\(sorted.count) targets=\(targetIDs.count)"
+        )
         guard !targetIDs.isEmpty else { return }
 
         isCapturePrefetchInFlight = true
@@ -1475,8 +1517,12 @@ public final class SwitcherViewModel {
         let filtered = WindowFilter.filterAndMap(rawCandidates, screenBounds: screenBounds)
         let sorted = WindowSorter.sortByMRU(filtered)
 
-        let activeCGWindowIDs = Set(sorted.compactMap(\.cgWindowID))
-        windowCaptureService.pruneCache(keeping: activeCGWindowIDs)
+        // OS 生存ウィンドウ ID とフィルタ前候補を基準に、一時欠落による別スペースキャッシュ誤消去を防ぐ
+        pruneCaptureCacheSafely(
+            rawCandidates: rawCandidates,
+            filteredEntries: sorted,
+            context: "periodic"
+        )
 
         let targetIDs = WindowCaptureRefreshPolicy.periodicRefreshWindowIDs(
             from: sorted,
@@ -1484,6 +1530,9 @@ public final class SwitcherViewModel {
             lastCapturedAt: { windowCaptureService.lastCapturedAt(for: $0) },
             now: nowProvider(),
             cooldown: captureRefreshCooldown
+        )
+        Self.captureLogger.debug(
+            "定期バックグラウンド更新: entries=\(sorted.count) targets=\(targetIDs.count)"
         )
         guard !targetIDs.isEmpty else {
             return true

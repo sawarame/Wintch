@@ -54,6 +54,8 @@ final class MockWindowService: WindowServicing {
     var stopObservingCallCount = 0
     /// 返却する生ウィンドウ候補一覧
     var stubbedCandidates: [RawWindowCandidate] = []
+    /// キャッシュ整理用に返却する OS 生存 CGWindow ID 集合スタブ（nil 時は候補ベースフォールバック）
+    var stubbedSurvivingCGWindowIDs: Set<UInt32>?
     /// アクティブ化が要求されたウィンドウ履歴
     var activatedWindows: [WindowEntry] = []
     /// クローズが要求されたウィンドウ履歴
@@ -111,6 +113,12 @@ final class MockWindowService: WindowServicing {
     /// - Returns: 生ウィンドウ候補の配列
     func fetchRawWindowCandidates() -> [RawWindowCandidate] {
         stubbedCandidates
+    }
+
+    /// スタブ設定された OS 生存 CGWindow ID 集合を返す
+    /// - Returns: 生存 CGWindow ID 集合（未設定時は nil）
+    func survivingCGWindowIDsForCachePruning() -> Set<UInt32>? {
+        stubbedSurvivingCGWindowIDs
     }
 
     /// 対象ウィンドウのアクティブ化要求を記録する

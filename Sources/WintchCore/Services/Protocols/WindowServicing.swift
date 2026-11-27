@@ -104,6 +104,10 @@ public protocol WindowServicing: AnyObject {
     /// - Returns: ディスプレイ矩形配列
     func currentDisplayBounds() -> [WindowBounds]
 
+    /// キャッシュ整理用に OS（WindowServer）上で現在生存している全 CGWindow ID 集合を返す
+    /// - Returns: 生存中の CGWindow ID 集合（未対応または一時取得失敗時は nil）
+    func survivingCGWindowIDsForCachePruning() -> Set<UInt32>?
+
     /// 指定されたウィンドウを最前面にアクティブ化する（必要なら操作スペース移動・最小化解除を含む）
     /// - Parameter entry: アクティブ化対象のウィンドウ項目
     func activateWindow(_ entry: WindowEntry)
@@ -146,5 +150,11 @@ public extension WindowServicing {
     /// - Returns: ディスプレイ矩形配列
     func currentDisplayBounds() -> [WindowBounds] {
         []
+    }
+
+    /// デフォルト実装として nil を返す（テストモック互換用）
+    /// - Returns: 既定では nil（呼び出し元で候補ベースへフォールバック）
+    func survivingCGWindowIDsForCachePruning() -> Set<UInt32>? {
+        nil
     }
 }

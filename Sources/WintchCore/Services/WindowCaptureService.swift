@@ -2,11 +2,15 @@ import AppKit
 import CoreGraphics
 import Foundation
 import os
+import OSLog
 @preconcurrency import ScreenCaptureKit
 
 /// ScreenCaptureKit を用いてウィンドウサムネイルを非同期取得し、上限付き LRU メモリキャッシュを管理するサービス実装
 @MainActor
 public final class WindowCaptureService: WindowCaptureServicing {
+    /// 診断ログ出力用ロガー（ウィンドウ ID・件数・エラーコードのみ出力し、画像内容やタイトルは出力しない）
+    private static let logger = Logger(subsystem: "dev.wintch.Wintch", category: "WindowCaptureService")
+
     /// スレッド境界を跨いで SCWindow 参照を受け渡すための Sendable ラッパー
     private struct SendableSCWindow: @unchecked Sendable {
         let value: SCWindow
@@ -17,9 +21,9 @@ public final class WindowCaptureService: WindowCaptureServicing {
         /// サムネイル画像の取得成功
         case captured(UInt32, CGImage)
         /// 画面収録権限の拒否・不足による失敗
-        case permissionDenied
+        case permissionDenied(windowID: UInt32, errorCode: Int)
         /// 権限以外の一時的失敗またはタイムアウト
-        case failed
+        case failed(windowID: UInt32, isOnScreen: Bool, reason: String)
     }
 
     /// タイムアウト付き非同期レースの状態管理構造体
@@ -129,8 +133,13 @@ public final class WindowCaptureService: WindowCaptureServicing {
         do {
             shareableWindowsByID = try await Self.fetchShareableWindows(for: targetIDSet)
         } catch {
+            let nsError = error as NSError
+            let isDenied = Self.isPermissionDeniedError(error)
+            Self.logger.info(
+                "SCShareableContent 取得失敗: domain=\(nsError.domain, privacy: .public) code=\(nsError.code) permissionDenied=\(isDenied)"
+            )
             // 再ビルドや権限変更で TCC が拒否を返した場合はセッション内失効として記録し、次回以降の OS ダイアログ再発を防ぐ
-            if Self.isPermissionDeniedError(error) {
+            if isDenied {
                 handlePermissionDenied()
             }
             return
@@ -140,12 +149,20 @@ public final class WindowCaptureService: WindowCaptureServicing {
 
         // 画面表示中（isOnScreen）のウィンドウを優先し、各群内では呼び出し元指定順（MRU・未キャッシュ優先）を維持する
         let requestedTargets = cgWindowIDs.compactMap { shareableWindowsByID[$0] }
-        let orderedTargets = requestedTargets.filter(\.value.isOnScreen)
-            + requestedTargets.filter { !$0.value.isOnScreen }
+        let onScreenTargets = requestedTargets.filter(\.value.isOnScreen)
+        let offScreenTargets = requestedTargets.filter { !$0.value.isOnScreen }
+        let orderedTargets = onScreenTargets + offScreenTargets
+        let missingCount = cgWindowIDs.count - requestedTargets.count
+        Self.logger.debug(
+            "キャプチャ開始: requested=\(cgWindowIDs.count) matched=\(orderedTargets.count) onScreen=\(onScreenTargets.count) offScreen=\(offScreenTargets.count) missing=\(missingCount)"
+        )
         guard !orderedTargets.isEmpty else { return }
 
         let capturedEpoch = cacheEpoch
         invalidatedWindowIDsDuringCapture.removeAll()
+        var succeededCount = 0
+        var failedOnScreenCount = 0
+        var failedOffScreenCount = 0
 
         await withTaskGroup(of: SingleCaptureResult.self) { group in
             var nextIndex = 0
@@ -165,7 +182,10 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     break
                 }
 
-                if case .permissionDenied = result {
+                if case let .permissionDenied(windowID, errorCode) = result {
+                    Self.logger.info(
+                        "キャプチャ中に画面収録権限拒否を検知: windowID=\(windowID) code=\(errorCode)"
+                    )
                     // 実行中の権限取り消しを検知した時点で残りのキャプチャを中断する
                     handlePermissionDenied()
                     group.cancelAll()
@@ -180,25 +200,46 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     }
                 }
 
-                if case let .captured(windowID, cgImage) = result,
-                   !invalidatedWindowIDsDuringCapture.contains(windowID) {
-                    let nsImage = NSImage(
-                        cgImage: cgImage,
-                        size: NSSize(width: cgImage.width, height: cgImage.height)
+                switch result {
+                case let .captured(windowID, cgImage):
+                    if !invalidatedWindowIDsDuringCapture.contains(windowID) {
+                        let nsImage = NSImage(
+                            cgImage: cgImage,
+                            size: NSSize(width: cgImage.width, height: cgImage.height)
+                        )
+                        storeInCache(nsImage, for: windowID)
+                        succeededCount += 1
+                        onCaptured(windowID, nsImage)
+                    }
+                case let .failed(windowID, isOnScreen, reason):
+                    if isOnScreen {
+                        failedOnScreenCount += 1
+                    } else {
+                        failedOffScreenCount += 1
+                    }
+                    Self.logger.debug(
+                        "単一キャプチャ失敗: windowID=\(windowID) isOnScreen=\(isOnScreen) reason=\(reason, privacy: .public)"
                     )
-                    storeInCache(nsImage, for: windowID)
-                    onCaptured(windowID, nsImage)
+                case .permissionDenied:
+                    break
                 }
             }
         }
+
+        Self.logger.debug(
+            "キャプチャ完了: succeeded=\(succeededCount) failedOnScreen=\(failedOnScreenCount) failedOffScreen=\(failedOffScreenCount) cacheCount=\(self.thumbnailCache.count)"
+        )
     }
 
     /// 指定ウィンドウのキャッシュを削除する
     /// - Parameter cgWindowID: 削除対象の CoreGraphics ウィンドウ ID
     public func invalidateThumbnail(for cgWindowID: UInt32) {
         invalidatedWindowIDsDuringCapture.insert(cgWindowID)
-        thumbnailCache.removeValue(forKey: cgWindowID)
+        let hadEntry = thumbnailCache.removeValue(forKey: cgWindowID) != nil
         cacheOrder.removeAll { $0 == cgWindowID }
+        if hadEntry {
+            Self.logger.debug("単一キャッシュ無効化: windowID=\(cgWindowID) remaining=\(self.thumbnailCache.count)")
+        }
     }
 
     /// 現在開いている有効ウィンドウ ID 集合に含まれない閉じ済みウィンドウのキャッシュを破棄する
@@ -211,14 +252,21 @@ public final class WindowCaptureService: WindowCaptureServicing {
             invalidatedWindowIDsDuringCapture.insert(windowID)
         }
         cacheOrder.removeAll { !activeCGWindowIDs.contains($0) }
+        Self.logger.info(
+            "キャッシュ整理で破棄: pruned=\(staleIDs.count) keepingSetCount=\(activeCGWindowIDs.count) remaining=\(self.thumbnailCache.count)"
+        )
     }
 
     /// 保持している全サムネイルキャッシュをメモリから破棄する
     public func clearCache() {
+        let previousCount = thumbnailCache.count
         cacheEpoch += 1
         invalidatedWindowIDsDuringCapture.removeAll()
         thumbnailCache.removeAll()
         cacheOrder.removeAll()
+        if previousCount > 0 {
+            Self.logger.info("キャッシュ全破棄: cleared=\(previousCount)")
+        }
     }
 
     /// 指定されたウィンドウ ID 集合に該当する SCWindow を非同期で取得し、Sendable ラッパー辞書として返す
@@ -258,9 +306,12 @@ public final class WindowCaptureService: WindowCaptureServicing {
         _ target: SendableSCWindow,
         maxPixelSize: CGSize
     ) async -> SingleCaptureResult {
-        guard !Task.isCancelled else { return .failed }
-
         let windowID = target.value.windowID
+        let isOnScreen = target.value.isOnScreen
+        guard !Task.isCancelled else {
+            return .failed(windowID: windowID, isOnScreen: isOnScreen, reason: "cancelled")
+        }
+
         let targetSize = scaledPixelSize(for: target.value.frame.size, maxPixelSize: maxPixelSize)
 
         let captureResult = await runWithTimeout(seconds: captureTimeoutSeconds) {
@@ -276,14 +327,31 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     configuration: config
                 )
                 guard Self.isValidCapturedImageSize(CGSize(width: image.width, height: image.height)) else {
-                    return SingleCaptureResult.failed
+                    return SingleCaptureResult.failed(
+                        windowID: windowID,
+                        isOnScreen: isOnScreen,
+                        reason: "emptyImageSize"
+                    )
                 }
                 return SingleCaptureResult.captured(windowID, image)
             } catch {
-                return Self.isPermissionDeniedError(error) ? .permissionDenied : .failed
+                let nsError = error as NSError
+                if Self.isPermissionDeniedError(error) {
+                    return .permissionDenied(windowID: windowID, errorCode: nsError.code)
+                }
+                return .failed(
+                    windowID: windowID,
+                    isOnScreen: isOnScreen,
+                    reason: "\(nsError.domain):\(nsError.code)"
+                )
             }
         }
-        guard !Task.isCancelled, let captureResult else { return .failed }
+        guard !Task.isCancelled else {
+            return .failed(windowID: windowID, isOnScreen: isOnScreen, reason: "cancelled")
+        }
+        guard let captureResult else {
+            return .failed(windowID: windowID, isOnScreen: isOnScreen, reason: "timeout")
+        }
         return captureResult
     }
 

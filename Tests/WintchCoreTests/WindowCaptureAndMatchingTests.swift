@@ -1114,4 +1114,58 @@ struct WindowCaptureAndMatchingTests {
             ) == .displayStyleEnabled
         )
     }
+
+    /// cacheRetentionWindowIDs が OS 生存 CGWindow ID およびフィルタ前候補を保持対象に含め、
+    /// 一時的なフィルタ欠落でのキャッシュ誤消去と OS 側空応答時の全破棄を防ぐことを検証する
+    @Test("WindowCaptureRefreshPolicy.cacheRetentionWindowIDs は OS 生存 ID とフィルタ前候補を保護し空応答時は整理を抑止する")
+    func cacheRetentionWindowIDsProtectsTransientlyFilteredAndOSSurvivingWindows() {
+        let rawCandidates = [
+            // タイトル空で Chrome プロファイル等により WindowFilter から一時除外される別スペース窓を想定
+            RawWindowCandidate(
+                id: "cg-301",
+                cgWindowID: 301,
+                pid: 10,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                hasAXInfo: false,
+                isOnScreen: false
+            ),
+            RawWindowCandidate(
+                id: "w-101",
+                cgWindowID: 101,
+                pid: 20,
+                applicationName: "Safari",
+                title: "Docs",
+                isOnScreen: true
+            )
+        ]
+        let filteredEntries = [
+            WindowEntry(id: "w-101", cgWindowID: 101, pid: 20, applicationName: "Safari", windowTitle: "Docs", isOnScreen: true)
+        ]
+
+        // 1. OS 生存 ID に 401（別スペースで一時的に rawCandidates にも出なかった生存窓）が含まれる場合、101 / 301 / 401 すべて保護される
+        let withOSSurviving = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: [101, 401],
+            rawCandidates: rawCandidates,
+            filteredEntries: filteredEntries
+        )
+        #expect(withOSSurviving == [101, 301, 401])
+
+        // 2. OS 生存 ID が nil（フォールバック）でも、フィルタ前の 301 は保護される
+        let withoutOSSurviving = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: nil,
+            rawCandidates: rawCandidates,
+            filteredEntries: filteredEntries
+        )
+        #expect(withoutOSSurviving == [101, 301])
+
+        // 3. OS 生存 ID が空かつ候補も空の場合は、一時異常による全キャッシュ誤破棄を防ぐため nil（整理スキップ）を返す
+        let emptyOSResponse = WindowCaptureRefreshPolicy.cacheRetentionWindowIDs(
+            survivingCGWindowIDs: [],
+            rawCandidates: [],
+            filteredEntries: []
+        )
+        #expect(emptyOSResponse == nil)
+    }
 }

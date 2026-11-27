@@ -141,6 +141,9 @@ public final class WindowService: WindowServicing {
     /// 操作スペース切り替え後のバックグラウンド全体再走査が完了するまでフルスクリーン置換を抑制するフラグ
     private var hasPendingSpaceChange = false
 
+    /// 直近の `fetchCGWindowInfos()` で WindowServer 上に確認された全 CGWindow ID 集合（キャッシュ誤消去防止用）
+    private var lastObservedCGWindowIDs: Set<UInt32>?
+
     /// バックグラウンド AX IPC 呼び出しを並列実行するためのコンカレントワーカーキュー
     private nonisolated let axWorkerQueue = DispatchQueue(
         label: "dev.wintch.WindowService.AXWorker",
@@ -362,6 +365,17 @@ public final class WindowService: WindowServicing {
         cachedWindowsByPID.removeAll()
         cachedWindowMenuByPID.removeAll()
         trackedCloseTargetsByEntryID.removeAll()
+        lastObservedCGWindowIDs = nil
+    }
+
+    /// キャッシュ整理用に OS（WindowServer）上で現在生存している全 CGWindow ID 集合を返す
+    /// - Returns: 直近の `fetchCGWindowInfos()` または最新取得で確認できた生存 CGWindow ID 集合（取得失敗時は nil）
+    public func survivingCGWindowIDsForCachePruning() -> Set<UInt32>? {
+        if let lastObservedCGWindowIDs {
+            return lastObservedCGWindowIDs
+        }
+        let infos = fetchCGWindowInfos()
+        return infos.isEmpty ? nil : Set(infos.map(\.windowID))
     }
 
     /// 現在の全操作スペース上のウィンドウ候補を収集して返す
@@ -1059,10 +1073,11 @@ public final class WindowService: WindowServicing {
     private func fetchCGWindowInfos() -> [CGWindowMeta] {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let rawList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            lastObservedCGWindowIDs = nil
             return []
         }
 
-        return rawList.compactMap { dict in
+        let metas: [CGWindowMeta] = rawList.compactMap { dict in
             guard let windowID = dict[kCGWindowNumber as String] as? UInt32,
                   let pid = dict[kCGWindowOwnerPID as String] as? Int32,
                   let layer = dict[kCGWindowLayer as String] as? Int,
@@ -1083,6 +1098,8 @@ public final class WindowService: WindowServicing {
                 name: name
             )
         }
+        lastObservedCGWindowIDs = metas.isEmpty ? nil : Set(metas.map(\.windowID))
+        return metas
     }
 
     /// 起動中の全通常アプリの AX ウィンドウをスキャンしてキャッシュを更新する（同期呼び出し用）

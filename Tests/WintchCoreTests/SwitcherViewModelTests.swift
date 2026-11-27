@@ -3684,4 +3684,92 @@ struct SwitcherViewModelTests {
         #expect(maxObservedConcurrentCount == 1)
         viewModel.stopBackgroundCaptureWork()
     }
+
+    /// 定期更新・イベント更新時に別スペースのウィンドウが一時的にフィルタや候補一覧から欠落しても、
+    /// OS 生存 CGWindow ID に含まれていれば既存サムネイルキャッシュが誤消去されず、
+    /// OS 側からも完全に消滅した閉じ済みウィンドウのみが整理されることを検証する
+    @Test("バックグラウンド更新時の一時欠落で別スペースのキャッシュが誤消去されず、OS 上から消えた窓のみ整理される")
+    @MainActor
+    func backgroundRefreshPreservesOtherSpaceCacheWhenWindowSurvivesInOS() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+
+        let baseNow = Date(timeIntervalSince1970: 1_700_004_000)
+        let clock = MutableTestClock(initial: baseNow)
+        let captureService = MockWindowCaptureService()
+        captureService.nowProvider = { clock.now }
+
+        let otherSpaceChromeImg = NSImage(size: NSSize(width: 100, height: 70))
+        let otherSpaceFullscreenImg = NSImage(size: NSSize(width: 100, height: 70))
+        let closedWindowImg = NSImage(size: NSSize(width: 80, height: 60))
+        let currentSpaceImg = NSImage(size: NSSize(width: 100, height: 70))
+
+        // 981: 別スペースの Chrome（rawCandidates にはあるがタイトル一時欠落で WindowFilter に弾かれる想定）
+        // 982: 別スペースのフルスクリーン窓（rawCandidates からも一瞬欠落したが OS 生存 ID には残存）
+        // 989: 本当に閉じられて OS からも消滅したウィンドウ
+        captureService.cachedThumbnails[981] = otherSpaceChromeImg
+        captureService.cachedThumbnailTimestamps[981] = baseNow.addingTimeInterval(-30)
+        captureService.cachedThumbnails[982] = otherSpaceFullscreenImg
+        captureService.cachedThumbnailTimestamps[982] = baseNow.addingTimeInterval(-30)
+        captureService.cachedThumbnails[989] = closedWindowImg
+        captureService.cachedThumbnailTimestamps[989] = baseNow.addingTimeInterval(-30)
+        captureService.stubbedAsyncThumbnails[980] = currentSpaceImg
+
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w-current",
+                cgWindowID: 980,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Current",
+                isOnScreen: true,
+                lastActivatedAt: baseNow
+            ),
+            RawWindowCandidate(
+                id: "cg-981",
+                cgWindowID: 981,
+                pid: 20,
+                bundleIdentifier: "com.google.Chrome",
+                applicationName: "Google Chrome",
+                title: nil,
+                hasAXInfo: false,
+                isOnScreen: false,
+                lastActivatedAt: baseNow.addingTimeInterval(-10)
+            )
+        ]
+        // OS 上では 980, 981, 982 が生存しており、989 のみ消滅している
+        windowService.stubbedSurvivingCGWindowIDs = [980, 981, 982]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            normalDisplayStyle: .capture,
+            capturePrefetchDebounceDuration: .milliseconds(10),
+            captureRefreshCooldown: 5.0,
+            periodicCaptureRefreshInterval: .milliseconds(25),
+            nowProvider: { clock.now },
+            isBackgroundCapturePrefetchEnabled: true
+        )
+
+        // 定期更新が 1 回完了するまで待機する
+        for _ in 0..<100 where captureService.capturedRequestWindowIDs.isEmpty {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        // 本当に閉じた 989 のみ破棄され、一時欠落した別スペースの 981・982 はキャッシュが保持され続ける
+        #expect(captureService.cachedThumbnails[989] == nil)
+        #expect(captureService.cachedThumbnails[981] === otherSpaceChromeImg)
+        #expect(captureService.cachedThumbnails[982] === otherSpaceFullscreenImg)
+        #expect(captureService.cachedThumbnails[980] === currentSpaceImg)
+
+        viewModel.stopBackgroundCaptureWork()
+    }
 }
