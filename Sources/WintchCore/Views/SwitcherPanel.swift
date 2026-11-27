@@ -100,13 +100,76 @@ public final class SwitcherPanel: NSPanel {
             isApplyingFrameUpdate = wasApplyingFrameUpdate
         }
 
+        // 非表示（orderOut）中や @Observable 更新直後の同一 RunLoop ターン内でも
+        // 直前の非表示状態のキャッシュ値が返らないよう、rootView 再適用と needsLayout 明示で同期再評価させる
+        hostingView.rootView = hostingView.rootView
         hostingView.invalidateIntrinsicContentSize()
+        hostingView.needsLayout = true
         hostingView.layoutSubtreeIfNeeded()
         let intrinsic = hostingView.intrinsicContentSize
         if intrinsic.width > 0 && intrinsic.height > 0 {
             return intrinsic
         }
         return hostingView.fittingSize
+    }
+
+    /// 現在の SwiftUI コンテンツ実寸を計測し、指定ディスプレイおよび垂直配置スタイルに合わせてパネルの寸法と位置を同期適用する
+    /// - Parameters:
+    ///   - targetScreen: 配置先ディスプレイ（未取得時は中央配置へフォールバック）
+    ///   - placement: 適用する垂直配置スタイル
+    ///   - forceOriginUpdate: サイズ差分がない場合でも配置座標を必ず再適用する場合は true
+    /// - Returns: パネルのサイズまたは座標を実際に更新した場合は true
+    @discardableResult
+    private func applyMeasuredLayout(
+        in targetScreen: NSScreen?,
+        placement: SwitcherPanelVerticalPlacement,
+        forceOriginUpdate: Bool
+    ) -> Bool {
+        let measuredSize = measuredContentSize()
+        guard measuredSize.width > 0 && measuredSize.height > 0 else {
+            return false
+        }
+
+        let normalized = SwitcherPanelResizeStabilizer.normalizedSize(from: measuredSize)
+        let targetOrigin: NSPoint?
+        if let screenFrame = targetScreen?.visibleFrame {
+            let origin = SwitcherPanelLayout.panelOrigin(
+                panelSize: normalized,
+                in: screenFrame,
+                placement: placement
+            )
+            targetOrigin = NSPoint(x: origin.x.rounded(), y: origin.y.rounded())
+        } else {
+            targetOrigin = nil
+        }
+
+        let needsSizeUpdate = abs(frame.size.width - normalized.width) >= SwitcherPanelResizeStabilizer.minimumDeltaThreshold
+            || abs(frame.size.height - normalized.height) >= SwitcherPanelResizeStabilizer.minimumDeltaThreshold
+        let needsOriginUpdate: Bool
+        if let targetOrigin {
+            needsOriginUpdate = abs(frame.origin.x - targetOrigin.x) >= SwitcherPanelResizeStabilizer.minimumDeltaThreshold
+                || abs(frame.origin.y - targetOrigin.y) >= SwitcherPanelResizeStabilizer.minimumDeltaThreshold
+        } else {
+            needsOriginUpdate = forceOriginUpdate
+        }
+
+        guard needsSizeUpdate || needsOriginUpdate || forceOriginUpdate else {
+            anchoredTopY = frame.maxY.rounded()
+            return false
+        }
+
+        // 表示準備時のサイズ・座標適用中に発生する同期レイアウト再入を遮断する
+        isApplyingFrameUpdate = true
+        defer { isApplyingFrameUpdate = false }
+
+        if let targetOrigin {
+            setFrame(NSRect(origin: targetOrigin, size: normalized), display: isVisible)
+        } else {
+            setContentSize(normalized)
+            center()
+        }
+        anchoredTopY = frame.maxY.rounded()
+        return true
     }
 
     /// コンテンツ構成（検索結果・グルーピング・言語等）の変化開始を通知し、リサイズ安定化サイクルをリセットする
@@ -241,28 +304,21 @@ public final class SwitcherPanel: NSPanel {
             onPrepareScreenSize?(visibleSize)
         }
 
-        let measuredSize = measuredContentSize()
-        if measuredSize.width > 0 && measuredSize.height > 0 {
-            let normalized = SwitcherPanelResizeStabilizer.normalizedSize(from: measuredSize)
-            // 表示準備時の初期サイズ適用中に発生する同期レイアウト再入を遮断する
-            isApplyingFrameUpdate = true
-            setContentSize(normalized)
-            isApplyingFrameUpdate = false
+        if !applyMeasuredLayout(in: targetScreen, placement: verticalPlacement, forceOriginUpdate: true) {
+            if let screenFrame = targetScreen?.visibleFrame {
+                let origin = SwitcherPanelLayout.panelOrigin(
+                    panelSize: frame.size,
+                    in: screenFrame,
+                    placement: verticalPlacement
+                )
+                setFrameOrigin(NSPoint(x: origin.x.rounded(), y: origin.y.rounded()))
+            } else {
+                center()
+            }
+            // 表示中のウィンドウクローズ等で高さが変わった際に上端位置を維持するため両モードで上端座標を記録する
+            anchoredTopY = frame.maxY.rounded()
         }
 
-        if let screenFrame = targetScreen?.visibleFrame {
-            let origin = SwitcherPanelLayout.panelOrigin(
-                panelSize: frame.size,
-                in: screenFrame,
-                placement: verticalPlacement
-            )
-            setFrameOrigin(NSPoint(x: origin.x.rounded(), y: origin.y.rounded()))
-        } else {
-            center()
-        }
-
-        // 表示中のウィンドウクローズ等で高さが変わった際に上端位置を維持するため両モードで上端座標を記録する
-        anchoredTopY = frame.maxY.rounded()
         if shouldActivate {
             // 日本語 IME 変換やセキュア入力解除のため一時的に自アプリをアクティブ化する
             NSApplication.shared.activate()
@@ -270,6 +326,16 @@ public final class SwitcherPanel: NSPanel {
 
         orderFrontRegardless()
         makeKey()
+
+        // macOS 15 等で非表示（orderOut）中の NSHostingView が表示復帰後に初めて ViewGraph を確定させる場合に備え、
+        // 同一同期ターン内で実寸と配置を再検証し、差分があれば即座にフレーム補正と保留要求の破棄を行う
+        if applyMeasuredLayout(in: targetScreen, placement: verticalPlacement, forceOriginUpdate: false) {
+            resizeSessionToken &+= 1
+            pendingTargetSize = nil
+            hasScheduledSizeUpdate = false
+            resizeStabilizer.resetCycle()
+        }
+
         // 表示時のコンテンツサイズに合わせて OS 側のウィンドウシャドウを再計算する
         invalidateShadow()
     }
