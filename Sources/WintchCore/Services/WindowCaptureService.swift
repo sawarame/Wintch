@@ -30,6 +30,14 @@ public final class WindowCaptureService: WindowCaptureServicing {
         var timeoutTask: Task<Void, Never>?
     }
 
+    /// メモリキャッシュに格納するサムネイル画像と最終取得時刻の組
+    private struct CachedThumbnailEntry {
+        /// 取得済みのサムネイル画像（メモリ限定）
+        let image: NSImage
+        /// サムネイルを最後に取得・格納した時刻
+        let capturedAt: Date
+    }
+
     /// メモリ内サムネイルキャッシュのデフォルト最大保持件数（FR-003）
     public static let defaultMaxCacheCount = 100
 
@@ -45,11 +53,14 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// メモリ内サムネイルキャッシュの最大保持件数
     private let maxCacheCount: Int
 
+    /// キャプチャ完了時のタイムスタンプ記録に用いる現在時刻プロバイダ（テスト用に注入可能）
+    private let nowProvider: @Sendable () -> Date
+
     /// 実行中プロセス内で ScreenCaptureKit による権限拒否エラーを検知したかどうか
     private var isAccessDeniedInSession = false
 
-    /// ウィンドウ ID ごとのサムネイル画像キャッシュ（メモリ限定・ディスク非保存）
-    private var thumbnailCache: [UInt32: NSImage] = [:]
+    /// ウィンドウ ID ごとのサムネイル画像および最終取得時刻キャッシュ（メモリ限定・ディスク非保存）
+    private var thumbnailCache: [UInt32: CachedThumbnailEntry] = [:]
 
     /// LRU 順序管理配列（末尾ほど最近利用されたエントリ）
     private(set) var cacheOrder: [UInt32] = []
@@ -64,21 +75,24 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// - Parameters:
     ///   - screenRecordingPermissionService: 画面収録権限状態を共有するサービス
     ///   - maxCacheCount: メモリ内サムネイルキャッシュの最大保持件数（1 未満は 1 に正規化）
+    ///   - nowProvider: 現在時刻を返すクロージャ（既定値は `Date.init`）
     public init(
         screenRecordingPermissionService: (any ScreenRecordingPermissionServicing)? = nil,
-        maxCacheCount: Int = defaultMaxCacheCount
+        maxCacheCount: Int = defaultMaxCacheCount,
+        nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.screenRecordingPermissionService = screenRecordingPermissionService
         self.maxCacheCount = max(maxCacheCount, 1)
+        self.nowProvider = nowProvider
     }
 
     /// メモリ上のキャッシュから指定ウィンドウのサムネイルを同期取得する
     /// - Parameter cgWindowID: 対象の CoreGraphics ウィンドウ ID
     /// - Returns: キャッシュ済みのサムネイル画像（未保持の場合は nil）
     public func cachedThumbnail(for cgWindowID: UInt32) -> NSImage? {
-        guard let image = thumbnailCache[cgWindowID] else { return nil }
+        guard let entry = thumbnailCache[cgWindowID] else { return nil }
         touchCacheOrder(for: cgWindowID)
-        return image
+        return entry.image
     }
 
     /// 指定ウィンドウのサムネイルがメモリキャッシュに存在するかを確認する（LRU 順序は変更しない）
@@ -86,6 +100,13 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// - Returns: キャッシュに保持されていれば true
     public func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool {
         thumbnailCache[cgWindowID] != nil
+    }
+
+    /// 指定ウィンドウのサムネイルがメモリキャッシュへ最後に格納された時刻を返す（LRU 順序は変更しない）
+    /// - Parameter cgWindowID: 確認対象の CoreGraphics ウィンドウ ID
+    /// - Returns: キャッシュに保持されていれば最終取得時刻、未保持の場合は nil
+    public func lastCapturedAt(for cgWindowID: UInt32) -> Date? {
+        thumbnailCache[cgWindowID]?.capturedAt
     }
 
     /// 指定ウィンドウ群の最新サムネイルを非同期取得し、完了したものから順次通知する
@@ -387,12 +408,15 @@ public final class WindowCaptureService: WindowCaptureServicing {
         return (evenW, evenH)
     }
 
-    /// 画像を LRU キャッシュへ格納し、上限件数を超えた最古エントリを破棄する
+    /// 画像を現在時刻とともに LRU キャッシュへ格納し、上限件数を超えた最古エントリを破棄する
     /// - Parameters:
     ///   - image: 格納するサムネイル画像
     ///   - cgWindowID: 対象の CoreGraphics ウィンドウ ID
     func storeInCache(_ image: NSImage, for cgWindowID: UInt32) {
-        thumbnailCache[cgWindowID] = image
+        thumbnailCache[cgWindowID] = CachedThumbnailEntry(
+            image: image,
+            capturedAt: nowProvider()
+        )
         touchCacheOrder(for: cgWindowID)
 
         while cacheOrder.count > maxCacheCount {

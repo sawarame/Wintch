@@ -571,5 +571,88 @@ struct AppCoordinatorTests {
         windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
         try? await Task.sleep(for: .milliseconds(360))
         #expect(captureService.capturedRequestWindowIDs.count == requestCountAfterRevoke)
+        // 権限剥奪時にキャッシュ（タイムスタンプ含む）も全破棄されていること
+        #expect(captureService.cachedThumbnails.isEmpty)
+        #expect(captureService.lastCapturedAt(for: 801) == nil)
+    }
+
+    /// AppCoordinator 配下で定期バックグラウンド更新ループがオプトイン・権限・スリープ状態に連動して
+    /// 稼働・一時停止・再開・即座停止することを検証する
+    @Test("AppCoordinator の定期バックグラウンド更新はスリープ・非キャプチャ切替・権限剥奪に連動して停止・再開する")
+    @MainActor
+    func coordinatorManagesPeriodicCaptureRefreshAcrossSleepAndOptOut() async {
+        let store = MockPreferencesStore()
+        store.storedNormalDisplayStyle = .capture
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        permissionService.stubbedStatus = .granted
+        let screenRecordingService = MockScreenRecordingPermissionService()
+        screenRecordingService.stubbedStatus = .granted
+
+        let baseNow = Date(timeIntervalSince1970: 1_700_005_000)
+        let clock = MutableTestClock(initial: baseNow)
+        let captureService = MockWindowCaptureService()
+        captureService.nowProvider = { clock.now }
+
+        let img = NSImage(size: NSSize(width: 90, height: 60))
+        captureService.stubbedAsyncThumbnails[851] = img
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 851,
+                pid: 10,
+                applicationName: "Safari",
+                title: "Docs",
+                isOnScreen: true,
+                lastActivatedAt: baseNow
+            )
+        ]
+
+        let coordinator = AppCoordinator(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            preferencesStore: store,
+            launchAtLoginService: MockLaunchAtLoginService(),
+            iconProvider: MockIconProvider(),
+            installedAppService: MockInstalledAppService(),
+            screenRecordingPermissionService: screenRecordingService,
+            windowCaptureService: captureService,
+            capturePrefetchDebounceDuration: .milliseconds(10),
+            captureRefreshCooldown: 5.0,
+            periodicCaptureRefreshInterval: .milliseconds(25),
+            nowProvider: { clock.now }
+        )
+
+        coordinator.start()
+
+        // 1. 定期更新により未キャッシュの 851 が自動取得される
+        for _ in 0..<100 where captureService.cachedThumbnails[851] == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(captureService.cachedThumbnails[851] === img)
+        let countAfterInitial = captureService.capturedRequestWindowIDs.count
+
+        // 2. スリープ通知中はクールダウン経過後も定期更新されない
+        windowService.simulateSystemCaptureAvailabilityEvent(.paused(.systemSleep))
+        clock.set(baseNow.addingTimeInterval(20.0))
+        try? await Task.sleep(for: .milliseconds(65))
+        #expect(captureService.capturedRequestWindowIDs.count == countAfterInitial)
+
+        // 3. スリープ復帰通知で定期更新が再開し、クールダウン経過済みの 851 が再取得される
+        windowService.simulateSystemCaptureAvailabilityEvent(.resumed(.systemSleep))
+        for _ in 0..<100 where captureService.capturedRequestWindowIDs.count == countAfterInitial {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let countAfterWake = captureService.capturedRequestWindowIDs.count
+        #expect(countAfterWake == countAfterInitial + 1)
+
+        // 4. リスト型へ切り替えると定期更新ループが即座に停止しキャッシュ全破棄される
+        coordinator.updateNormalDisplayStyle(.list)
+        #expect(captureService.cachedThumbnails.isEmpty)
+        clock.set(baseNow.addingTimeInterval(60.0))
+        try? await Task.sleep(for: .milliseconds(65))
+        #expect(captureService.capturedRequestWindowIDs.count == countAfterWake)
     }
 }

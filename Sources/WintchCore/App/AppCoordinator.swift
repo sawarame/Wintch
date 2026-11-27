@@ -148,6 +148,10 @@ public final class AppCoordinator {
     ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
     ///   - versionInfo: アプリバージョン情報（既定値はメインバンドルから取得）
     ///   - preferredLanguagesProvider: システム優先言語配列の提供クロージャ（既定値は `Locale.preferredLanguages`）
+    ///   - capturePrefetchDebounceDuration: バックグラウンド事前キャプチャのデバウンス待機時間（既定値は 300ms）
+    ///   - captureRefreshCooldown: バックグラウンド更新の最小再取得間隔（既定値は 5 秒）
+    ///   - periodicCaptureRefreshInterval: 定期バックグラウンド更新の間隔（既定値は 15 秒）
+    ///   - nowProvider: キャッシュ鮮度判定に用いる現在時刻プロバイダ（既定値は `Date.init`）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -162,7 +166,11 @@ public final class AppCoordinator {
         updateService: any AppUpdateServicing = AppUpdateService(),
         appIdentity: AppIdentity = .current,
         versionInfo: AppVersionInfo = .current,
-        preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages }
+        preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages },
+        capturePrefetchDebounceDuration: Duration = .milliseconds(300),
+        captureRefreshCooldown: TimeInterval = WindowCaptureRefreshPolicy.defaultRefreshCooldown,
+        periodicCaptureRefreshInterval: Duration = WindowCaptureRefreshPolicy.defaultPeriodicRefreshInterval,
+        nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.appIdentity = appIdentity
         self.versionInfo = versionInfo
@@ -208,7 +216,11 @@ public final class AppCoordinator {
             launcherDisplayStyle: initialLauncherDisplayStyle,
             isNormalSwitcherGroupedByApp: initialNormalGrouping,
             isLauncherGroupedByApp: initialLauncherGrouping,
-            resolvedLanguage: initialResolvedLanguage
+            resolvedLanguage: initialResolvedLanguage,
+            capturePrefetchDebounceDuration: capturePrefetchDebounceDuration,
+            captureRefreshCooldown: captureRefreshCooldown,
+            periodicCaptureRefreshInterval: periodicCaptureRefreshInterval,
+            nowProvider: nowProvider
         )
         self.permissionGuideViewModel = PermissionGuideViewModel(
             permissionService: permissionService,
