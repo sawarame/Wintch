@@ -904,6 +904,189 @@ struct WindowCaptureAndMatchingTests {
         )
     }
 
+    /// shouldUseCachedWindowDirectlyForClose が現在スペース上のキャッシュ済みウィンドウのみを直接クローズ対象とし、
+    /// 別操作スペースにあるキャッシュ済みウィンドウ（非捕捉・非最小化オフスクリーン）ではスペース遷移フォールバックを促すことを検証する
+    @Test("shouldUseCachedWindowDirectlyForClose は別スペースのキャッシュ済みウィンドウを直接クローズしない")
+    func shouldUseCachedWindowDirectlyForCloseRequiresCurrentSpace() {
+        // 同一スペース上で捕捉済み・画面表示中のウィンドウは直接クローズ可能
+        #expect(
+            WindowService.shouldUseCachedWindowDirectlyForClose(
+                isPresentInLatestAXScan: true,
+                isOnScreen: true,
+                isMinimized: false
+            ) == true
+        )
+        // 同一スペースで最小化されているウィンドウは AX 上で捕捉済みのため直接クローズ可能
+        #expect(
+            WindowService.shouldUseCachedWindowDirectlyForClose(
+                isPresentInLatestAXScan: true,
+                isOnScreen: false,
+                isMinimized: true
+            ) == true
+        )
+        // 別スペースにあり最新 AX スキャンに不在のキャッシュ済みウィンドウは別スペース遷移が必要
+        #expect(
+            WindowService.shouldUseCachedWindowDirectlyForClose(
+                isPresentInLatestAXScan: false,
+                isOnScreen: false,
+                isMinimized: false
+            ) == false
+        )
+        // kAXMainWindow 等で AX 捕捉されていても非最小化かつ画面外なら別スペースとみなして遷移する
+        #expect(
+            WindowService.shouldUseCachedWindowDirectlyForClose(
+                isPresentInLatestAXScan: true,
+                isOnScreen: false,
+                isMinimized: false
+            ) == false
+        )
+    }
+
+    /// makeCloseSpaceFallbackPlan がメニュー押下成功時に即時の app.activate() 並走を抑止し、
+    /// 現在スペースの同一アプリ別ウィンドウへフォーカスが引き戻されるのを防ぐことを検証する
+    @Test("makeCloseSpaceFallbackPlan はメニュー遷移成功時に即時の app.activate を抑止する")
+    func makeCloseSpaceFallbackPlanPreventsPrematureActivationOverride() {
+        #expect(
+            WindowService.makeCloseSpaceFallbackPlan(
+                hasCachedAX: true,
+                menuNavigationSucceeded: true
+            ) == WindowService.CloseSpaceFallbackPlan(
+                shouldActivateApplicationImmediately: false,
+                shouldRaiseCachedAXImmediately: false
+            )
+        )
+        #expect(
+            WindowService.makeCloseSpaceFallbackPlan(
+                hasCachedAX: true,
+                menuNavigationSucceeded: false
+            ) == WindowService.CloseSpaceFallbackPlan(
+                shouldActivateApplicationImmediately: true,
+                shouldRaiseCachedAXImmediately: true
+            )
+        )
+        #expect(
+            WindowService.makeCloseSpaceFallbackPlan(
+                hasCachedAX: false,
+                menuNavigationSucceeded: false
+            ) == WindowService.CloseSpaceFallbackPlan(
+                shouldActivateApplicationImmediately: true,
+                shouldRaiseCachedAXImmediately: false
+            )
+        )
+    }
+
+    /// isResolvedCloseTargetReadyAfterSpaceNavigation が、別スペースから遷移開始した場合に
+    /// kAXMainWindow 補完のみの早とちりを防ぎ、kAXWindowsAttribute 本体含有または CGWindow 表示を確認することを検証する
+    @Test("isResolvedCloseTargetReadyAfterSpaceNavigation は遷移完了後の現在スペース捕捉を確認する")
+    func isResolvedCloseTargetReadyAfterSpaceNavigationVerifiesSpaceArrival() {
+        // 最新 AX スキャンに未捕捉なら常に未到達
+        #expect(
+            WindowService.isResolvedCloseTargetReadyAfterSpaceNavigation(
+                isPresentInLatestAXScan: false,
+                isInPrimaryAXWindowsList: false,
+                isMinimized: false,
+                isCGWindowOnscreen: true,
+                startedOffscreen: true
+            ) == false
+        )
+        // 別スペース開始時、kAXFocusedWindow/kAXMainWindow 補完のみで CGWindow も画面外なら未到達
+        #expect(
+            WindowService.isResolvedCloseTargetReadyAfterSpaceNavigation(
+                isPresentInLatestAXScan: true,
+                isInPrimaryAXWindowsList: false,
+                isMinimized: false,
+                isCGWindowOnscreen: false,
+                startedOffscreen: true
+            ) == false
+        )
+        // kAXWindowsAttribute 本体に現れれば対象スペースへ到達済み
+        #expect(
+            WindowService.isResolvedCloseTargetReadyAfterSpaceNavigation(
+                isPresentInLatestAXScan: true,
+                isInPrimaryAXWindowsList: true,
+                isMinimized: false,
+                isCGWindowOnscreen: nil,
+                startedOffscreen: true
+            ) == true
+        )
+        // CGWindow が画面表示中（isOnscreen == true）になった場合も到達済み
+        #expect(
+            WindowService.isResolvedCloseTargetReadyAfterSpaceNavigation(
+                isPresentInLatestAXScan: true,
+                isInPrimaryAXWindowsList: false,
+                isMinimized: false,
+                isCGWindowOnscreen: true,
+                startedOffscreen: true
+            ) == true
+        )
+    }
+
+    /// evaluateWindowLiveness が、別スペース等に実在する通常アプリ（Chrome・VS Code 等）のウィンドウを
+    /// kAXWindowsAttribute 不在のみで消滅済みと誤判定せず、CGWindow 消滅時や orderOut アプリのオフスクリーン化時は閉鎖済みと判定することを検証する
+    @Test("evaluateWindowLiveness は生存中の別スペース CGWindow を消滅済みと誤判定しない")
+    func evaluateWindowLivenessCombinesAXAndCGWindowSurvival() {
+        // AX 上で生存していれば常に生存
+        #expect(
+            WindowService.evaluateWindowLiveness(
+                isAXAlive: true,
+                hasKnownCGWindowID: true,
+                isCGWindowSurviving: false,
+                isCGWindowOnscreen: false,
+                requiresLiveVerificationWhenOffscreen: false
+            ) == true
+        )
+        // 通常アプリで別スペースにあるため AX 不在でも、WindowServer 上に CGWindow が生存していれば生存中
+        #expect(
+            WindowService.evaluateWindowLiveness(
+                isAXAlive: false,
+                hasKnownCGWindowID: true,
+                isCGWindowSurviving: true,
+                isCGWindowOnscreen: false,
+                requiresLiveVerificationWhenOffscreen: false
+            ) == true
+        )
+        // 通常アプリで AX・CGWindow 双方から消滅していれば閉鎖済み
+        #expect(
+            WindowService.evaluateWindowLiveness(
+                isAXAlive: false,
+                hasKnownCGWindowID: true,
+                isCGWindowSurviving: false,
+                isCGWindowOnscreen: false,
+                requiresLiveVerificationWhenOffscreen: false
+            ) == false
+        )
+        // CGWindowID が不明な場合は AX 不在で閉鎖済みと判定する
+        #expect(
+            WindowService.evaluateWindowLiveness(
+                isAXAlive: false,
+                hasKnownCGWindowID: false,
+                isCGWindowSurviving: false,
+                isCGWindowOnscreen: false,
+                requiresLiveVerificationWhenOffscreen: false
+            ) == false
+        )
+        // orderOut で画面外 CGWindow を残すプロファイル（Gemini 等）では、AX 不在かつ画面外なら閉鎖済み
+        #expect(
+            WindowService.evaluateWindowLiveness(
+                isAXAlive: false,
+                hasKnownCGWindowID: true,
+                isCGWindowSurviving: true,
+                isCGWindowOnscreen: false,
+                requiresLiveVerificationWhenOffscreen: true
+            ) == false
+        )
+        // orderOut プロファイルでも画面表示中（isOnscreen == true）であれば生存中
+        #expect(
+            WindowService.evaluateWindowLiveness(
+                isAXAlive: false,
+                hasKnownCGWindowID: true,
+                isCGWindowSurviving: true,
+                isCGWindowOnscreen: true,
+                requiresLiveVerificationWhenOffscreen: true
+            ) == true
+        )
+    }
+
     /// hasCachedThumbnail がキャッシュの有無を正しく返しつつ、LRU のアクセス順序を変更しないことを検証する
     @Test("WindowCaptureService.hasCachedThumbnail は LRU 順序を変更せずにキャッシュ存在を判定する")
     @MainActor
