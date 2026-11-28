@@ -601,10 +601,26 @@ public final class SwitcherViewModel {
 
         case .alreadyClosed:
             closingWindowIDs.remove(target.id)
+            let hadEntryBeforeRemoval = allEntries.contains { entry in
+                if isSingleWindowForApp {
+                    return entry.pid == target.pid || entry.id == target.id
+                }
+                if entry.id == target.id {
+                    return true
+                }
+                if let cgWindowID = target.cgWindowID, entry.cgWindowID == cgWindowID {
+                    return true
+                }
+                return false
+            }
             if isSingleWindowForApp {
                 removeEntries(matchingPID: target.pid, fallbackWindowID: target.id)
             } else {
                 removeEntry(matchingWindowID: target.id, cgWindowID: target.cgWindowID)
+            }
+            // OS 通知で先に除外済みだった場合でも、別スペース遷移後のパネルフォーカス回復を取りこぼさない
+            if !hadEntryBeforeRemoval && shouldRestoreFocus && mode == targetMode {
+                onPanelFocusRestoreNeeded?(targetMode)
             }
 
         case .requested:

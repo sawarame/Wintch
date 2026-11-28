@@ -20,6 +20,8 @@ public final class WindowService: WindowServicing {
         let subrole: String?
         let bounds: CGRect?
         let isMinimized: Bool
+        /// `kAXWindowsAttribute` 本体（現在操作スペース一覧）に直接含まれていたか
+        let isInPrimaryAXWindowsList: Bool
     }
 
     /// バックグラウンド／オンデマンドで取得した Window メニュー項目と AXUIElement の組
@@ -44,6 +46,14 @@ public final class WindowService: WindowServicing {
         let usesSteppedSpaceFollowUp: Bool
     }
 
+    /// 別操作スペースにあるウィンドウを閉じる際の初期遷移実行戦略を表す値型
+    struct CloseSpaceFallbackPlan: Equatable, Sendable {
+        /// 同期的にアプリ全体アクティブ化（`app.activate`）を即時実行するか
+        let shouldActivateApplicationImmediately: Bool
+        /// 既存のキャッシュ済み AXUIElement があれば補助的に前面化（`raiseAXWindow`）を試行するか
+        let shouldRaiseCachedAXImmediately: Bool
+    }
+
     /// キャッシュされた AX ウィンドウ情報
     private struct CachedAXWindow {
         let id: String
@@ -56,6 +66,8 @@ public final class WindowService: WindowServicing {
         var bounds: CGRect?
         var isMinimized: Bool
         var isPresentInLatestAXScan: Bool
+        /// 直近の AX スキャンで `kAXWindowsAttribute` 本体に直接含まれていたか
+        var isInPrimaryAXWindowsList: Bool
         var lastActivatedAt: Date?
     }
 
@@ -793,9 +805,21 @@ public final class WindowService: WindowServicing {
             )
         }
 
-        // クローズボタン押下前に既にウィンドウが消滅済みであれば即座に完了として返す
-        let isAliveBeforePress = await checkAXWindowAliveInBackground(target.axElement, pid: entry.pid)
-        guard isAliveBeforePress else {
+        let resolvedCGWindowID = target.cgWindowID ?? entry.cgWindowID
+        // クローズボタン押下前に現在スペースの AX 上で生存しているか確認する
+        // （AX 上に不在でも WindowServer 上に生存 CGWindow がある場合は消滅済みと誤判定しない）
+        let isAXAliveBeforePress = await checkAXWindowAliveInBackground(target.axElement, pid: entry.pid)
+        guard isAXAliveBeforePress else {
+            let isStillAlive = await checkWindowAliveInBackground(
+                axElement: target.axElement,
+                pid: entry.pid,
+                cgWindowID: resolvedCGWindowID,
+                bundleIdentifier: entry.bundleIdentifier,
+                precomputedAXAlive: false
+            )
+            if isStillAlive {
+                return .failed(didSwitchSpace: didSwitchSpace)
+            }
             removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: target.axElement)
             cachedWindowMenuByPID.removeValue(forKey: entry.pid)
             trackedCloseTargetsByEntryID.removeValue(forKey: entry.id)
@@ -823,7 +847,6 @@ public final class WindowService: WindowServicing {
         }
 
         // 押下直後に同期的に届く破棄通知を取りこぼさないよう、押下前に追跡対象へ登録しておく
-        let resolvedCGWindowID = target.cgWindowID ?? entry.cgWindowID
         trackedCloseTargetsByEntryID[entry.id] = TrackedCloseTarget(
             entryID: entry.id,
             pid: entry.pid,
@@ -834,7 +857,12 @@ public final class WindowService: WindowServicing {
         let pressStatus = AXUIElementPerformAction(closeButton, kAXPressAction as CFString)
         guard pressStatus == .success else {
             trackedCloseTargetsByEntryID.removeValue(forKey: entry.id)
-            let isAliveAfterFailure = await checkAXWindowAliveInBackground(target.axElement, pid: entry.pid)
+            let isAliveAfterFailure = await checkWindowAliveInBackground(
+                axElement: target.axElement,
+                pid: entry.pid,
+                cgWindowID: resolvedCGWindowID,
+                bundleIdentifier: entry.bundleIdentifier
+            )
             if !isAliveAfterFailure {
                 removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: target.axElement)
                 cachedWindowMenuByPID.removeValue(forKey: entry.pid)
@@ -898,17 +926,27 @@ public final class WindowService: WindowServicing {
         }
 
         let targetAXElement: AXUIElement?
+        let resolvedCGWindowID: UInt32?
         if let tracked = trackedCloseTargetsByEntryID[entry.id] {
             targetAXElement = tracked.axElement
+            resolvedCGWindowID = tracked.cgWindowID ?? entry.cgWindowID
         } else if let list = cachedWindowsByPID[entry.pid] {
-            targetAXElement = list.first(where: { $0.id == entry.id })?.axElement
-                ?? entry.cgWindowID.flatMap { cgID in list.first(where: { $0.cgWindowID == cgID })?.axElement }
+            let matched = list.first(where: { $0.id == entry.id })
+                ?? entry.cgWindowID.flatMap { cgID in list.first(where: { $0.cgWindowID == cgID }) }
+            targetAXElement = matched?.axElement
+            resolvedCGWindowID = matched?.cgWindowID ?? entry.cgWindowID
         } else {
             targetAXElement = nil
+            resolvedCGWindowID = entry.cgWindowID
         }
 
         if let targetAXElement {
-            let isAlive = await checkAXWindowAliveInBackground(targetAXElement, pid: entry.pid)
+            let isAlive = await checkWindowAliveInBackground(
+                axElement: targetAXElement,
+                pid: entry.pid,
+                cgWindowID: resolvedCGWindowID,
+                bundleIdentifier: entry.bundleIdentifier
+            )
             if !isAlive {
                 removeCachedWindow(pid: entry.pid, windowID: entry.id, axElement: targetAXElement)
                 cachedWindowMenuByPID.removeValue(forKey: entry.pid)
@@ -918,9 +956,17 @@ public final class WindowService: WindowServicing {
         }
 
         // キャッシュ・追跡対象に不在の場合は、対応 CGWindowID の生存有無で最終判定する
-        if let cgWindowID = entry.cgWindowID {
-            let surviving = await fetchSurvivingCGWindowIDsInBackground(for: entry.pid)
-            if surviving.contains(cgWindowID) {
+        if let cgWindowID = resolvedCGWindowID {
+            let onscreenByWindowID = await fetchCGWindowOnscreenMapInBackground(for: entry.pid)
+            let profile = AppWindowProfileRegistry.profile(for: entry.bundleIdentifier)
+            let isAlive = Self.evaluateWindowLiveness(
+                isAXAlive: false,
+                hasKnownCGWindowID: true,
+                isCGWindowSurviving: onscreenByWindowID[cgWindowID] != nil,
+                isCGWindowOnscreen: onscreenByWindowID[cgWindowID] ?? false,
+                requiresLiveVerificationWhenOffscreen: profile.requiresLiveVerificationWhenOffscreen
+            )
+            if isAlive {
                 return true
             }
         }
@@ -1319,6 +1365,7 @@ public final class WindowService: WindowServicing {
         var existing = cachedWindowsByPID[pid] ?? []
         for idx in existing.indices {
             existing[idx].isPresentInLatestAXScan = false
+            existing[idx].isInPrimaryAXWindowsList = false
         }
 
         guard !snapshots.isEmpty else {
@@ -1345,6 +1392,7 @@ public final class WindowService: WindowServicing {
                 existing[matchIdx].bounds = snapshot.bounds
                 existing[matchIdx].isMinimized = snapshot.isMinimized
                 existing[matchIdx].isPresentInLatestAXScan = true
+                existing[matchIdx].isInPrimaryAXWindowsList = snapshot.isInPrimaryAXWindowsList
                 if markFrontmostAsActive && index == 0 && existing[matchIdx].lastActivatedAt == nil {
                     existing[matchIdx].lastActivatedAt = now
                 }
@@ -1361,6 +1409,7 @@ public final class WindowService: WindowServicing {
                         bounds: snapshot.bounds,
                         isMinimized: snapshot.isMinimized,
                         isPresentInLatestAXScan: true,
+                        isInPrimaryAXWindowsList: snapshot.isInPrimaryAXWindowsList,
                         lastActivatedAt: (markFrontmostAsActive && index == 0) ? now : nil
                     )
                 )
@@ -2083,33 +2132,28 @@ public final class WindowService: WindowServicing {
         cachedWindowsByPID[pid] = list
     }
 
-    /// クローズ対象ウィンドウに対応するキャッシュ済み AXUIElement を解決する
-    /// - Parameter entry: クローズ対象のウィンドウ項目
-    /// - Returns: 一致したキャッシュエントリ（解決できない場合は nil）
-    private func resolveCachedWindowForClose(_ entry: WindowEntry) -> CachedAXWindow? {
-        if let list = cachedWindowsByPID[entry.pid] {
-            if let exact = list.first(where: { $0.id == entry.id }) {
-                return exact
-            }
-            if let cgID = entry.cgWindowID,
-               let byCG = list.first(where: { $0.cgWindowID == cgID }) {
-                return byCG
-            }
-        }
-
-        // 別スペース等で未キャッシュだった場合に備えて対象 PID の AX ウィンドウを再スキャンする
-        refreshAXWindows(for: entry.pid, markFrontmostAsActive: false)
-        guard let refreshed = cachedWindowsByPID[entry.pid] else { return nil }
-        if let exact = refreshed.first(where: { $0.id == entry.id }) {
+    /// キャッシュ済みの AX ウィンドウ一覧からクローズ対象に一致するエントリを検索する（再スキャンなし）
+    /// - Parameters:
+    ///   - entry: クローズ対象のウィンドウ項目
+    ///   - allowTitleFallback: 識別子・CGWindowID で一致しない場合にタイトル照合（省略表記・サフィックス差分含む）を許可するか
+    ///   - requirePresentInLatestAXScan: 直近の AX スキャンで捕捉済みの要素のみを対象とするか（別スペース遷移後の同名誤一致防止用）
+    /// - Returns: 一致したキャッシュエントリ（存在しない場合は nil）
+    private func lookupCachedWindowForClose(
+        _ entry: WindowEntry,
+        allowTitleFallback: Bool,
+        requirePresentInLatestAXScan: Bool = false
+    ) -> CachedAXWindow? {
+        guard let rawList = cachedWindowsByPID[entry.pid] else { return nil }
+        let list = requirePresentInLatestAXScan ? rawList.filter(\.isPresentInLatestAXScan) : rawList
+        if let exact = list.first(where: { $0.id == entry.id }) {
             return exact
         }
         if let cgID = entry.cgWindowID,
-           let byCG = refreshed.first(where: { $0.cgWindowID == cgID }) {
+           let byCG = list.first(where: { $0.cgWindowID == cgID }) {
             return byCG
         }
-        // CGWindow 補完識別子 (cg-*) のみ保持していた場合はタイトル一致（省略表記・サフィックス差分含む）で補助照合する
-        if entry.id.hasPrefix("cg-"), !entry.windowTitle.isEmpty {
-            return refreshed.first(where: {
+        if allowTitleFallback, !entry.windowTitle.isEmpty {
+            return list.first(where: {
                 guard let candidateTitle = $0.title else { return false }
                 return WindowMenuCandidatePairing.titlesMatch(
                     candidateTitle,
@@ -2121,36 +2165,196 @@ public final class WindowService: WindowServicing {
         return nil
     }
 
-    /// 別操作スペースに存在し未キャッシュのウィンドウに対し、必要に応じてスペース移動を行って AXUIElement を解決する
+    /// キャッシュ済みウィンドウを別スペース遷移なしでそのままクローズ操作してよいか判定する純粋関数
+    /// - Parameters:
+    ///   - isPresentInLatestAXScan: 直近の AX スキャンで捕捉されたか
+    ///   - isOnScreen: CoreGraphics 上の画面表示状態（別スペース時は false）
+    ///   - isMinimized: 最小化状態かどうか
+    /// - Returns: 現在操作スペース上に存在し直接クローズ操作できる場合は true、別スペース遷移が必要な場合は false
+    nonisolated static func shouldUseCachedWindowDirectlyForClose(
+        isPresentInLatestAXScan: Bool,
+        isOnScreen: Bool?,
+        isMinimized: Bool
+    ) -> Bool {
+        isWindowInCurrentSpace(
+            isPresentInLatestAXScan: isPresentInLatestAXScan,
+            isOnScreen: isOnScreen,
+            isMinimized: isMinimized
+        )
+    }
+
+    /// 別操作スペースにあるウィンドウを閉じる際の初期遷移戦略を決定する純粋関数
+    /// - Parameters:
+    ///   - hasCachedAX: 対象ウィンドウの既存キャッシュ済み AXUIElement が存在するか
+    ///   - menuNavigationSucceeded: 「ウィンドウ」メニュー項目の押下に成功したか
+    /// - Returns: 現在スペースの別ウィンドウへのフォーカス上書きを避ける `CloseSpaceFallbackPlan`
+    nonisolated static func makeCloseSpaceFallbackPlan(
+        hasCachedAX: Bool,
+        menuNavigationSucceeded: Bool
+    ) -> CloseSpaceFallbackPlan {
+        if menuNavigationSucceeded {
+            // メニュー押下が成功した場合は即時の app.activate() 並走による現在スペース別ウィンドウへのフォーカス引き戻しを抑止する
+            return CloseSpaceFallbackPlan(
+                shouldActivateApplicationImmediately: false,
+                shouldRaiseCachedAXImmediately: false
+            )
+        }
+        return CloseSpaceFallbackPlan(
+            shouldActivateApplicationImmediately: true,
+            shouldRaiseCachedAXImmediately: hasCachedAX
+        )
+    }
+
+    /// 別スペース遷移後の再スキャンで解決されたキャッシュ要素が、クローズボタン押下可能な現在スペース状態へ到達したか判定する純粋関数
+    /// - Parameters:
+    ///   - isPresentInLatestAXScan: 遷移後の最新 AX スキャンで捕捉されたか
+    ///   - isInPrimaryAXWindowsList: `kAXWindowsAttribute` 本体に直接含まれていたか
+    ///   - isMinimized: 対象ウィンドウが最小化状態か
+    ///   - isCGWindowOnscreen: 最新の CoreGraphics 情報で画面表示中か（未確認時は nil）
+    ///   - startedOffscreen: 遷移開始時点で画面外（別スペース）だったか
+    /// - Returns: 対象スペースへ到達しクローズ要求を送出してよい状態であれば true
+    nonisolated static func isResolvedCloseTargetReadyAfterSpaceNavigation(
+        isPresentInLatestAXScan: Bool,
+        isInPrimaryAXWindowsList: Bool,
+        isMinimized: Bool,
+        isCGWindowOnscreen: Bool?,
+        startedOffscreen: Bool
+    ) -> Bool {
+        guard isPresentInLatestAXScan else {
+            return false
+        }
+        if isMinimized || !startedOffscreen {
+            return true
+        }
+        if isInPrimaryAXWindowsList {
+            return true
+        }
+        return isCGWindowOnscreen == true
+    }
+
+    /// 別操作スペースに存在するウィンドウ（キャッシュ済み・未キャッシュ問わず）に対し、必要に応じてスペース遷移を行って AXUIElement を解決する
     /// - Parameter entry: クローズ対象のウィンドウ項目
     /// - Returns: 解決されたキャッシュエントリと、別スペース一時遷移を行ったかのタプル
     private func resolveCachedWindowWithSpaceFallback(_ entry: WindowEntry) async -> (window: CachedAXWindow?, didSwitchSpace: Bool) {
-        if let resolved = resolveCachedWindowForClose(entry) {
-            return (resolved, false)
+        let existingCached = lookupCachedWindowForClose(entry, allowTitleFallback: false)
+        if let existingCached,
+           Self.shouldUseCachedWindowDirectlyForClose(
+               isPresentInLatestAXScan: existingCached.isPresentInLatestAXScan,
+               isOnScreen: entry.isOnScreen,
+               isMinimized: existingCached.isMinimized
+           ) {
+            return (existingCached, false)
         }
 
-        // 別 Space 上のウィンドウ（cg-* 等）で AXUIElement が未取得の場合、
-        // 「ウィンドウ」メニュー経由（利用可能なら）＋アプリアクティブ化で対象 Space へ遷移させる
+        // 現在スペースにある可能性がある未キャッシュ／古いキャッシュ対象は、遷移前に 1 回だけバックグラウンド AX 再スキャンで確認する
+        if entry.isOnScreen != false || entry.isMinimized {
+            let snapshots = await fetchAXWindowSnapshotsInBackground(for: entry.pid)
+            applyAXWindowSnapshots(snapshots, for: entry.pid, markFrontmostAsActive: false)
+            if let refreshed = lookupCachedWindowForClose(
+                entry,
+                allowTitleFallback: entry.id.hasPrefix("cg-")
+            ),
+               Self.shouldUseCachedWindowDirectlyForClose(
+                   isPresentInLatestAXScan: refreshed.isPresentInLatestAXScan,
+                   isOnScreen: entry.isOnScreen,
+                   isMinimized: refreshed.isMinimized
+               ) {
+                return (refreshed, false)
+            }
+        }
+
+        // 別 Space 上のウィンドウ（キャッシュ済み・cg-* 補完の双方）は、
+        // 「ウィンドウ」メニュー経由の遷移と段階リトライで対象 Space へ一時遷移してから AXUIElement を確定させる
         guard let app = NSRunningApplication(processIdentifier: entry.pid), !app.isTerminated else {
             return (nil, false)
         }
 
-        if !entry.windowTitle.isEmpty,
-           let menuItem = resolveWindowMenuItemElement(
-               pid: entry.pid,
-               windowTitle: entry.windowTitle,
-               applicationName: entry.applicationName
-           ) {
-            Self.applyMessagingTimeout(to: menuItem)
-            AXUIElementPerformAction(menuItem, kAXPressAction as CFString)
+        let menuNavigationSucceeded: Bool
+        if !entry.windowTitle.isEmpty {
+            menuNavigationSucceeded = performMenuNavigationWithRetry(
+                pid: entry.pid,
+                windowTitle: entry.windowTitle,
+                applicationName: entry.applicationName,
+                preferUnchecked: true
+            )
+        } else {
+            menuNavigationSucceeded = false
         }
-        app.activate()
-        // Space 切り替えアニメーションと AX ツリー反映を待ちつつ最大約600ms再試行する
-        let maxAttempts = 15
-        for _ in 0..<maxAttempts {
+
+        let plan = Self.makeCloseSpaceFallbackPlan(
+            hasCachedAX: existingCached != nil,
+            menuNavigationSucceeded: menuNavigationSucceeded
+        )
+        if plan.shouldActivateApplicationImmediately {
+            app.activate(options: [])
+        }
+        if plan.shouldRaiseCachedAXImmediately, let existingCached {
+            raiseAXWindow(existingCached.axElement, unminimize: entry.isMinimized)
+        }
+
+        let startedOffscreen = (entry.isOnScreen == false) && !entry.isMinimized
+        // Space 切り替えアニメーションと AX ツリー反映を待ちつつ最大約 640ms 段階的に再試行する
+        let maxAttempts = 16
+        for attempt in 0..<maxAttempts {
             try? await Task.sleep(for: .milliseconds(40))
-            if let resolved = resolveCachedWindowForClose(entry) {
-                return (resolved, true)
+            guard let runningApp = NSRunningApplication(processIdentifier: entry.pid),
+                  !runningApp.isTerminated else {
+                return (nil, true)
+            }
+
+            let snapshots = await fetchAXWindowSnapshotsInBackground(for: entry.pid)
+            applyAXWindowSnapshots(snapshots, for: entry.pid, markFrontmostAsActive: false)
+
+            if let resolved = lookupCachedWindowForClose(
+                entry,
+                allowTitleFallback: true,
+                requirePresentInLatestAXScan: true
+            ) {
+                let isCGOnscreen: Bool?
+                if startedOffscreen && !resolved.isInPrimaryAXWindowsList && !resolved.isMinimized,
+                   let cgID = resolved.cgWindowID ?? entry.cgWindowID {
+                    let onscreenMap = await fetchCGWindowOnscreenMapInBackground(for: entry.pid)
+                    isCGOnscreen = onscreenMap[cgID]
+                } else {
+                    isCGOnscreen = nil
+                }
+
+                if Self.isResolvedCloseTargetReadyAfterSpaceNavigation(
+                    isPresentInLatestAXScan: resolved.isPresentInLatestAXScan,
+                    isInPrimaryAXWindowsList: resolved.isInPrimaryAXWindowsList,
+                    isMinimized: resolved.isMinimized || entry.isMinimized,
+                    isCGWindowOnscreen: isCGOnscreen,
+                    startedOffscreen: startedOffscreen
+                ) {
+                    return (resolved, true)
+                }
+            }
+
+            // 未到達時は非アクティブアプリでのメニュー無視対策として段階的に前面化・最新メニュー再押下・メニュー展開押下を行う
+            if attempt == 3 {
+                if !runningApp.isActive {
+                    runningApp.activate(options: [])
+                }
+            } else if attempt == 6 {
+                if !runningApp.isActive {
+                    runningApp.activate(options: [])
+                }
+                if !entry.windowTitle.isEmpty {
+                    _ = performMenuNavigationWithRetry(
+                        pid: entry.pid,
+                        windowTitle: entry.windowTitle,
+                        applicationName: entry.applicationName,
+                        preferUnchecked: true,
+                        forceFresh: true
+                    )
+                }
+            } else if attempt == 10, !entry.windowTitle.isEmpty {
+                _ = await performMenuNavigationViaMenuOpen(
+                    pid: entry.pid,
+                    windowTitle: entry.windowTitle,
+                    applicationName: entry.applicationName,
+                    preferUnchecked: true
+                )
             }
         }
         return (nil, true)
@@ -2160,7 +2364,7 @@ public final class WindowService: WindowServicing {
     /// - Parameters:
     ///   - axElement: 確認対象の AXUIElement
     ///   - pid: 所有プロセスの PID
-    /// - Returns: ウィンドウがまだ生存している場合は true、閉じられて消滅している場合は false
+    /// - Returns: ウィンドウが現在スペースの AX 上で生存している場合は true、不在の場合は false
     private func checkAXWindowAliveInBackground(_ axElement: AXUIElement, pid: Int32) async -> Bool {
         let wrapped = SendableAXElement(value: axElement)
         let queue = axWorkerQueue
@@ -2168,6 +2372,63 @@ public final class WindowService: WindowServicing {
             queue.async {
                 let alive = Self.isAXWindowAliveInProcess(wrapped.value, pid: pid)
                 continuation.resume(returning: alive)
+            }
+        }
+    }
+
+    /// AX 生存確認と WindowServer 上の CGWindow 生存確認を組み合わせてバックグラウンドで非同期判定する
+    /// - Parameters:
+    ///   - axElement: 確認対象の AXUIElement
+    ///   - pid: 所有プロセスの PID
+    ///   - cgWindowID: 対応する CoreGraphics ウィンドウ ID（不明時は nil）
+    ///   - bundleIdentifier: 所有アプリケーションの Bundle Identifier（プロファイル判定用）
+    ///   - precomputedAXAlive: 呼び出し元で取得済みの AX 生存確認結果（未取得時は nil）
+    /// - Returns: ウィンドウが生存中とみなすべき場合は true、閉鎖済みと確定できる場合は false
+    private func checkWindowAliveInBackground(
+        axElement: AXUIElement,
+        pid: Int32,
+        cgWindowID: UInt32?,
+        bundleIdentifier: String?,
+        precomputedAXAlive: Bool? = nil
+    ) async -> Bool {
+        let wrapped = SendableAXElement(value: axElement)
+        let queue = axWorkerQueue
+        let requiresLiveVerificationWhenOffscreen = AppWindowProfileRegistry
+            .profile(for: bundleIdentifier)
+            .requiresLiveVerificationWhenOffscreen
+
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                let isAXAlive = precomputedAXAlive ?? Self.isAXWindowAliveInProcess(wrapped.value, pid: pid)
+                if isAXAlive {
+                    continuation.resume(returning: true)
+                    return
+                }
+                guard let cgWindowID else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                let onscreenMap = Self.fetchCGWindowOnscreenMap(for: pid)
+                let alive = Self.evaluateWindowLiveness(
+                    isAXAlive: false,
+                    hasKnownCGWindowID: true,
+                    isCGWindowSurviving: onscreenMap[cgWindowID] != nil,
+                    isCGWindowOnscreen: onscreenMap[cgWindowID] ?? false,
+                    requiresLiveVerificationWhenOffscreen: requiresLiveVerificationWhenOffscreen
+                )
+                continuation.resume(returning: alive)
+            }
+        }
+    }
+
+    /// 指定 PID の生存中 CGWindowID ごとの画面表示状態マップをバックグラウンドワーカーキュー上で非同期取得する
+    /// - Parameter pid: 所有プロセスの PID
+    /// - Returns: 生存中 CGWindowID をキー、`kCGWindowIsOnscreen` を値とする辞書
+    private func fetchCGWindowOnscreenMapInBackground(for pid: Int32) async -> [UInt32: Bool] {
+        let queue = axWorkerQueue
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: Self.fetchCGWindowOnscreenMap(for: pid))
             }
         }
     }
@@ -2184,6 +2445,33 @@ public final class WindowService: WindowServicing {
         }
     }
 
+    /// AX 生存確認結果と WindowServer 上の CGWindow 生存情報を統合し、対象ウィンドウが生存中か判定する純粋関数
+    /// - Parameters:
+    ///   - isAXAlive: 現在スペースの AX ウィンドウ一覧または要素ロール確認で生存と判定されたか
+    ///   - hasKnownCGWindowID: 対象ウィンドウに対応する CoreGraphics ウィンドウ ID が既知か
+    ///   - isCGWindowSurviving: 既知の CGWindowID が WindowServer 上で現在も生存しているか
+    ///   - isCGWindowOnscreen: 既知の CGWindowID が現在画面表示中（isOnscreen == true）か
+    ///   - requiresLiveVerificationWhenOffscreen: 閉鎖後も orderOut 等で画面外 CGWindow を残すアプリプロファイルか
+    /// - Returns: ウィンドウが生存中とみなすべき場合は true、閉鎖済みと確定できる場合は false
+    nonisolated static func evaluateWindowLiveness(
+        isAXAlive: Bool,
+        hasKnownCGWindowID: Bool,
+        isCGWindowSurviving: Bool,
+        isCGWindowOnscreen: Bool,
+        requiresLiveVerificationWhenOffscreen: Bool
+    ) -> Bool {
+        if isAXAlive {
+            return true
+        }
+        guard hasKnownCGWindowID, isCGWindowSurviving else {
+            return false
+        }
+        if requiresLiveVerificationWhenOffscreen {
+            return isCGWindowOnscreen
+        }
+        return true
+    }
+
     /// 指定された AXUIElement ウィンドウが現在もアプリケーション上に存在しているかを判定する（バックグラウンド実行安全）
     /// - Parameters:
     ///   - axElement: 確認対象の AXUIElement
@@ -2192,7 +2480,7 @@ public final class WindowService: WindowServicing {
     private nonisolated static func isAXWindowAliveInProcess(_ axElement: AXUIElement, pid: Int32) -> Bool {
         let appElement = AXUIElementCreateApplication(pid)
         applyMessagingTimeout(to: appElement)
-        let (axWindows, windowsAttributeSucceeded) = collectAXWindowsWithStatus(for: appElement)
+        let (axWindows, windowsAttributeSucceeded, _) = collectAXWindowsWithStatus(for: appElement)
         if let knownResult = evaluateAXWindowLivenessFromList(
             windowsAttributeSucceeded: windowsAttributeSucceeded,
             containsTarget: axWindows.contains { CFEqual($0, axElement) }
@@ -2510,23 +2798,31 @@ public final class WindowService: WindowServicing {
         return elapsed >= 0 && elapsed <= ttl
     }
 
-    /// 指定された PID の現在生存中の CGWindowID 集合を取得する
+    /// 指定された PID の現在生存中の CGWindowID ごとの画面表示状態マップを取得する
     /// - Parameter pid: 対象アプリケーションのプロセス ID
-    /// - Returns: システム上に存在する CGWindowID の集合
-    private nonisolated static func fetchSurvivingCGWindowIDs(for pid: Int32) -> Set<UInt32> {
+    /// - Returns: 生存中の CGWindowID をキー、`kCGWindowIsOnscreen` を値とする辞書
+    private nonisolated static func fetchCGWindowOnscreenMap(for pid: Int32) -> [UInt32: Bool] {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let rawList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return []
+            return [:]
         }
-        var ids = Set<UInt32>()
+        var result: [UInt32: Bool] = [:]
         for dict in rawList {
             guard (dict[kCGWindowOwnerPID as String] as? Int32) == pid,
                   let windowID = dict[kCGWindowNumber as String] as? UInt32 else {
                 continue
             }
-            ids.insert(windowID)
+            let isOnscreen = (dict[kCGWindowIsOnscreen as String] as? Bool) ?? false
+            result[windowID] = isOnscreen
         }
-        return ids
+        return result
+    }
+
+    /// 指定された PID の現在生存中の CGWindowID 集合を取得する
+    /// - Parameter pid: 対象アプリケーションのプロセス ID
+    /// - Returns: システム上に存在する CGWindowID の集合
+    private nonisolated static func fetchSurvivingCGWindowIDs(for pid: Int32) -> Set<UInt32> {
+        Set(fetchCGWindowOnscreenMap(for: pid).keys)
     }
 
     /// 今回スキャンから消えたキャッシュ要素が、タブ切り替え等により同一座標の新ウィンドウへ置き換わった旧タブかを判定する
@@ -2608,7 +2904,8 @@ public final class WindowService: WindowServicing {
     private nonisolated static func fetchAXWindowSnapshots(for pid: Int32) -> [ScannedAXWindowSnapshot] {
         let appElement = AXUIElementCreateApplication(pid)
         applyMessagingTimeout(to: appElement)
-        let axWindows = collectAXWindows(for: appElement)
+        let collected = collectAXWindowsWithStatus(for: appElement)
+        let axWindows = collected.windows
         guard !axWindows.isEmpty else {
             return []
         }
@@ -2616,7 +2913,8 @@ public final class WindowService: WindowServicing {
         var snapshots: [ScannedAXWindowSnapshot] = []
         snapshots.reserveCapacity(axWindows.count)
 
-        for axWin in axWindows {
+        for (index, axWin) in axWindows.enumerated() {
+            let isInPrimaryAXWindowsList = index < collected.primaryWindowCount
             applyMessagingTimeout(to: axWin)
 
             let roleResult = copyStringAttributeWithError(axWin, attribute: kAXRoleAttribute as CFString)
@@ -2657,7 +2955,8 @@ public final class WindowService: WindowServicing {
                     title: titleResult.value,
                     subrole: subroleResult.value,
                     bounds: boundsResult.value,
-                    isMinimized: minimizedResult.value ?? false
+                    isMinimized: minimizedResult.value ?? false,
+                    isInPrimaryAXWindowsList: isInPrimaryAXWindowsList
                 )
             )
         }
@@ -2671,24 +2970,25 @@ public final class WindowService: WindowServicing {
         collectAXWindowsWithStatus(for: appElement).windows
     }
 
-    /// アプリケーション要素からウィンドウ AXUIElement 配列と `kAXWindowsAttribute` 取得成否を併せて収集する
+    /// アプリケーション要素からウィンドウ AXUIElement 配列・`kAXWindowsAttribute` 取得成否・本体件数を併せて収集する
     /// - Parameter appElement: 対象アプリケーションの AXUIElement
-    /// - Returns: 収集したウィンドウ配列と `kAXWindowsAttribute` が成功したかの組
+    /// - Returns: 収集したウィンドウ配列、`kAXWindowsAttribute` の成功可否、および先頭からの本体要素件数の組
     private nonisolated static func collectAXWindowsWithStatus(
         for appElement: AXUIElement
-    ) -> (windows: [AXUIElement], windowsAttributeSucceeded: Bool) {
+    ) -> (windows: [AXUIElement], windowsAttributeSucceeded: Bool, primaryWindowCount: Int) {
         var result: [AXUIElement] = []
         var windowsRef: CFTypeRef?
         let windowsStatus = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
         if isAXCommunicationAbortError(windowsStatus) {
             // アプリがタイムアウト／API無効の場合はフォーカス・メイン補完での追加タイムアウト連鎖を防ぐ
-            return (result, false)
+            return (result, false, 0)
         }
         let windowsAttributeSucceeded = (windowsStatus == .success)
         if windowsAttributeSucceeded,
            let axWindows = windowsRef as? [AXUIElement] {
             result = axWindows
         }
+        let primaryWindowCount = result.count
 
         // kAXWindowsAttribute に含まれないフローティングパネルや別スペースの現在ウィンドウを補完する
         for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
@@ -2708,7 +3008,7 @@ public final class WindowService: WindowServicing {
             }
         }
 
-        return (result, windowsAttributeSucceeded)
+        return (result, windowsAttributeSucceeded, primaryWindowCount)
     }
 
     /// 文字列属性を読み取る

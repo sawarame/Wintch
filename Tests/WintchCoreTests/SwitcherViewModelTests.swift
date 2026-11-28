@@ -2933,6 +2933,78 @@ struct SwitcherViewModelTests {
         #expect(viewModel.closingWindowIDs.isEmpty)
     }
 
+    /// 別スペース遷移を伴うクローズ要求が失敗（.failed）した場合は一覧から誤除外せずスピナーのみ解除しつつフォーカスを回復し、
+    /// 要求送出中に OS 通知で先に除外された直後に .alreadyClosed(didSwitchSpace: true) が返った場合もフォーカス回復が実行されることを検証する
+    @Test("別スペース遷移クローズの失敗時に誤除外せず、既除外後の alreadyClosed でもフォーカスを回復する")
+    @MainActor
+    func otherSpaceCloseFailurePreservesEntryAndAlreadyClosedRestoresFocus() async {
+        let windowService = MockWindowService()
+        let hotKeyMonitor = MockHotKeyMonitor()
+        let permissionService = MockAccessibilityPermissionService()
+        let iconProvider = MockIconProvider()
+
+        let now = Date()
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(
+                id: "w1",
+                cgWindowID: 101,
+                pid: 10,
+                applicationName: "Google Chrome",
+                title: "Active Tab",
+                bounds: WindowBounds(x: 0, y: 0, width: 1200, height: 800),
+                isOnScreen: true,
+                lastActivatedAt: now
+            ),
+            RawWindowCandidate(
+                id: "w2",
+                cgWindowID: 102,
+                pid: 10,
+                applicationName: "Google Chrome",
+                title: "Other Space Tab",
+                bounds: WindowBounds(x: 120, y: 80, width: 1200, height: 800),
+                isOnScreen: false,
+                lastActivatedAt: now.addingTimeInterval(-10)
+            )
+        ]
+
+        var restoredModes: [SwitcherMode] = []
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: hotKeyMonitor,
+            permissionService: permissionService,
+            iconProvider: iconProvider,
+            isNormalSwitcherGroupedByApp: false
+        )
+        viewModel.onPanelFocusRestoreNeeded = { mode in
+            restoredModes.append(mode)
+        }
+
+        // 1. 通常スイッチャーで 2 番目（別スペースの w2）のクローズが .failed(didSwitchSpace: true) を返した場合、
+        //    w2 は一覧に残ったままスピナーが解除され、パネルフォーカスが回復される
+        windowService.requestCloseWindowHandler = { _ in
+            .failed(didSwitchSpace: true)
+        }
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+        #expect(viewModel.selectedIndex == 1)
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.entries.map(\.id) == ["w1", "w2"])
+        #expect(viewModel.closingWindowIDs.isEmpty)
+        #expect(restoredModes == [.normal])
+
+        // 2. 要求送出中に OS 通知で w2 が先に除外され、その後 .alreadyClosed(didSwitchSpace: true) が返った場合でも
+        //    別スペース遷移後のパネルフォーカス回復が取りこぼされない
+        restoredModes.removeAll()
+        windowService.requestCloseWindowHandler = { entry in
+            windowService.simulateWindowClosed(windowID: entry.id, cgWindowID: entry.cgWindowID, pid: entry.pid)
+            return .alreadyClosed(didSwitchSpace: true)
+        }
+        await viewModel.closeSelectedWindow()
+        #expect(viewModel.entries.map(\.id) == ["w1"])
+        #expect(viewModel.closingWindowIDs.isEmpty)
+        #expect(restoredModes.count == 2)
+        #expect(restoredModes.allSatisfy { $0 == .normal })
+    }
+
     /// 最後の 1 件が遅延完了で除外された場合、通常スイッチャーは自動で閉じ、
     /// 検索ランチャーは開いたままウィンドウ 0 件状態へ遷移することを検証する
     @Test("最後の 1 件の遅延完了で通常スイッチャーは自動閉鎖し、検索ランチャーは 0 件状態へ遷移する")
