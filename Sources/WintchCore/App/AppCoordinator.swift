@@ -57,6 +57,11 @@ public final class AppCoordinator {
         settingsViewModel.isLauncherGroupedByApp
     }
 
+    /// 現在のウィンドウタイトル省略位置設定
+    public var windowTitleTruncationMode: WindowTitleTruncationMode {
+        settingsViewModel.windowTitleTruncationMode
+    }
+
     /// 現在のアプリ表示言語設定
     public var appLanguage: AppLanguage {
         settingsViewModel.appLanguage
@@ -183,6 +188,7 @@ public final class AppCoordinator {
         let initialLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
         let initialNormalGrouping = preferencesStore.loadGroupNormalSwitcherByApp()
         let initialLauncherGrouping = preferencesStore.loadGroupLauncherByApp()
+        let initialWindowTitleTruncationMode = preferencesStore.loadWindowTitleTruncationMode()
         let settingsViewModel = SettingsViewModel(
             preferencesStore: preferencesStore,
             hotKeyMonitor: hotKeyMonitor,
@@ -208,6 +214,7 @@ public final class AppCoordinator {
             launcherDisplayStyle: initialLauncherDisplayStyle,
             isNormalSwitcherGroupedByApp: initialNormalGrouping,
             isLauncherGroupedByApp: initialLauncherGrouping,
+            windowTitleTruncationMode: initialWindowTitleTruncationMode,
             resolvedLanguage: initialResolvedLanguage
         )
         self.permissionGuideViewModel = PermissionGuideViewModel(
@@ -230,13 +237,14 @@ public final class AppCoordinator {
         guard !isStarted else { return }
         isStarted = true
 
-        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式・グルーピング・言語設定をロードして反映する
+        // 保存されている通常およびランチャーのショートカット設定ならびに表示形式・グルーピング・タイトル省略位置・言語設定をロードして反映する
         let savedShortcut = preferencesStore.loadShortcut()
         let savedLauncherShortcut = preferencesStore.loadLauncherShortcut()
         let savedDisplayStyle = preferencesStore.loadNormalDisplayStyle()
         let savedLauncherDisplayStyle = preferencesStore.loadLauncherDisplayStyle()
         let savedNormalGrouping = preferencesStore.loadGroupNormalSwitcherByApp()
         let savedLauncherGrouping = preferencesStore.loadGroupLauncherByApp()
+        let savedWindowTitleTruncationMode = preferencesStore.loadWindowTitleTruncationMode()
         let savedAppLanguage = preferencesStore.loadAppLanguage()
         hotKeyMonitor.updateShortcut(savedShortcut)
         hotKeyMonitor.updateLauncherShortcut(savedLauncherShortcut)
@@ -244,6 +252,7 @@ public final class AppCoordinator {
         switcherViewModel.updateLauncherDisplayStyle(savedLauncherDisplayStyle)
         switcherViewModel.updateNormalSwitcherGrouping(savedNormalGrouping)
         switcherViewModel.updateLauncherGrouping(savedLauncherGrouping)
+        switcherViewModel.updateWindowTitleTruncationMode(savedWindowTitleTruncationMode)
         settingsViewModel.updateAppLanguage(savedAppLanguage)
         applyResolvedLanguage(settingsViewModel.resolvedLanguage)
 
@@ -381,6 +390,12 @@ public final class AppCoordinator {
         settingsViewModel.updateAppLanguage(language)
     }
 
+    /// ウィンドウタイトルの省略位置設定を更新し、永続化・スイッチャー状態・設定画面を即時同期する
+    /// - Parameter mode: 新しい省略位置設定
+    public func updateWindowTitleTruncationMode(_ mode: WindowTitleTruncationMode) {
+        settingsViewModel.updateWindowTitleTruncationMode(mode)
+    }
+
     /// 権限状態の変化に応じて監視サービスの起動・停止および誘導画面の表示を切り替える
     /// - Parameter status: 最新の権限状態
     public func updatePermissionState(_ status: AccessibilityPermissionStatus) {
@@ -491,6 +506,10 @@ public final class AppCoordinator {
 
         settingsViewModel.onLauncherGroupingChanged = { [weak self] isGrouped in
             self?.switcherViewModel.updateLauncherGrouping(isGrouped)
+        }
+
+        settingsViewModel.onWindowTitleTruncationModeChanged = { [weak self] newMode in
+            self?.switcherViewModel.updateWindowTitleTruncationMode(newMode)
         }
 
         settingsViewModel.onAppLanguageChanged = { [weak self] _, newResolvedLanguage in

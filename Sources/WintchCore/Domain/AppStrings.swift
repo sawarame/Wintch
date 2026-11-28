@@ -6,6 +6,12 @@ public enum AppStringKey: String, CaseIterable, Equatable, Sendable {
     case languageFollowSystem
     /// 設定「一般」タブの言語ラベル
     case settingsLanguageLabel
+    /// 設定「一般」タブのウィンドウタイトル省略位置ラベル
+    case settingsWindowTitleTruncationModeLabel
+    /// ウィンドウタイトル省略位置: 途中を省略
+    case windowTitleTruncationMiddle
+    /// ウィンドウタイトル省略位置: 末尾を省略
+    case windowTitleTruncationTail
 
     /// メニューバー: アクセシビリティ権限不足案内
     case menuBarAccessibilityRequired
@@ -239,6 +245,30 @@ public struct AppStrings: Equatable, Sendable {
                 zhHans: "语言",
                 zhHant: "語言",
                 ko: "언어"
+            )
+        case .settingsWindowTitleTruncationModeLabel:
+            LocalizedEntry(
+                ja: "タイトルの省略位置",
+                en: "Title Truncation",
+                zhHans: "标题省略位置",
+                zhHant: "標題省略位置",
+                ko: "제목 생략 위치"
+            )
+        case .windowTitleTruncationMiddle:
+            LocalizedEntry(
+                ja: "途中を省略",
+                en: "Truncate Middle",
+                zhHans: "省略中间",
+                zhHant: "省略中間",
+                ko: "가운데 생략"
+            )
+        case .windowTitleTruncationTail:
+            LocalizedEntry(
+                ja: "末尾を省略",
+                en: "Truncate Tail",
+                zhHans: "省略末尾",
+                zhHant: "省略結尾",
+                ko: "끝부분 생략"
             )
 
         // MARK: - メニューバー
@@ -865,6 +895,12 @@ public struct AppStrings: Equatable, Sendable {
     public var languageFollowSystem: String { text(for: .languageFollowSystem) }
     /// 設定「一般」タブの言語ピッカーラベル
     public var settingsLanguageLabel: String { text(for: .settingsLanguageLabel) }
+    /// 設定「一般」タブのウィンドウタイトル省略位置ピッカーラベル
+    public var settingsWindowTitleTruncationModeLabel: String { text(for: .settingsWindowTitleTruncationModeLabel) }
+    /// ウィンドウタイトル省略位置: 途中を省略
+    public var windowTitleTruncationMiddle: String { text(for: .windowTitleTruncationMiddle) }
+    /// ウィンドウタイトル省略位置: 末尾を省略
+    public var windowTitleTruncationTail: String { text(for: .windowTitleTruncationTail) }
     /// メニューバー: アクセシビリティ権限不足案内
     public var menuBarAccessibilityRequired: String { text(for: .menuBarAccessibilityRequired) }
     /// メニューバー: 表示形式セクション見出し

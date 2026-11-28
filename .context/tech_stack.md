@@ -107,7 +107,8 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── WindowPlacement.swift            # パネル上端固定のウィンドウフレーム配置・クランプ計算
 │       │   ├── WindowSearchEngine.swift         # ウィンドウ候補のファジー検索・スコア/MRU ソート
 │       │   ├── WindowSearchResult.swift         # ウィンドウ検索結果・ハイライト範囲モデル
-│       │   └── WindowSorter.swift               # MRU 記録・Z オーダー併用ソートロジック
+│       │   ├── WindowSorter.swift               # MRU 記録・Z オーダー併用ソートロジック
+│       │   └── WindowTitleTruncationMode.swift  # 長いウィンドウタイトルの省略位置設定（途中省略 / 末尾省略）
 │       ├── Services/
 │       │   ├── Protocols/                       # テスト用モック差し替えのためのプロトコル群
 │       │   ├── AccessibilityPermissionService.swift

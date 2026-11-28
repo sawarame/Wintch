@@ -58,6 +58,14 @@ public protocol PreferencesStoring: Sendable {
     /// - Parameter language: 保存する言語設定
     func saveAppLanguage(_ language: AppLanguage)
 
+    /// 保存されているウィンドウタイトルの省略位置設定を読み込む
+    /// - Returns: 保存された省略位置設定（未保存または不正値時はデフォルトの .middle）
+    func loadWindowTitleTruncationMode() -> WindowTitleTruncationMode
+
+    /// ウィンドウタイトルの省略位置設定を保存する
+    /// - Parameter mode: 保存する省略位置設定
+    func saveWindowTitleTruncationMode(_ mode: WindowTitleTruncationMode)
+
     /// 保存されている起動時のバージョンアップ自動チェック設定を読み込む
     /// - Returns: 自動チェックを有効にする場合は true（未保存時はデフォルト false）
     func loadAutoCheckForUpdates() -> Bool

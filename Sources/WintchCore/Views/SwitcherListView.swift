@@ -288,6 +288,7 @@ public struct SwitcherListView: View {
                             isSelected: index == viewModel.selectedIndex,
                             isClosing: isClosing,
                             showsAppHeader: !isGrouped,
+                            titleTruncationMode: viewModel.windowTitleTruncationMode.swiftUITruncationMode,
                             language: viewModel.resolvedLanguage
                         )
                     } else {
@@ -297,6 +298,7 @@ public struct SwitcherListView: View {
                             isSelected: index == viewModel.selectedIndex,
                             isClosing: isClosing,
                             showsAppInfo: !isGrouped,
+                            titleTruncationMode: viewModel.windowTitleTruncationMode.swiftUITruncationMode,
                             language: viewModel.resolvedLanguage
                         )
                     }
@@ -531,6 +533,8 @@ private struct SwitcherRowView: View {
     let isClosing: Bool
     /// 行内にアプリアイコンとアプリ名を表示するか（グルーピング ON 時は false）
     let showsAppInfo: Bool
+    /// ウィンドウタイトルに適用する省略位置モード
+    let titleTruncationMode: Text.TruncationMode
     /// 補助表示テキストに使用する解決済み言語
     let language: ResolvedAppLanguage
 
@@ -562,7 +566,7 @@ private struct SwitcherRowView: View {
                         )
                     )
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(titleTruncationMode)
                 }
             } else {
                 Text(
@@ -575,7 +579,7 @@ private struct SwitcherRowView: View {
                     )
                 )
                 .lineLimit(1)
-                .truncationMode(.tail)
+                .truncationMode(titleTruncationMode)
             }
 
             Spacer(minLength: 0)
@@ -605,6 +609,8 @@ private struct SwitcherCaptureRowView: View {
     let isClosing: Bool
     /// 行内にアプリアイコン・アプリ名ヘッダ行を表示するか（グルーピング ON 時は false）
     let showsAppHeader: Bool
+    /// ウィンドウタイトルに適用する省略位置モード
+    let titleTruncationMode: Text.TruncationMode
     /// 補助表示テキストに使用する解決済み言語
     let language: ResolvedAppLanguage
 
@@ -654,7 +660,7 @@ private struct SwitcherCaptureRowView: View {
                     )
                 )
                 .lineLimit(showsAppHeader ? 1 : 2)
-                .truncationMode(.tail)
+                .truncationMode(titleTruncationMode)
             }
 
             Spacer(minLength: 0)
@@ -774,5 +780,18 @@ private struct AppLaunchRowView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(SwitcherRowStyling.rowBackground(isSelected: isSelected))
+    }
+}
+
+/// ドメイン設定値 `WindowTitleTruncationMode` を SwiftUI の省略位置指定へ変換する拡張
+extension WindowTitleTruncationMode {
+    /// SwiftUI の `Text.truncationMode(_:)` に渡す省略位置モード
+    var swiftUITruncationMode: Text.TruncationMode {
+        switch self {
+        case .middle:
+            .middle
+        case .tail:
+            .tail
+        }
     }
 }

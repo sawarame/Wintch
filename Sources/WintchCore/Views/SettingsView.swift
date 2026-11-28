@@ -100,6 +100,14 @@ public struct SettingsView: View {
         )
     }
 
+    /// ウィンドウタイトル省略位置設定用の双方向バインディング
+    private var windowTitleTruncationModeBinding: Binding<WindowTitleTruncationMode> {
+        Binding(
+            get: { viewModel.windowTitleTruncationMode },
+            set: { viewModel.updateWindowTitleTruncationMode($0) }
+        )
+    }
+
     /// 現在の解決済み言語に対応するローカライズ文言テーブル
     private var strings: AppStrings {
         viewModel.strings
@@ -180,6 +188,13 @@ public struct SettingsView: View {
                 ForEach(AppLanguage.allCases) { languageOption in
                     Text(languageOption.pickerDisplayName(in: viewModel.resolvedLanguage))
                         .tag(languageOption)
+                }
+            }
+
+            Picker(strings.settingsWindowTitleTruncationModeLabel, selection: windowTitleTruncationModeBinding) {
+                ForEach(WindowTitleTruncationMode.allCases) { mode in
+                    Text(mode.displayName(in: viewModel.resolvedLanguage))
+                        .tag(mode)
                 }
             }
         }

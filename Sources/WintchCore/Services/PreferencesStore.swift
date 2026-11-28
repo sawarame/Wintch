@@ -23,6 +23,9 @@ public final class PreferencesStore: PreferencesStoring {
     /// アプリの表示言語設定の永続化に使用する UserDefaults キー
     private static let appLanguageKey = "dev.wintch.appLanguage"
 
+    /// ウィンドウタイトルの省略位置設定の永続化に使用する UserDefaults キー
+    private static let windowTitleTruncationModeKey = "dev.wintch.windowTitleTruncationMode"
+
     /// 起動時のバージョンアップ自動チェック設定の永続化に使用する UserDefaults キー
     private static let autoCheckForUpdatesKey = "dev.wintch.autoCheckForUpdates"
 
@@ -154,6 +157,22 @@ public final class PreferencesStore: PreferencesStoring {
     /// - Parameter language: 保存する言語設定
     public func saveAppLanguage(_ language: AppLanguage) {
         resolveDefaults().set(language.rawValue, forKey: Self.appLanguageKey)
+    }
+
+    /// 保存されているウィンドウタイトルの省略位置設定を読み込む
+    /// - Returns: 保存された省略位置設定（未保存または不正値時はデフォルトの .middle）
+    public func loadWindowTitleTruncationMode() -> WindowTitleTruncationMode {
+        guard let rawValue = resolveDefaults().string(forKey: Self.windowTitleTruncationModeKey),
+              let mode = WindowTitleTruncationMode(rawValue: rawValue) else {
+            return .default
+        }
+        return mode
+    }
+
+    /// ウィンドウタイトルの省略位置設定を保存する
+    /// - Parameter mode: 保存する省略位置設定
+    public func saveWindowTitleTruncationMode(_ mode: WindowTitleTruncationMode) {
+        resolveDefaults().set(mode.rawValue, forKey: Self.windowTitleTruncationModeKey)
     }
 
     /// 保存されている起動時のバージョンアップ自動チェック設定を読み込む

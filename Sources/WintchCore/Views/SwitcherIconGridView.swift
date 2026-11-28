@@ -183,6 +183,7 @@ public struct SwitcherIconGridView: View {
                         icon: viewModel.icon(for: item.result.entry.pid),
                         isSelected: item.index == viewModel.selectedIndex,
                         isClosing: viewModel.isClosingWindow(id: item.result.entry.id),
+                        titleTruncationMode: viewModel.windowTitleTruncationMode.swiftUITruncationMode,
                         language: viewModel.resolvedLanguage
                     )
                     .id(item.id)
@@ -240,6 +241,8 @@ private struct SwitcherIconTileView: View {
     let isSelected: Bool
     /// 現在クローズ／終了処理を実行中かどうか
     let isClosing: Bool
+    /// ウィンドウタイトルに適用する省略位置モード
+    let titleTruncationMode: Text.TruncationMode
     /// 補助表示テキストに使用する解決済み言語
     let language: ResolvedAppLanguage
 
@@ -272,7 +275,7 @@ private struct SwitcherIconTileView: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(isSelected ? .white.opacity(0.88) : .secondary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(titleTruncationMode)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
         }
