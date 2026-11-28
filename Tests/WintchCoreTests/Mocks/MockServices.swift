@@ -315,6 +315,8 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var storedGroupLauncherByApp: Bool = true
     /// メモリ上に保持しているアプリ表示言語設定
     var storedAppLanguage: AppLanguage = .default
+    /// メモリ上に保持しているウィンドウタイトル省略位置設定
+    var storedWindowTitleTruncationMode: WindowTitleTruncationMode = .default
     /// メモリ上に保持しているバージョンアップ自動チェック設定
     var storedAutoCheckForUpdates: Bool = false
     /// メモリ上に保持しているスキップ対象バージョン
@@ -333,6 +335,8 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     var saveGroupLauncherByAppCallCount = 0
     /// saveAppLanguage が呼ばれた回数
     var saveAppLanguageCallCount = 0
+    /// saveWindowTitleTruncationMode が呼ばれた回数
+    var saveWindowTitleTruncationModeCallCount = 0
     /// saveAutoCheckForUpdates が呼ばれた回数
     var saveAutoCheckForUpdatesCallCount = 0
     /// saveSkippedUpdateVersion が呼ばれた回数
@@ -427,6 +431,19 @@ final class MockPreferencesStore: PreferencesStoring, @unchecked Sendable {
     func saveAppLanguage(_ language: AppLanguage) {
         storedAppLanguage = language
         saveAppLanguageCallCount += 1
+    }
+
+    /// メモリ上のウィンドウタイトル省略位置設定を読み込む
+    /// - Returns: 保持している省略位置設定
+    func loadWindowTitleTruncationMode() -> WindowTitleTruncationMode {
+        storedWindowTitleTruncationMode
+    }
+
+    /// メモリ上のウィンドウタイトル省略位置設定を保存する
+    /// - Parameter mode: 保存する省略位置設定
+    func saveWindowTitleTruncationMode(_ mode: WindowTitleTruncationMode) {
+        storedWindowTitleTruncationMode = mode
+        saveWindowTitleTruncationModeCallCount += 1
     }
 
     /// メモリ上のバージョンアップ自動チェック設定を読み込む

@@ -59,6 +59,9 @@ public final class SwitcherViewModel {
     /// 検索ランチャーでウィンドウをアプリごとにグルーピングするかどうか
     public private(set) var isLauncherGroupedByApp: Bool
 
+    /// ウィンドウタイトルの省略位置設定（スイッチャー・ランチャー共通）
+    public private(set) var windowTitleTruncationMode: WindowTitleTruncationMode
+
     /// パネル表示に使用する解決済み言語
     public private(set) var resolvedLanguage: ResolvedAppLanguage
 
@@ -254,6 +257,7 @@ public final class SwitcherViewModel {
     ///   - launcherDisplayStyle: 検索ランチャーの初期表示形式
     ///   - isNormalSwitcherGroupedByApp: 通常スイッチャーの初期アプリグルーピング設定（既定値は true）
     ///   - isLauncherGroupedByApp: 検索ランチャーの初期アプリグルーピング設定（既定値は true）
+    ///   - windowTitleTruncationMode: ウィンドウタイトルの初期省略位置設定（既定値は .middle）
     ///   - resolvedLanguage: パネル表示に使用する解決済み言語（既定値は日本語）
     ///   - closeLoadingTimeout: 1 項目あたりのローディングスピナー表示上限時間（既定値は 5 秒）
     ///   - closePollInterval: スピナー表示中のフォールバック生存確認間隔（既定値は 80ms）
@@ -270,6 +274,7 @@ public final class SwitcherViewModel {
         launcherDisplayStyle: LauncherDisplayStyle = .default,
         isNormalSwitcherGroupedByApp: Bool = true,
         isLauncherGroupedByApp: Bool = true,
+        windowTitleTruncationMode: WindowTitleTruncationMode = .default,
         resolvedLanguage: ResolvedAppLanguage = .japanese,
         closeLoadingTimeout: Duration = .seconds(5),
         closePollInterval: Duration = .milliseconds(80),
@@ -286,6 +291,7 @@ public final class SwitcherViewModel {
         self.launcherDisplayStyle = launcherDisplayStyle
         self.isNormalSwitcherGroupedByApp = isNormalSwitcherGroupedByApp
         self.isLauncherGroupedByApp = isLauncherGroupedByApp
+        self.windowTitleTruncationMode = windowTitleTruncationMode
         self.resolvedLanguage = resolvedLanguage
         self.closeLoadingTimeout = closeLoadingTimeout
         self.closePollInterval = closePollInterval
@@ -305,6 +311,13 @@ public final class SwitcherViewModel {
         if mode != .inactive {
             onSearchResultsUpdated?()
         }
+    }
+
+    /// ウィンドウタイトルの省略位置設定を即時更新する
+    /// - Parameter mode: 新しい省略位置設定
+    public func updateWindowTitleTruncationMode(_ mode: WindowTitleTruncationMode) {
+        guard windowTitleTruncationMode != mode else { return }
+        windowTitleTruncationMode = mode
     }
 
     /// 指定されたプロセス ID のアプリアイコンを取得する

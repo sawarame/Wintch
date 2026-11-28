@@ -132,6 +132,9 @@ public final class SettingsViewModel {
     /// 検索ランチャーでウィンドウをアプリごとにグルーピングするかどうか（初期値: true）
     public private(set) var isLauncherGroupedByApp: Bool
 
+    /// スイッチャー・ランチャー共通のウィンドウタイトル省略位置設定（初期値: .middle）
+    public private(set) var windowTitleTruncationMode: WindowTitleTruncationMode
+
     /// 画面収録権限状態（通常スイッチャーまたは検索ランチャーのいずれかでキャプチャ表示型が選択されている場合のみ確認対象となる）
     public private(set) var screenRecordingStatus: ScreenRecordingPermissionStatus = .denied
 
@@ -151,6 +154,9 @@ public final class SettingsViewModel {
 
     /// 検索ランチャーのアプリグルーピング設定が変更された際に上位コーディネーターへ通知するコールバック
     public var onLauncherGroupingChanged: ((Bool) -> Void)?
+
+    /// ウィンドウタイトルの省略位置設定が変更された際に上位コーディネーターへ通知するコールバック
+    public var onWindowTitleTruncationModeChanged: ((WindowTitleTruncationMode) -> Void)?
 
     /// アプリ表示言語設定が変更された際に上位コーディネーターへ通知するコールバック
     public var onAppLanguageChanged: ((AppLanguage, ResolvedAppLanguage) -> Void)?
@@ -228,6 +234,7 @@ public final class SettingsViewModel {
         self.launcherDisplayStyle = loadedLauncherStyle
         self.isNormalSwitcherGroupedByApp = preferencesStore.loadGroupNormalSwitcherByApp()
         self.isLauncherGroupedByApp = preferencesStore.loadGroupLauncherByApp()
+        self.windowTitleTruncationMode = preferencesStore.loadWindowTitleTruncationMode()
         self.isLaunchAtLoginEnabled = launchAtLoginService.isEnabled
         self.isAutoCheckForUpdatesEnabled = preferencesStore.loadAutoCheckForUpdates()
         self.permissionStatus = permissionService.currentStatus()
@@ -466,6 +473,15 @@ public final class SettingsViewModel {
         isLauncherGroupedByApp = enabled
         preferencesStore.saveGroupLauncherByApp(enabled)
         onLauncherGroupingChanged?(enabled)
+    }
+
+    /// ウィンドウタイトルの省略位置設定を変更して永続化し、上位へ即時通知する
+    /// - Parameter mode: 新しい省略位置設定（途中を省略／末尾を省略）
+    public func updateWindowTitleTruncationMode(_ mode: WindowTitleTruncationMode) {
+        guard windowTitleTruncationMode != mode else { return }
+        windowTitleTruncationMode = mode
+        preferencesStore.saveWindowTitleTruncationMode(mode)
+        onWindowTitleTruncationModeChanged?(mode)
     }
 
     /// いずれかのモードでキャプチャ表示型が選択されている場合のみ、OS の画面収録権限許可をリクエストする

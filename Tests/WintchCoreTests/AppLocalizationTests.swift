@@ -130,6 +130,9 @@ struct AppLocalizationTests {
             for style in LauncherDisplayStyle.allCases {
                 #expect(!style.displayName(in: language).isEmpty)
             }
+            for truncationMode in WindowTitleTruncationMode.allCases {
+                #expect(!truncationMode.displayName(in: language).isEmpty)
+            }
             for emptyState in [LauncherEmptyState.noOpenWindows, .noMatchingApps, .noMatchingCandidates] {
                 #expect(!emptyState.message(in: language).isEmpty)
             }
