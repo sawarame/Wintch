@@ -2274,11 +2274,11 @@ struct SwitcherViewModelTests {
         #expect(viewModel.entries.map(\.id) == ["chrome-1", "chrome-2", "term-1", "finder-1"])
         // 初期選択は表示上 2 番目（chrome-2）ではなく MRU 2 番目の term-1（インデックス 2）
         #expect(viewModel.selectedIndex == 2)
-        // アイコン型でもグルーピング ON 時は縦型リスト表示（1 列）となる
-        #expect(viewModel.usesGridLayoutForCurrentMode == false)
-        #expect(viewModel.gridColumnCount == 1)
+        // アイコン型はグルーピング ON でも複数列グリッドを維持する（4 件・1440pt 幅 → 4 列）
+        #expect(viewModel.usesGridLayoutForCurrentMode == true)
+        #expect(viewModel.gridColumnCount == 4)
 
-        // 縦型リスト連続移動: term-1(2) -> 上: chrome-2(1) -> 上: chrome-1(0) -> 右: chrome-2(1) -> 下: term-1(2) -> 下: finder-1(3)
+        // 1 行 4 列グリッドの移動: term-1(2) -> 上(1行時は前移動): chrome-2(1) -> 上: chrome-1(0) -> 右: chrome-2(1) -> 下(次移動): term-1(2) -> 下: finder-1(3)
         viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
         #expect(viewModel.selectedIndex == 1)
         viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
@@ -2290,27 +2290,83 @@ struct SwitcherViewModelTests {
         viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
         #expect(viewModel.selectedIndex == 3)
 
-        // 単一ウィンドウの Finder(3) を閉じるとアプリ終了され Finder グループごと除去される
+        // 単一ウィンドウの Finder(3) を閉じるとアプリ終了され Finder グループごと除去・列数も 3 列へ再計算される
         await viewModel.closeSelectedWindow()
         #expect(windowService.terminatedPIDs == [30])
         #expect(viewModel.displayedGroups.map(\.applicationName) == ["Google Chrome", "Terminal"])
         #expect(viewModel.entries.map(\.id) == ["chrome-1", "chrome-2", "term-1"])
+        #expect(viewModel.gridColumnCount == 3)
         #expect(viewModel.selectedIndex == 2)
 
-        // 複数ウィンドウの Chrome から chrome-2(1) のみを閉じると Chrome グループは 1 件残る
+        // 複数ウィンドウの Chrome から chrome-2(1) のみを閉じると Chrome グループは 1 件残り（背面枠対象外へ遷移）、列数も 2 列へ更新される
         viewModel.moveSelection(.left)
         #expect(viewModel.selectedIndex == 1)
         await viewModel.closeSelectedWindow()
         #expect(windowService.closedWindows.map(\.id) == ["chrome-2"])
         #expect(viewModel.displayedGroups.map(\.applicationName) == ["Google Chrome", "Terminal"])
         #expect(viewModel.displayedGroups[0].results.map(\.id) == ["chrome-1"])
-        #expect(viewModel.gridColumnCount == 1)
+        #expect(viewModel.gridColumnCount == 2)
         #expect(viewModel.selectedIndex == 1)
 
         // そのまま修飾キー解放で term-1 がアクティブ化される
         viewModel.handleHotKeyEvent(.modifierReleased)
         #expect(viewModel.isPresented == false)
         #expect(windowService.activatedWindows.map(\.id) == ["term-1"])
+    }
+
+    /// グルーピング ON のキャプチャ表示型で複数行グリッド（5 列）が形成され、上下左右の 4 方向矢印移動が機能することを検証する
+    @Test("グルーピング ON のキャプチャ表示型で複数行グリッドの 4 方向矢印移動が正しく動作する")
+    @MainActor
+    func groupedCaptureGridSupportsFourWayArrowNavigation() {
+        let windowService = MockWindowService()
+        let now = Date()
+        // 7 件（Chrome 3 件 + Terminal 2 件 + Finder 2 件）→ 5 列 × 2 行
+        // Row 0: [chrome-1(0), chrome-2(1), chrome-3(2), term-1(3), term-2(4)]
+        // Row 1: [finder-1(5), finder-2(6)]
+        windowService.stubbedCandidates = [
+            RawWindowCandidate(id: "chrome-1", cgWindowID: 901, pid: 10, bundleIdentifier: "com.google.Chrome", applicationName: "Chrome", title: "C1", lastActivatedAt: now),
+            RawWindowCandidate(id: "term-1", cgWindowID: 902, pid: 20, bundleIdentifier: "com.apple.Terminal", applicationName: "Terminal", title: "T1", lastActivatedAt: now.addingTimeInterval(-5)),
+            RawWindowCandidate(id: "chrome-2", cgWindowID: 903, pid: 10, bundleIdentifier: "com.google.Chrome", applicationName: "Chrome", title: "C2", lastActivatedAt: now.addingTimeInterval(-10)),
+            RawWindowCandidate(id: "chrome-3", cgWindowID: 904, pid: 10, bundleIdentifier: "com.google.Chrome", applicationName: "Chrome", title: "C3", lastActivatedAt: now.addingTimeInterval(-15)),
+            RawWindowCandidate(id: "finder-1", cgWindowID: 905, pid: 30, bundleIdentifier: "com.apple.finder", applicationName: "Finder", title: "F1", lastActivatedAt: now.addingTimeInterval(-20)),
+            RawWindowCandidate(id: "term-2", cgWindowID: 906, pid: 20, bundleIdentifier: "com.apple.Terminal", applicationName: "Terminal", title: "T2", lastActivatedAt: now.addingTimeInterval(-25)),
+            RawWindowCandidate(id: "finder-2", cgWindowID: 907, pid: 30, bundleIdentifier: "com.apple.finder", applicationName: "Finder", title: "F2", lastActivatedAt: now.addingTimeInterval(-30))
+        ]
+
+        let viewModel = SwitcherViewModel(
+            windowService: windowService,
+            hotKeyMonitor: MockHotKeyMonitor(),
+            permissionService: MockAccessibilityPermissionService(),
+            iconProvider: MockIconProvider(),
+            screenRecordingPermissionService: MockScreenRecordingPermissionService(),
+            windowCaptureService: MockWindowCaptureService(),
+            normalDisplayStyle: .capture,
+            isNormalSwitcherGroupedByApp: true
+        )
+        viewModel.updateAvailableScreenSize(CGSize(width: 1920, height: 1080))
+        viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+
+        #expect(viewModel.usesGridLayoutForCurrentMode == true)
+        #expect(viewModel.gridColumnCount == 5)
+        #expect(viewModel.panelVerticalPlacement == .centered)
+        // MRU 2 番目の term-1（インデックス 3）が初期選択される
+        #expect(viewModel.selectedIndex == 3)
+
+        // インデックス 3（Row 0 Col 3）から下移動すると Row 1 末尾（インデックス 6）へ丸められる
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 6)
+
+        // インデックス 6（Row 1 Col 1）から上移動すると Row 0 Col 1（インデックス 1）へ移動する
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .up))
+        #expect(viewModel.selectedIndex == 1)
+
+        // インデックス 1 から下移動すると Row 1 Col 1（インデックス 6）へ戻る
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .down))
+        #expect(viewModel.selectedIndex == 6)
+
+        // 左移動で Row 1 Col 0（インデックス 5）へ移動する
+        viewModel.handleHotKeyEvent(.arrowPressed(direction: .left))
+        #expect(viewModel.selectedIndex == 5)
     }
 
     /// 検索ランチャーでグルーピング ON（デフォルト）時、未入力・検索中ともにアプリ単位でグルーピングされ、

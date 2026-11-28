@@ -7,40 +7,31 @@ import Testing
 @Suite("SwitcherPanelLayout テスト")
 struct SwitcherPanelLayoutTests {
     /// モード・表示形式・グルーピング設定の全組み合わせに対して、
-    /// 通常スイッチャーかつグルーピング OFF のキャプチャ表示型のみ中央配置となり、それ以外は上寄せ配置になることを検証する
-    @Test("グルーピング OFF のキャプチャ表示型スイッチャーのみ中央配置となり他はすべて上寄せ配置となる")
+    /// 通常スイッチャーのキャプチャ表示型のみグルーピング ON/OFF ともに中央配置となり、それ以外は上寄せ配置になることを検証する
+    @Test("通常スイッチャーのキャプチャ表示型はグルーピング ON/OFF ともに中央配置となり他はすべて上寄せ配置となる")
     func verticalPlacementMatrix() {
-        // 通常スイッチャー（グルーピング OFF）
-        #expect(
-            SwitcherPanelLayout.verticalPlacement(
-                mode: .normal,
-                normalDisplayStyle: .list,
-                isNormalSwitcherGroupedByApp: false
-            ) == .upperAnchored
-        )
-        #expect(
-            SwitcherPanelLayout.verticalPlacement(
-                mode: .normal,
-                normalDisplayStyle: .icon,
-                isNormalSwitcherGroupedByApp: false
-            ) == .upperAnchored
-        )
-        #expect(
-            SwitcherPanelLayout.verticalPlacement(
-                mode: .normal,
-                normalDisplayStyle: .capture,
-                isNormalSwitcherGroupedByApp: false
-            ) == .centered
-        )
-
-        // 通常スイッチャー（グルーピング ON）は全形式で上寄せ配置
-        for style in SwitcherDisplayStyle.allCases {
+        // 通常スイッチャー（グルーピング OFF/ON 共通でキャプチャ表示型のみ中央配置）
+        for isGrouped in [false, true] {
             #expect(
                 SwitcherPanelLayout.verticalPlacement(
                     mode: .normal,
-                    normalDisplayStyle: style,
-                    isNormalSwitcherGroupedByApp: true
+                    normalDisplayStyle: .list,
+                    isNormalSwitcherGroupedByApp: isGrouped
                 ) == .upperAnchored
+            )
+            #expect(
+                SwitcherPanelLayout.verticalPlacement(
+                    mode: .normal,
+                    normalDisplayStyle: .icon,
+                    isNormalSwitcherGroupedByApp: isGrouped
+                ) == .upperAnchored
+            )
+            #expect(
+                SwitcherPanelLayout.verticalPlacement(
+                    mode: .normal,
+                    normalDisplayStyle: .capture,
+                    isNormalSwitcherGroupedByApp: isGrouped
+                ) == .centered
             )
         }
 
@@ -92,13 +83,14 @@ struct SwitcherPanelLayoutTests {
         #expect(viewModel.mode == .normal)
         #expect(viewModel.panelVerticalPlacement == .centered)
 
-        // グルーピング ON へ切り替えると縦型リストとなるため上寄せ配置へ切り替わる
+        // グルーピング ON へ切り替えてもキャプチャ表示型はグリッド維持のため中央配置のまま
         viewModel.updateNormalSwitcherGrouping(true)
-        #expect(viewModel.panelVerticalPlacement == .upperAnchored)
+        #expect(viewModel.panelVerticalPlacement == .centered)
 
-        // グルーピング OFF でもアイコン型やリスト型は上寄せ配置
-        viewModel.updateNormalSwitcherGrouping(false)
+        // アイコン型やリスト型はグルーピング ON/OFF いずれでも上寄せ配置
         viewModel.updateNormalDisplayStyle(.icon)
+        #expect(viewModel.panelVerticalPlacement == .upperAnchored)
+        viewModel.updateNormalSwitcherGrouping(false)
         #expect(viewModel.panelVerticalPlacement == .upperAnchored)
         viewModel.updateNormalDisplayStyle(.list)
         #expect(viewModel.panelVerticalPlacement == .upperAnchored)

@@ -434,11 +434,11 @@ struct SwitcherListViewTests {
     }
 
     /// 通常スイッチャーのアイコン型・キャプチャ表示型でグルーピング ON のとき、
-    /// 検索ランチャーのキャプチャ表示型（グルーピング ON）と同じプレビュー枠付き縦型リスト（拡大横幅）になり、
-    /// アイコン型では権限未許可でも警告バナーを表示せず、キャプチャ表示型未許可時のみバナーを表示することを検証する
-    @Test("通常スイッチャーのアイコン型・キャプチャ表示型（グルーピング ON）がランチャーのキャプチャ表示型と同一の縦型リストになる")
+    /// リスト型は拡大縦型リストを維持しつつ、アイコン型・キャプチャ表示型は固定グリッド幅と高さを維持し、
+    /// キャプチャ表示型未許可時のみ上部に警告バナーを表示することを検証する
+    @Test("通常スイッチャーのアイコン型・キャプチャ表示型はグルーピング ON でも固定グリッドを維持しリスト型のみ縦型リストとなる")
     @MainActor
-    func normalIconAndCaptureGroupedMatchLauncherCaptureGroupedListStyle() {
+    func normalIconAndCaptureGroupedKeepGridLayoutWhileListRemainsVertical() {
         let normalListVM = makeViewModel(windowCount: 2, appCount: 0)
         normalListVM.updateNormalDisplayStyle(.list)
         normalListVM.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
@@ -467,22 +467,26 @@ struct SwitcherListViewTests {
         normalCaptureDeniedHosting.layoutSubtreeIfNeeded()
         let normalCaptureDeniedSize = normalCaptureDeniedHosting.fittingSize
 
-        // いずれもディスプレイ幅に応じた拡大後の縦型リスト幅として描画される
-        let expectedWidth = SwitcherPanelLayout.listPanelWidth(
+        // リスト型のみディスプレイ幅に応じた縦型リスト幅となり、アイコン型・キャプチャ表示型は 2 列の固定グリッド幅になる
+        let expectedListWidth = SwitcherPanelLayout.listPanelWidth(
             availableScreenWidth: normalListVM.availableScreenSize.width
         )
-        #expect(expectedWidth > 520)
-        #expect(normalListSize.width == expectedWidth)
-        #expect(normalIconSize.width == expectedWidth)
-        #expect(normalCaptureGrantedSize.width == expectedWidth)
-        #expect(normalCaptureDeniedSize.width == expectedWidth)
+        let expectedIconGridWidth = 2 * SwitcherGridLayout.iconTileWidth
+            + SwitcherGridLayout.cardSpacing
+            + SwitcherGridLayout.gridPadding * 2
+        let expectedCaptureGridWidth = 2 * SwitcherGridLayout.cardWidth
+            + SwitcherGridLayout.cardSpacing
+            + SwitcherGridLayout.gridPadding * 2
 
-        // アイコン型（大きなアイコン 46pt・枠/背景なし・領域 50pt）とキャプチャ表示型（サムネイル高さ 50pt・権限許可）は
-        // 同じ行高さとなり、リスト型より大きい
-        #expect(SwitcherListView.groupedIconDisplaySize > 28)
-        #expect(SwitcherListView.groupedIconContainerSize == SwitcherListView.captureThumbnailHeight)
-        #expect(abs(normalIconSize.height - normalCaptureGrantedSize.height) < 0.5)
-        #expect(normalIconSize.height > normalListSize.height)
+        #expect(expectedListWidth > 520)
+        #expect(normalListSize.width == expectedListWidth)
+        #expect(normalIconSize.width == expectedIconGridWidth)
+        #expect(normalCaptureGrantedSize.width == expectedCaptureGridWidth)
+        #expect(normalCaptureDeniedSize.width == expectedCaptureGridWidth)
+
+        // アイコン型・キャプチャ表示型（許可済み）は固定グリッド高さに一致する
+        #expect(normalIconSize.height == SwitcherGridLayout.iconTileHeight + SwitcherGridLayout.gridPadding * 2)
+        #expect(normalCaptureGrantedSize.height == SwitcherGridLayout.cardHeight + SwitcherGridLayout.gridPadding * 2)
 
         // キャプチャ表示型で権限未許可時のみ上部に警告バナーが追加され高さが増える（アイコン型は未許可でもバナー無し）
         #expect(normalCaptureDeniedSize.height > normalCaptureGrantedSize.height)
@@ -569,7 +573,7 @@ struct SwitcherListViewTests {
             ("launcher-flat-list", .launcher, .list, .list, false),
             ("launcher-grouped-list", .launcher, .list, .list, true),
             ("launcher-capture", .launcher, .list, .capture, false),
-            ("normal-grouped-icon", .normal, .icon, .list, true)
+            ("normal-grouped-list", .normal, .list, .list, true)
         ]
 
         for scenario in scenarios {
@@ -773,7 +777,7 @@ struct SwitcherListViewTests {
             Scenario(mode: .normal, normalStyle: .icon, launcherStyle: .list, grouped: false, placement: .upperAnchored),
             Scenario(mode: .normal, normalStyle: .icon, launcherStyle: .list, grouped: true, placement: .upperAnchored),
             Scenario(mode: .normal, normalStyle: .capture, launcherStyle: .list, grouped: false, placement: .centered),
-            Scenario(mode: .normal, normalStyle: .capture, launcherStyle: .list, grouped: true, placement: .upperAnchored),
+            Scenario(mode: .normal, normalStyle: .capture, launcherStyle: .list, grouped: true, placement: .centered),
             Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .list, grouped: false, placement: .upperAnchored),
             Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .list, grouped: true, placement: .upperAnchored),
             Scenario(mode: .launcher, normalStyle: .list, launcherStyle: .capture, grouped: false, placement: .upperAnchored),

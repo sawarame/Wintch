@@ -4,7 +4,7 @@ import CoreGraphics
 public enum SwitcherPanelVerticalPlacement: Equatable, Sendable {
     /// ディスプレイ上部寄りにパネル上端を配置し、下方向へ広く一覧を表示するモード
     case upperAnchored
-    /// ディスプレイ有効領域の中央に配置する従来モード（グルーピング OFF のキャプチャ表示型など）
+    /// ディスプレイ有効領域の中央に配置するモード（通常スイッチャーのキャプチャ表示型）
     case centered
 }
 
@@ -56,15 +56,15 @@ public enum SwitcherPanelLayout {
     /// - Parameters:
     ///   - mode: 現在のスイッチャー表示モード
     ///   - normalDisplayStyle: 通常スイッチャーの表示形式
-    ///   - isNormalSwitcherGroupedByApp: 通常スイッチャーでアプリごとのグルーピングが有効か
+    ///   - isNormalSwitcherGroupedByApp: 通常スイッチャーでアプリごとのグルーピングが有効か（互換引数）
     /// - Returns: 適用するパネルの垂直配置スタイル
     public static func verticalPlacement(
         mode: SwitcherMode,
         normalDisplayStyle: SwitcherDisplayStyle,
         isNormalSwitcherGroupedByApp: Bool
     ) -> SwitcherPanelVerticalPlacement {
-        // 通常スイッチャーかつグルーピング OFF のキャプチャ表示型のみ従来通りディスプレイ中央に表示する
-        if mode == .normal && normalDisplayStyle == .capture && !isNormalSwitcherGroupedByApp {
+        // 通常スイッチャーのキャプチャ表示型はグルーピング ON/OFF ともにディスプレイ中央に配置する
+        if mode == .normal && normalDisplayStyle == .capture {
             return .centered
         }
         return .upperAnchored
@@ -131,14 +131,14 @@ public enum SwitcherPanelLayout {
         return max(maxPanelHeight - reservedHeaderHeight, floorHeight)
     }
 
-    /// 上寄せ配置のアイコン型グリッド（グルーピング OFF）におけるスクロール領域最大高さを算出する
+    /// 上寄せ配置のアイコン型グリッド（グルーピング ON/OFF 共通）におけるスクロール領域最大高さを算出する
     /// - Parameter availableScreenHeight: アクティブディスプレイの有効高さ（ポイント）
     /// - Returns: アイコングリッドの ScrollView に適用する最大高さ（ポイント）
     public static func maxIconGridScrollHeight(availableScreenHeight: CGFloat) -> CGFloat {
         maxUpperAnchoredPanelHeight(availableScreenHeight: availableScreenHeight)
     }
 
-    /// 中央配置のキャプチャ表示型グリッド（グルーピング OFF）におけるスクロール領域最大高さを算出する
+    /// 中央配置のキャプチャ表示型グリッド（グルーピング ON/OFF 共通）におけるスクロール領域最大高さを算出する
     /// - Parameter availableScreenHeight: アクティブディスプレイの有効高さ（ポイント）
     /// - Returns: キャプチャグリッドの ScrollView に適用する最大高さ（ポイント）
     public static func maxCenteredCaptureGridScrollHeight(availableScreenHeight: CGFloat) -> CGFloat {
@@ -186,7 +186,7 @@ public enum SwitcherPanelLayout {
     /// - Parameters:
     ///   - rows: 表示対象の統合リスト行配列
     ///   - isGrouped: アプリグルーピング表示が有効かどうか
-    ///   - usesTallWindowRow: ウィンドウ行に大型アイコン行またはキャプチャサムネイル行を使用しているかどうか
+    ///   - usesTallWindowRow: ウィンドウ行に検索ランチャーのキャプチャサムネイル行を使用しているかどうか
     /// - Returns: 上下余白と行間スペーシングを含む最小保証高さ（ポイント）
     public static func minimumListContentHeight(
         rows: [SwitcherListRow],
@@ -228,7 +228,7 @@ public enum SwitcherPanelLayout {
     /// - Parameters:
     ///   - rows: 表示対象の統合リスト行配列
     ///   - isGrouped: アプリグルーピング表示が有効かどうか
-    ///   - usesTallWindowRow: ウィンドウ行に大型アイコン行またはキャプチャサムネイル行を使用しているかどうか
+    ///   - usesTallWindowRow: ウィンドウ行に検索ランチャーのキャプチャサムネイル行を使用しているかどうか
     ///   - maxScrollHeight: リストの最大スクロール高さ（ポイント）
     /// - Returns: 固定最大高さモードで描画すべき場合は true
     public static func shouldUseFixedMaxScrollHeight(

@@ -95,7 +95,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── ShortcutConflictValidator.swift  # 通常スイッチャー・ランチャー間の双方向競合検証
 │       │   ├── ShortcutPreference.swift         # 通常スイッチャーショートカット設定（旧形式マイグレーション含む）
 │       │   ├── SwitcherDisplayStyle.swift       # 表示形式（リスト型 / アイコン型 / キャプチャ表示型）
-│       │   ├── SwitcherGridLayout.swift         # アイコン型・キャプチャグリッド列数算出・4 方向循環カーソル計算
+│       │   ├── SwitcherGridLayout.swift         # アイコン型・キャプチャグリッド列数算出・グループ背面枠セグメント・4 方向循環カーソル計算
 │       │   ├── SwitcherListRow.swift            # リスト表示用の統合行識別・構築ロジック
 │       │   ├── SwitcherPanelLayout.swift        # パネル垂直配置スタイル判定・座標計算・一覧最大高さ算出
 │       │   ├── SwitcherSelection.swift          # スイッチャー／ランチャーの選択インデックス・循環計算
@@ -135,6 +135,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │           ├── SwitcherCaptureGridView.swift    # キャプチャ表示型グリッドビュー
 │           ├── SwitcherClosingIndicatorView.swift # ウィンドウ／アプリ終了処理中の円形スピナービュー
 │           ├── SwitcherContentView.swift        # モード・表示形式に応じたコンテナ分岐ビュー
+│           ├── SwitcherGridGroupFrameView.swift # グリッド表示用の複数ウィンドウグループ背面枠・開放エッジ描画ビュー
 │           ├── SwitcherIconGridView.swift       # アイコン型グリッドビュー
 │           ├── SwitcherListView.swift           # リスト型スイッチャー＆検索ランチャー統合ビュー
 │           ├── SwitcherPanel.swift              # 非アクティブ表示対応フローティング NSPanel ラッパー
