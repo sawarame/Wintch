@@ -17,7 +17,7 @@ public final class WindowCaptureService: WindowCaptureServicing {
     }
 
     /// 単一ウィンドウの非同期キャプチャ結果を表す Sendable 列挙型
-    private enum SingleCaptureResult: Sendable {
+    enum SingleCaptureResult: Sendable {
         /// サムネイル画像の取得成功
         case captured(UInt32, CGImage)
         /// 画面収録権限の拒否・不足による失敗
@@ -25,6 +25,34 @@ public final class WindowCaptureService: WindowCaptureServicing {
         /// 権限以外の一時的失敗またはタイムアウト
         case failed(windowID: UInt32, isOnScreen: Bool, reason: String)
     }
+
+    /// 取得済み CGImage の独立ビットマップ化および可視ピクセル検証結果を表す Sendable 列挙型
+    enum CapturedImageValidationResult: Sendable {
+        /// OS 管理バッファから切り離された有効なサムネイル画像
+        case valid(CGImage)
+        /// サイズ不正・描画失敗・全面透明等による無効フレーム
+        case invalid(reason: String)
+    }
+
+    /// SCShareableContent 取得後のキャプチャ対象選定結果を表す値型
+    struct ShareableCaptureTargetSelection: Equatable, Sendable {
+        /// 実行対象として優先順（表示中→未キャッシュ画面外）に並べた CGWindow ID 配列
+        let orderedWindowIDs: [UInt32]
+        /// 実行対象のうち画面表示中（isOnScreen == true）の件数
+        let onScreenCount: Int
+        /// 実行対象のうち画面外未キャッシュ（isOnScreen == false）の件数
+        let offScreenCount: Int
+        /// SCShareableContent に存在しなかったリクエスト ID の件数
+        let missingCount: Int
+        /// オフスクリーン化済みかつ既キャッシュのため再取得をスキップした件数
+        let skippedCachedOffScreenCount: Int
+    }
+
+    /// 実質的な可視ピクセルが存在するとみなす最小アルファ値（0〜7 は全面透明・微細ノイズとみなして除外）
+    nonisolated static let minimumVisibleAlphaThreshold: UInt8 = 8
+
+    /// 全面透明（空）フレーム検知時に用いる失敗理由識別子
+    nonisolated static let transparentImageFailureReason = "transparentImage"
 
     /// タイムアウト付き非同期レースの状態管理構造体
     private struct TimeoutRaceState: Sendable {
@@ -147,14 +175,17 @@ public final class WindowCaptureService: WindowCaptureServicing {
 
         guard !Task.isCancelled else { return }
 
-        // 画面表示中（isOnScreen）のウィンドウを優先し、各群内では呼び出し元指定順（MRU・未キャッシュ優先）を維持する
-        let requestedTargets = cgWindowIDs.compactMap { shareableWindowsByID[$0] }
-        let onScreenTargets = requestedTargets.filter(\.value.isOnScreen)
-        let offScreenTargets = requestedTargets.filter { !$0.value.isOnScreen }
-        let orderedTargets = onScreenTargets + offScreenTargets
-        let missingCount = cgWindowIDs.count - requestedTargets.count
+        // 画面表示中（isOnScreen）のウィンドウを優先し、SCShareableContent 取得時点でオフスクリーン化済みの
+        // 既キャッシュウィンドウはスペース切替レースによる上書きを防ぐため再取得をスキップする
+        let isOnScreenByID = shareableWindowsByID.mapValues(\.value.isOnScreen)
+        let selection = Self.selectShareableCaptureTargets(
+            requestedWindowIDs: cgWindowIDs,
+            isOnScreenByID: isOnScreenByID,
+            isCached: { hasCachedThumbnail(for: $0) }
+        )
+        let orderedTargets = selection.orderedWindowIDs.compactMap { shareableWindowsByID[$0] }
         Self.logger.debug(
-            "キャプチャ開始: requested=\(cgWindowIDs.count) matched=\(orderedTargets.count) onScreen=\(onScreenTargets.count) offScreen=\(offScreenTargets.count) missing=\(missingCount)"
+            "キャプチャ開始: requested=\(cgWindowIDs.count) matched=\(orderedTargets.count) onScreen=\(selection.onScreenCount) offScreen=\(selection.offScreenCount) skippedCachedOffScreen=\(selection.skippedCachedOffScreenCount) missing=\(selection.missingCount)"
         )
         guard !orderedTargets.isEmpty else { return }
 
@@ -200,29 +231,13 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     }
                 }
 
-                switch result {
-                case let .captured(windowID, cgImage):
-                    if !invalidatedWindowIDsDuringCapture.contains(windowID) {
-                        let nsImage = NSImage(
-                            cgImage: cgImage,
-                            size: NSSize(width: cgImage.width, height: cgImage.height)
-                        )
-                        storeInCache(nsImage, for: windowID)
-                        succeededCount += 1
-                        onCaptured(windowID, nsImage)
-                    }
-                case let .failed(windowID, isOnScreen, reason):
-                    if isOnScreen {
-                        failedOnScreenCount += 1
-                    } else {
-                        failedOffScreenCount += 1
-                    }
-                    Self.logger.debug(
-                        "単一キャプチャ失敗: windowID=\(windowID) isOnScreen=\(isOnScreen) reason=\(reason, privacy: .public)"
-                    )
-                case .permissionDenied:
-                    break
-                }
+                applySingleCaptureResult(
+                    result,
+                    succeededCount: &succeededCount,
+                    failedOnScreenCount: &failedOnScreenCount,
+                    failedOffScreenCount: &failedOffScreenCount,
+                    onCaptured: onCaptured
+                )
             }
         }
 
@@ -326,14 +341,16 @@ public final class WindowCaptureService: WindowCaptureServicing {
                     contentFilter: filter,
                     configuration: config
                 )
-                guard Self.isValidCapturedImageSize(CGSize(width: image.width, height: image.height)) else {
+                switch Self.materializeAndValidateCapturedImage(image) {
+                case let .valid(detachedImage):
+                    return SingleCaptureResult.captured(windowID, detachedImage)
+                case let .invalid(reason):
                     return SingleCaptureResult.failed(
                         windowID: windowID,
                         isOnScreen: isOnScreen,
-                        reason: "emptyImageSize"
+                        reason: reason
                     )
                 }
-                return SingleCaptureResult.captured(windowID, image)
             } catch {
                 let nsError = error as NSError
                 if Self.isPermissionDeniedError(error) {
@@ -387,6 +404,162 @@ public final class WindowCaptureService: WindowCaptureServicing {
     /// - Returns: 有効なサイズであれば true
     nonisolated static func isValidCapturedImageSize(_ size: CGSize) -> Bool {
         size.width > 0 && size.height > 0
+    }
+
+    /// 取得済み CGImage を OS 管理バッファ（IOSurface 等）から切り離した独立 RGBA ビットマップへ複製し、
+    /// 実質的な可視ピクセルが存在する有効画像かどうかを検証する
+    /// - Parameter sourceImage: ScreenCaptureKit 等から返却された元の CGImage
+    /// - Returns: 有効な独立 CGImage（`.valid`）またはサイズ不正・複製失敗・全面透明による失敗理由（`.invalid`）
+    nonisolated static func materializeAndValidateCapturedImage(
+        _ sourceImage: CGImage
+    ) -> CapturedImageValidationResult {
+        let width = sourceImage.width
+        let height = sourceImage.height
+        guard isValidCapturedImageSize(CGSize(width: width, height: height)) else {
+            return .invalid(reason: "emptyImageSize")
+        }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        // ビッグエンディアン 32-bit RGBA（メモリ上のバイト順が常に R, G, B, A）で独立ビットマップを確保する
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return .invalid(reason: "bitmapCreationFailed")
+        }
+
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        context.clear(rect)
+        context.interpolationQuality = .none
+        context.draw(sourceImage, in: rect)
+
+        guard let rawData = context.data else {
+            return .invalid(reason: "bitmapCreationFailed")
+        }
+
+        let bytesPerRow = context.bytesPerRow
+        let buffer = rawData.bindMemory(to: UInt8.self, capacity: bytesPerRow * height)
+        var hasVisiblePixel = false
+
+        // 各ピクセルのアルファバイト（オフセット +3）を走査し、可視ピクセルを 1 件検知した時点で早期終了する
+        outerLoop: for y in 0..<height {
+            let rowStart = y * bytesPerRow
+            var offset = rowStart + 3
+            for _ in 0..<width {
+                if buffer[offset] >= minimumVisibleAlphaThreshold {
+                    hasVisiblePixel = true
+                    break outerLoop
+                }
+                offset += 4
+            }
+        }
+
+        guard hasVisiblePixel else {
+            return .invalid(reason: transparentImageFailureReason)
+        }
+
+        guard let detachedImage = context.makeImage() else {
+            return .invalid(reason: "bitmapCreationFailed")
+        }
+        return .valid(detachedImage)
+    }
+
+    /// リクエストされた CGWindow ID 配列と SCShareableContent 上の可視状態・キャッシュ保持状況から、
+    /// 再キャプチャすべき対象を優先順で選定する
+    ///
+    /// - 画面表示中（`isOnScreen == true`）のウィンドウを最優先し、未キャッシュの画面外ウィンドウを後続に配置する
+    /// - `SCShareableContent` 取得時点で既に画面外（`isOnScreen == false`）へ退避しており、かつ有効キャッシュを
+    ///   保持済みのウィンドウは、スペース切替レースによる既存キャッシュ上書きを防ぐためスキップする
+    /// - Parameters:
+    ///   - requestedWindowIDs: 呼び出し元が要求した CGWindow ID 配列（優先順）
+    ///   - isOnScreenByID: SCShareableContent から得たウィンドウ ID ごとの画面表示中フラグ辞書
+    ///   - isCached: 指定ウィンドウ ID の有効サムネイルがメモリキャッシュ済みかを返すクロージャ
+    /// - Returns: 選定済み対象 ID 配列および診断用カウント情報
+    nonisolated static func selectShareableCaptureTargets(
+        requestedWindowIDs: [UInt32],
+        isOnScreenByID: [UInt32: Bool],
+        isCached: (UInt32) -> Bool
+    ) -> ShareableCaptureTargetSelection {
+        var seen: Set<UInt32> = []
+        var onScreenIDs: [UInt32] = []
+        var offScreenIDs: [UInt32] = []
+        var missingCount = 0
+        var skippedCachedOffScreenCount = 0
+
+        for windowID in requestedWindowIDs {
+            guard seen.insert(windowID).inserted else { continue }
+            guard let isOnScreen = isOnScreenByID[windowID] else {
+                missingCount += 1
+                continue
+            }
+
+            if isOnScreen {
+                onScreenIDs.append(windowID)
+            } else if isCached(windowID) {
+                skippedCachedOffScreenCount += 1
+            } else {
+                offScreenIDs.append(windowID)
+            }
+        }
+
+        return ShareableCaptureTargetSelection(
+            orderedWindowIDs: onScreenIDs + offScreenIDs,
+            onScreenCount: onScreenIDs.count,
+            offScreenCount: offScreenIDs.count,
+            missingCount: missingCount,
+            skippedCachedOffScreenCount: skippedCachedOffScreenCount
+        )
+    }
+
+    /// 単一ウィンドウのキャプチャ結果をキャッシュおよびコールバックへ反映し、失敗時は既存キャッシュを保護する
+    /// - Parameters:
+    ///   - result: 完了した単一ウィンドウのキャプチャ結果
+    ///   - succeededCount: 成功件数カウンタ
+    ///   - failedOnScreenCount: 画面表示中ウィンドウの失敗件数カウンタ
+    ///   - failedOffScreenCount: 画面外ウィンドウの失敗件数カウンタ
+    ///   - onCaptured: 有効画像格納後に呼ばれる通知クロージャ
+    func applySingleCaptureResult(
+        _ result: SingleCaptureResult,
+        succeededCount: inout Int,
+        failedOnScreenCount: inout Int,
+        failedOffScreenCount: inout Int,
+        onCaptured: @MainActor (UInt32, NSImage) -> Void
+    ) {
+        switch result {
+        case let .captured(windowID, cgImage):
+            if !invalidatedWindowIDsDuringCapture.contains(windowID) {
+                let nsImage = NSImage(
+                    cgImage: cgImage,
+                    size: NSSize(width: cgImage.width, height: cgImage.height)
+                )
+                storeInCache(nsImage, for: windowID)
+                succeededCount += 1
+                onCaptured(windowID, nsImage)
+            }
+        case let .failed(windowID, isOnScreen, reason):
+            if isOnScreen {
+                failedOnScreenCount += 1
+            } else {
+                failedOffScreenCount += 1
+            }
+            if reason == Self.transparentImageFailureReason {
+                Self.logger.info(
+                    "全面透明フレームを検知し破棄（既存キャッシュ保護）: windowID=\(windowID) isOnScreen=\(isOnScreen) reason=\(reason, privacy: .public)"
+                )
+            } else {
+                Self.logger.debug(
+                    "単一キャプチャ失敗: windowID=\(windowID) isOnScreen=\(isOnScreen) reason=\(reason, privacy: .public)"
+                )
+            }
+        case .permissionDenied:
+            break
+        }
     }
 
     /// キャンセル非対応になり得る非同期 I/O を指定秒数のタイムアウトおよび親キャンセルから隔離して実行する
