@@ -1168,4 +1168,238 @@ struct WindowCaptureAndMatchingTests {
         )
         #expect(emptyOSResponse == nil)
     }
+
+    /// 指定した単色 RGBA ピクセルで埋められたテスト用 CGImage を生成する
+    /// - Parameters:
+    ///   - width: 画像幅（ピクセル）
+    ///   - height: 画像高さ（ピクセル）
+    ///   - r: 赤成分（0〜255）
+    ///   - g: 緑成分（0〜255）
+    ///   - b: 青成分（0〜255）
+    ///   - a: アルファ成分（0〜255）
+    /// - Returns: 生成された CGImage
+    private func makeSolidTestCGImage(
+        width: Int,
+        height: Int,
+        r: UInt8,
+        g: UInt8,
+        b: UInt8,
+        a: UInt8
+    ) -> CGImage {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        for idx in stride(from: 0, to: pixels.count, by: 4) {
+            pixels[idx] = r
+            pixels[idx + 1] = g
+            pixels[idx + 2] = b
+            pixels[idx + 3] = a
+        }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: bitmapInfo),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )!
+    }
+
+    /// materializeAndValidateCapturedImage が全面透明（alpha == 0 および微細ノイズのみ）の CGImage を拒否し、
+    /// 暗い単色ウィンドウを含む不透明・半透明の正常な CGImage を独立ビットマップへ複製して受理することを検証する
+    @Test("materializeAndValidateCapturedImage は全面透明画像を拒否し正常画像を独立ビットマップ複製する")
+    func materializeAndValidateCapturedImageRejectsTransparentAndMaterializesValidImages() {
+        // 1. 全ピクセル完全透明（alpha == 0）は transparentImage として拒否する
+        let fullyTransparent = makeSolidTestCGImage(width: 32, height: 24, r: 0, g: 0, b: 0, a: 0)
+        if case let .invalid(reason) = WindowCaptureService.materializeAndValidateCapturedImage(fullyTransparent) {
+            #expect(reason == WindowCaptureService.transparentImageFailureReason)
+        } else {
+            Issue.record("完全透明画像が有効と誤判定されました")
+        }
+
+        // 2. しきい値未満の微細アルファノイズ（alpha == 7）のみの画像も拒否する
+        let subtleNoiseOnly = makeSolidTestCGImage(width: 16, height: 16, r: 7, g: 7, b: 7, a: 7)
+        if case let .invalid(reason) = WindowCaptureService.materializeAndValidateCapturedImage(subtleNoiseOnly) {
+            #expect(reason == WindowCaptureService.transparentImageFailureReason)
+        } else {
+            Issue.record("微細ノイズのみの透明画像が有効と誤判定されました")
+        }
+
+        // 3. しきい値ちょうど（alpha == 8）の半透明画像は有効として受理し独立ビットマップを返す
+        let translucentValid = makeSolidTestCGImage(width: 16, height: 12, r: 8, g: 8, b: 8, a: 8)
+        if case let .valid(detached) = WindowCaptureService.materializeAndValidateCapturedImage(translucentValid) {
+            #expect(detached.width == 16)
+            #expect(detached.height == 12)
+            #expect(detached !== translucentValid)
+        } else {
+            Issue.record("しきい値以上の半透明画像が拒否されました")
+        }
+
+        // 4. 真っ黒な不透明ウィンドウ（RGB = (0, 0, 0), alpha = 255）はダークテーマ誤判定を起こさず有効受理する
+        let darkOpaqueWindow = makeSolidTestCGImage(width: 40, height: 30, r: 0, g: 0, b: 0, a: 255)
+        if case let .valid(detached) = WindowCaptureService.materializeAndValidateCapturedImage(darkOpaqueWindow) {
+            #expect(detached.width == 40)
+            #expect(detached.height == 30)
+            #expect(detached !== darkOpaqueWindow)
+        } else {
+            Issue.record("暗色の不透明ウィンドウ画像が誤拒否されました")
+        }
+    }
+
+    /// 全面透明フレームの失敗結果が返却されても、既存の正常サムネイルキャッシュが上書き・消去されず維持され、
+    /// 未キャッシュウィンドウには格納されないことを検証する
+    @Test("WindowCaptureService は全面透明フレーム検知時に既存キャッシュを維持し未キャッシュには格納しない")
+    @MainActor
+    func applySingleCaptureResultProtectsExistingCacheOnTransparentFrameFailure() {
+        let clock = MutableTestClock(initial: Date(timeIntervalSince1970: 1_700_000_500))
+        let service = WindowCaptureService(nowProvider: { clock.now })
+
+        // 既キャッシュ済みの正常サムネイルを用意する
+        let existingImage = NSImage(size: NSSize(width: 80, height: 50))
+        let initialCapturedAt = clock.now
+        service.storeInCache(existingImage, for: 101)
+
+        var succeeded = 0
+        var failedOnScreen = 0
+        var failedOffScreen = 0
+        var notifiedWindowIDs: [UInt32] = []
+
+        clock.advance(by: 10)
+
+        // 1. 既キャッシュ済みウィンドウ (101) に対する透明フレーム失敗 -> 既存画像と取得時刻が維持され通知も飛ばない
+        service.applySingleCaptureResult(
+            .failed(windowID: 101, isOnScreen: false, reason: WindowCaptureService.transparentImageFailureReason),
+            succeededCount: &succeeded,
+            failedOnScreenCount: &failedOnScreen,
+            failedOffScreenCount: &failedOffScreen
+        ) { windowID, _ in
+            notifiedWindowIDs.append(windowID)
+        }
+        #expect(service.cachedThumbnail(for: 101) === existingImage)
+        #expect(service.lastCapturedAt(for: 101) == initialCapturedAt)
+        #expect(failedOffScreen == 1)
+        #expect(notifiedWindowIDs.isEmpty)
+
+        // 2. 未キャッシュウィンドウ (202) に対する透明フレーム失敗 -> キャッシュに格納されない
+        service.applySingleCaptureResult(
+            .failed(windowID: 202, isOnScreen: true, reason: WindowCaptureService.transparentImageFailureReason),
+            succeededCount: &succeeded,
+            failedOnScreenCount: &failedOnScreen,
+            failedOffScreenCount: &failedOffScreen
+        ) { windowID, _ in
+            notifiedWindowIDs.append(windowID)
+        }
+        #expect(service.hasCachedThumbnail(for: 202) == false)
+        #expect(service.cachedThumbnail(for: 202) == nil)
+        #expect(failedOnScreen == 1)
+        #expect(notifiedWindowIDs.isEmpty)
+
+        // 3. 有効な CGImage の取得成功 -> 新規格納・通知が行われる
+        let validCGImage = makeSolidTestCGImage(width: 40, height: 25, r: 100, g: 150, b: 200, a: 255)
+        service.applySingleCaptureResult(
+            .captured(202, validCGImage),
+            succeededCount: &succeeded,
+            failedOnScreenCount: &failedOnScreen,
+            failedOffScreenCount: &failedOffScreen
+        ) { windowID, _ in
+            notifiedWindowIDs.append(windowID)
+        }
+        #expect(service.hasCachedThumbnail(for: 202) == true)
+        #expect(succeeded == 1)
+        #expect(notifiedWindowIDs == [202])
+    }
+
+    /// selectShareableCaptureTargets が SCShareableContent 取得時点でオフスクリーン化していた既キャッシュウィンドウをスキップし、
+    /// 画面表示中ウィンドウ優先・未キャッシュ別スペースウィンドウ後続の順を保つことを検証する
+    @Test("selectShareableCaptureTargets はオフスクリーン化済み既キャッシュをスキップし表示中優先順を維持する")
+    func selectShareableCaptureTargetsSkipsCachedOffScreenWindows() {
+        let requested: [UInt32] = [10, 20, 30, 40, 50, 20, 60]
+        let isOnScreenByID: [UInt32: Bool] = [
+            // 10: 別スペース退避済み・既キャッシュ -> スキップ対象
+            10: false,
+            // 20: 別スペース・未キャッシュ -> 後続で試行
+            20: false,
+            // 30: 現在表示中・既キャッシュ -> 優先対象
+            30: true,
+            // 40: 現在表示中・未キャッシュ -> 優先対象
+            40: true,
+            // 50: 別スペース退避済み・既キャッシュ -> スキップ対象
+            50: false
+            // 60: SCShareableContent に存在しない -> missing
+        ]
+        let cachedIDs: Set<UInt32> = [10, 30, 50]
+
+        let selection = WindowCaptureService.selectShareableCaptureTargets(
+            requestedWindowIDs: requested,
+            isOnScreenByID: isOnScreenByID,
+            isCached: { cachedIDs.contains($0) }
+        )
+
+        #expect(selection.orderedWindowIDs == [30, 40, 20])
+        #expect(selection.onScreenCount == 2)
+        #expect(selection.offScreenCount == 1)
+        #expect(selection.skippedCachedOffScreenCount == 2)
+        #expect(selection.missingCount == 1)
+    }
+
+    /// selectBestCGWindowMatch が alpha <= 0.0 の完全透明な補助 CGWindow を近接照合・包含照合のいずれでも除外することを検証する
+    @Test("selectBestCGWindowMatch は alpha <= 0.0 の完全透明な CGWindow を照合候補から除外する")
+    func selectBestCGWindowMatchExcludesZeroAlphaCGWindows() {
+        let rect = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let transparentExactOverlay: (zOrder: Int, info: WindowService.CGWindowMeta) = (
+            zOrder: 0,
+            info: WindowService.CGWindowMeta(
+                windowID: 900,
+                pid: 3000,
+                layer: 0,
+                bounds: rect,
+                alpha: 0.0,
+                isOnscreen: true,
+                name: "Google Chrome"
+            )
+        )
+        let visibleContentWindow: (zOrder: Int, info: WindowService.CGWindowMeta) = (
+            zOrder: 1,
+            info: WindowService.CGWindowMeta(
+                windowID: 901,
+                pid: 3000,
+                layer: 0,
+                bounds: CGRect(x: 0, y: 88, width: 1920, height: 992),
+                alpha: 1.0,
+                isOnscreen: true,
+                name: "Google Chrome"
+            )
+        )
+
+        // 1. 同一矩形・Z オーダー上位の alpha == 0.0 窓を除外し、包含する可視本体窓 (901) を照合すること
+        let matched = WindowService.selectBestCGWindowMatch(
+            axBounds: rect,
+            axTitle: "Google Chrome",
+            isMinimized: false,
+            preferOnscreen: true,
+            preferredCGWindowID: nil,
+            in: [transparentExactOverlay, visibleContentWindow],
+            excluding: []
+        )
+        #expect(matched?.info.windowID == 901)
+
+        // 2. alpha <= 0.0 の候補しかない場合は照合しないこと
+        let onlyTransparent = WindowService.selectBestCGWindowMatch(
+            axBounds: rect,
+            axTitle: "Google Chrome",
+            isMinimized: false,
+            preferOnscreen: true,
+            preferredCGWindowID: 900,
+            in: [transparentExactOverlay],
+            excluding: []
+        )
+        #expect(onlyTransparent == nil)
+    }
 }

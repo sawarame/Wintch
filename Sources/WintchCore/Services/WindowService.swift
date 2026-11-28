@@ -1816,6 +1816,8 @@ public final class WindowService: WindowServicing {
         let available = entries.filter { entry in
             guard !excludedIDs.contains(entry.info.windowID),
                   allowedCGWindowLayers.contains(entry.info.layer),
+                  // 完全透明な不可視補助 CGWindow への誤照合を防ぐ
+                  entry.info.alpha > 0.0,
                   entry.info.bounds.width >= 50,
                   entry.info.bounds.height >= 50 else {
                 return false
