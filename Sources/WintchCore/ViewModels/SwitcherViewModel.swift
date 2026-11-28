@@ -79,14 +79,14 @@ public final class SwitcherViewModel {
         }
     }
 
-    /// 現在の表示モード・表示形式・グルーピング設定でグリッドレイアウト（複数列表示）を使用中かどうか
-    /// アイコン型・キャプチャ表示型でもグルーピング ON 時は縦型リスト表示（1 列）となる
+    /// 現在の表示モード・表示形式でグリッドレイアウト（複数列表示）を使用中かどうか
+    /// 通常スイッチャーのアイコン型・キャプチャ表示型はグルーピング ON/OFF ともにグリッドレイアウトを使用する
     public var usesGridLayoutForCurrentMode: Bool {
-        mode == .normal && normalDisplayStyle.usesGridLayout && !isNormalSwitcherGroupedByApp
+        mode == .normal && normalDisplayStyle.usesGridLayout
     }
 
     /// 現在の表示モード・表示形式・グルーピング設定に応じたパネルの垂直配置スタイル
-    /// 通常スイッチャーのグルーピング OFF かつキャプチャ表示型のみ従来通り画面中央に配置し、それ以外は上寄せ配置とする
+    /// 通常スイッチャーのキャプチャ表示型はグルーピング ON/OFF ともに画面中央に配置し、それ以外は上寄せ配置とする
     public var panelVerticalPlacement: SwitcherPanelVerticalPlacement {
         SwitcherPanelLayout.verticalPlacement(
             mode: mode,
@@ -479,10 +479,10 @@ public final class SwitcherViewModel {
         }
     }
 
-    /// 現在の表示形式・グルーピング設定・画面幅に応じてグリッド列数を再算出する
+    /// 現在の表示形式・画面幅に応じてグリッド列数を再算出する
     private func recalculateGridColumnCount() {
-        // グルーピング ON 時はアイコン型・キャプチャ表示型も縦型リスト表示（1 列）となる
-        if isNormalSwitcherGroupedByApp || !normalDisplayStyle.usesGridLayout {
+        // 通常スイッチャーのアイコン型・キャプチャ表示型はグルーピング ON/OFF ともに複数列グリッドを維持する
+        if !normalDisplayStyle.usesGridLayout {
             gridColumnCount = 1
         } else {
             gridColumnCount = SwitcherGridLayout.columnsCount(

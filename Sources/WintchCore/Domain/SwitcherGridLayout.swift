@@ -1,7 +1,62 @@
 import CoreGraphics
 import Foundation
 
-/// アイコン型およびキャプチャ表示型グリッドの列数計算および 4 方向カーソル移動を行う純粋ロジック
+/// 固定グリッドの 1 行内に描画される、複数ウィンドウを持つアプリグループの連続区間（セグメント）
+public struct SwitcherGridGroupSegment: Identifiable, Equatable, Sendable {
+    /// 所属するアプリグループの識別子（`WindowAppGroup.id`）
+    public let groupID: String
+
+    /// 対象行のインデックス（0 始まり）
+    public let rowIndex: Int
+
+    /// この行内での開始列インデックス（0 始まり、両端含む）
+    public let startColumn: Int
+
+    /// この行内での終了列インデックス（0 始まり、両端含む）
+    public let endColumn: Int
+
+    /// 同一グループが前の行から続いている場合は true（左辺を開放エッジ表現にする）
+    public let continuesFromPreviousRow: Bool
+
+    /// 同一グループが次の行へ続いている場合は true（右辺を開放エッジ表現にする）
+    public let continuesToNextRow: Bool
+
+    /// 行内セグメントの一意識別子
+    public var id: String {
+        "\(groupID)#row-\(rowIndex)#col-\(startColumn)-\(endColumn)"
+    }
+
+    /// このセグメントが占有する列数（1 以上）
+    public var columnSpan: Int {
+        endColumn - startColumn + 1
+    }
+
+    /// 行内グループセグメントを初期化する
+    /// - Parameters:
+    ///   - groupID: 所属するアプリグループの識別子
+    ///   - rowIndex: 対象行インデックス（0 始まり）
+    ///   - startColumn: 行内の開始列インデックス（0 始まり）
+    ///   - endColumn: 行内の終了列インデックス（0 始まり）
+    ///   - continuesFromPreviousRow: 前行から続いている場合は true
+    ///   - continuesToNextRow: 次行へ続いている場合は true
+    public init(
+        groupID: String,
+        rowIndex: Int,
+        startColumn: Int,
+        endColumn: Int,
+        continuesFromPreviousRow: Bool,
+        continuesToNextRow: Bool
+    ) {
+        self.groupID = groupID
+        self.rowIndex = rowIndex
+        self.startColumn = startColumn
+        self.endColumn = endColumn
+        self.continuesFromPreviousRow = continuesFromPreviousRow
+        self.continuesToNextRow = continuesToNextRow
+    }
+}
+
+/// アイコン型およびキャプチャ表示型グリッドの列数計算、グループ背面枠セグメント算出、および 4 方向カーソル移動を行う純粋ロジック
 public enum SwitcherGridLayout {
     /// キャプチャ表示型 1 枚のカードの固定横幅（ポイント）
     public static let cardWidth: CGFloat = 216
@@ -15,6 +70,9 @@ public enum SwitcherGridLayout {
     public static let cardSpacing: CGFloat = 10
     /// グリッド外側の余白（ポイント）
     public static let gridPadding: CGFloat = 14
+    /// 複数ウィンドウグループの背面枠がカード／タイル外縁から外側へ広がる余白量（ポイント）
+    /// `cardSpacing (10pt)` に対して隣接する別グループ枠間に `4pt` の余白を保ちつつ、カード角丸 `10pt` と同心角丸 `13pt` を構成する
+    public static let groupFrameInset: CGFloat = 3
     /// キャプチャ表示型で 1 行あたりに配置する最大列数上限
     public static let maxColumnsLimit: Int = 5
     /// アイコン型で 1 行あたりに配置する最大列数上限
@@ -164,5 +222,107 @@ public enum SwitcherGridLayout {
         let rowStart = targetRow * columns
         let rowLength = min(columns, count - rowStart)
         return rowStart + min(currentCol, rowLength - 1)
+    }
+
+    /// グルーピング済みアプリ一覧とグリッド列数から、2 枚以上ウィンドウを持つアプリのみの行単位セグメント配列を算出する
+    /// 1 枚のみのアプリグループは対象外とし、行をまたぐグループは各行ごとに分割して前後行への継続フラグを付与する
+    /// - Parameters:
+    ///   - groups: 表示順（`WindowAppGrouping.group` 済み）のアプリグループ配列
+    ///   - columns: 現在のグリッド列数（1 以上）
+    /// - Returns: 行インデックス順・開始列順に並んだ複数ウィンドウグループの行内セグメント配列
+    public static func groupSegments(
+        for groups: [WindowAppGroup],
+        columns: Int
+    ) -> [SwitcherGridGroupSegment] {
+        guard !groups.isEmpty else { return [] }
+        let safeColumns = max(columns, 1)
+
+        var segments: [SwitcherGridGroupSegment] = []
+        for group in groups {
+            let itemCount = group.results.count
+            // 1 枚のみのアプリは単体カード／タイルとして表示するため背面枠の対象外とする
+            guard itemCount >= 2 else { continue }
+
+            let groupStart = group.startIndex
+            let groupEnd = groupStart + itemCount - 1
+            let firstRow = groupStart / safeColumns
+            let lastRow = groupEnd / safeColumns
+
+            for row in firstRow...lastRow {
+                let rowStartIndex = row * safeColumns
+                let rowEndIndex = rowStartIndex + safeColumns - 1
+                let segStartIndex = max(groupStart, rowStartIndex)
+                let segEndIndex = min(groupEnd, rowEndIndex)
+
+                segments.append(
+                    SwitcherGridGroupSegment(
+                        groupID: group.id,
+                        rowIndex: row,
+                        startColumn: segStartIndex - rowStartIndex,
+                        endColumn: segEndIndex - rowStartIndex,
+                        continuesFromPreviousRow: segStartIndex > groupStart,
+                        continuesToNextRow: segEndIndex < groupEnd
+                    )
+                )
+            }
+        }
+
+        return segments
+    }
+
+    /// 行単位グループセグメントを行インデックスごとの辞書へまとめて返す
+    /// - Parameters:
+    ///   - groups: 表示順のアプリグループ配列
+    ///   - columns: 現在のグリッド列数（1 以上）
+    /// - Returns: キーが行インデックス、値がその行に属するセグメント配列の辞書
+    public static func groupSegmentsByRow(
+        for groups: [WindowAppGroup],
+        columns: Int
+    ) -> [Int: [SwitcherGridGroupSegment]] {
+        Dictionary(grouping: groupSegments(for: groups, columns: columns), by: \.rowIndex)
+    }
+
+    /// 指定された選択インデックスが 2 枚以上ウィンドウを持つアプリグループに属している場合、そのグループ ID を返す
+    /// - Parameters:
+    ///   - selectedIndex: 現在選択中の表示インデックス
+    ///   - groups: 表示順のアプリグループ配列
+    /// - Returns: 2 枚以上のグループに属していればそのグループ ID、1 枚グループや範囲外なら nil
+    public static func selectedMultiWindowGroupID(
+        selectedIndex: Int,
+        in groups: [WindowAppGroup]
+    ) -> String? {
+        guard selectedIndex >= 0 else { return nil }
+        for group in groups {
+            let itemCount = group.results.count
+            let groupRange = group.startIndex..<(group.startIndex + itemCount)
+            if groupRange.contains(selectedIndex) {
+                return itemCount >= 2 ? group.id : nil
+            }
+        }
+        return nil
+    }
+
+    /// 行内グループセグメントの背面枠矩形を行基準座標（行の左上を原点とする座標系）で算出する
+    /// - Parameters:
+    ///   - segment: 対象の行内グループセグメント
+    ///   - itemWidth: 1 カード／タイルの固定横幅（ポイント）
+    ///   - itemHeight: 1 カード／タイルの固定高さ（ポイント）
+    ///   - spacing: カード／タイル間の間隔（ポイント）
+    ///   - frameInset: カード／タイル外縁から背面枠を外側へ広げる余白量（ポイント）
+    /// - Returns: 行内座標系における背面枠の `CGRect`
+    public static func segmentFrameInRow(
+        for segment: SwitcherGridGroupSegment,
+        itemWidth: CGFloat,
+        itemHeight: CGFloat,
+        spacing: CGFloat = cardSpacing,
+        frameInset: CGFloat = groupFrameInset
+    ) -> CGRect {
+        let minX = CGFloat(segment.startColumn) * (itemWidth + spacing) - frameInset
+        let span = max(segment.columnSpan, 1)
+        let contentWidth = CGFloat(span) * itemWidth + CGFloat(span - 1) * spacing
+        let width = contentWidth + frameInset * 2
+        let minY = -frameInset
+        let height = itemHeight + frameInset * 2
+        return CGRect(x: minX, y: minY, width: width, height: height)
     }
 }

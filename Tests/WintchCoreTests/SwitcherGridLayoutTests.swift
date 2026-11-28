@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import WintchCore
 
@@ -138,5 +139,199 @@ struct SwitcherGridLayoutTests {
                     + SwitcherGridLayout.cardSpacing
                     + SwitcherGridLayout.gridPadding * 2
         )
+    }
+
+    /// 複数ウィンドウを持つアプリのみ行内グループセグメントが生成され、
+    /// 行またぎ（末尾 1 枚＋先頭 1 枚、3 行跨ぎの中間行含む）の開放エッジフラグが正確に算出されることを検証する
+    @Test("2 枚以上ウィンドウを持つアプリのみ背面枠セグメントが生成され行またぎ継続フラグが正確に設定される")
+    func groupSegmentsCoverOnlyMultiWindowAppsAndMarkRowContinuations() {
+        /// テスト用のダミーアプリグループを生成するローカルヘルパー
+        func makeGroup(id: String, count: Int, startIndex: Int) -> WindowAppGroup {
+            let results = (0..<count).map { offset in
+                WindowSearchResult(
+                    entry: WindowEntry(
+                        id: "\(id)-\(offset)",
+                        pid: Int32(startIndex + 10),
+                        bundleIdentifier: id,
+                        applicationName: id,
+                        windowTitle: "Window \(offset)"
+                    )
+                )
+            }
+            return WindowAppGroup(
+                id: "bundle:\(id)",
+                applicationName: id,
+                representativePID: Int32(startIndex + 10),
+                results: results,
+                startIndex: startIndex
+            )
+        }
+
+        // 5 列グリッド配置:
+        // Row 0: [SoloA(0)] [AppB(1)] [AppB(2)] [AppB(3)] [SplitC(4)]
+        // Row 1: [SplitC(5)] [SoloD(6)] [GiantE(7)] [GiantE(8)] [GiantE(9)]
+        // Row 2: [GiantE(10)] [GiantE(11)] [GiantE(12)] [GiantE(13)] [GiantE(14)]
+        // Row 3: [GiantE(15)] [GiantE(16)]
+        let groups: [WindowAppGroup] = [
+            makeGroup(id: "SoloA", count: 1, startIndex: 0),
+            makeGroup(id: "AppB", count: 3, startIndex: 1),
+            makeGroup(id: "SplitC", count: 2, startIndex: 4),
+            makeGroup(id: "SoloD", count: 1, startIndex: 6),
+            makeGroup(id: "GiantE", count: 10, startIndex: 7)
+        ]
+
+        let segments = SwitcherGridLayout.groupSegments(for: groups, columns: 5)
+        #expect(segments.count == 6)
+
+        // 1 枚のみの SoloA / SoloD はセグメントに含まれないこと
+        #expect(!segments.contains { $0.groupID == "bundle:SoloA" || $0.groupID == "bundle:SoloD" })
+
+        // Row 0 の AppB（列 1〜3）は行内で完結するため前後継続ともに false
+        #expect(
+            segments[0] == SwitcherGridGroupSegment(
+                groupID: "bundle:AppB",
+                rowIndex: 0,
+                startColumn: 1,
+                endColumn: 3,
+                continuesFromPreviousRow: false,
+                continuesToNextRow: false
+            )
+        )
+
+        // SplitC は Row 0 末尾 1 枚（右開放）＋ Row 1 先頭 1 枚（左開放）として両方セグメント化される
+        #expect(
+            segments[1] == SwitcherGridGroupSegment(
+                groupID: "bundle:SplitC",
+                rowIndex: 0,
+                startColumn: 4,
+                endColumn: 4,
+                continuesFromPreviousRow: false,
+                continuesToNextRow: true
+            )
+        )
+        #expect(
+            segments[2] == SwitcherGridGroupSegment(
+                groupID: "bundle:SplitC",
+                rowIndex: 1,
+                startColumn: 0,
+                endColumn: 0,
+                continuesFromPreviousRow: true,
+                continuesToNextRow: false
+            )
+        )
+
+        // GiantE は 3 行に跨ぎ、先頭行は右開放・中間行は左右開放・最終行は左開放となる
+        #expect(
+            segments[3] == SwitcherGridGroupSegment(
+                groupID: "bundle:GiantE",
+                rowIndex: 1,
+                startColumn: 2,
+                endColumn: 4,
+                continuesFromPreviousRow: false,
+                continuesToNextRow: true
+            )
+        )
+        #expect(
+            segments[4] == SwitcherGridGroupSegment(
+                groupID: "bundle:GiantE",
+                rowIndex: 2,
+                startColumn: 0,
+                endColumn: 4,
+                continuesFromPreviousRow: true,
+                continuesToNextRow: true
+            )
+        )
+        #expect(
+            segments[5] == SwitcherGridGroupSegment(
+                groupID: "bundle:GiantE",
+                rowIndex: 3,
+                startColumn: 0,
+                endColumn: 1,
+                continuesFromPreviousRow: true,
+                continuesToNextRow: false
+            )
+        )
+
+        // 選択中グループ ID 解決: 複数ウィンドウグループは ID を返し、単体グループや範囲外は nil
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 0, in: groups) == nil)
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 2, in: groups) == "bundle:AppB")
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 4, in: groups) == "bundle:SplitC")
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 5, in: groups) == "bundle:SplitC")
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 6, in: groups) == nil)
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 12, in: groups) == "bundle:GiantE")
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: 99, in: groups) == nil)
+        #expect(SwitcherGridLayout.selectedMultiWindowGroupID(selectedIndex: -1, in: groups) == nil)
+
+        // 空配列でも安全に空結果を返すこと
+        #expect(SwitcherGridLayout.groupSegments(for: [], columns: 5).isEmpty)
+    }
+
+    /// 行内セグメントの背面枠矩形がカード列と整合し、隣接別グループ枠およびパネル外縁との干渉が起きないことを検証する
+    @Test("行内グループ枠の座標計算で隣接別グループ間およびパネル外縁に適切な余白が確保される")
+    func segmentFrameInRowPreservesGapsBetweenAdjacentGroupsAndPanelEdges() {
+        let leftSegment = SwitcherGridGroupSegment(
+            groupID: "bundle:Left",
+            rowIndex: 0,
+            startColumn: 0,
+            endColumn: 1,
+            continuesFromPreviousRow: false,
+            continuesToNextRow: false
+        )
+        let rightSegment = SwitcherGridGroupSegment(
+            groupID: "bundle:Right",
+            rowIndex: 0,
+            startColumn: 2,
+            endColumn: 3,
+            continuesFromPreviousRow: false,
+            continuesToNextRow: false
+        )
+
+        let leftRect = SwitcherGridLayout.segmentFrameInRow(
+            for: leftSegment,
+            itemWidth: SwitcherGridLayout.cardWidth,
+            itemHeight: SwitcherGridLayout.cardHeight
+        )
+        let rightRect = SwitcherGridLayout.segmentFrameInRow(
+            for: rightSegment,
+            itemWidth: SwitcherGridLayout.cardWidth,
+            itemHeight: SwitcherGridLayout.cardHeight
+        )
+
+        // 2 枚分の幅 + インセット両端
+        let expectedWidth = SwitcherGridLayout.cardWidth * 2
+            + SwitcherGridLayout.cardSpacing
+            + SwitcherGridLayout.groupFrameInset * 2
+        #expect(leftRect.minX == -SwitcherGridLayout.groupFrameInset)
+        #expect(leftRect.minY == -SwitcherGridLayout.groupFrameInset)
+        #expect(leftRect.width == expectedWidth)
+        #expect(leftRect.height == SwitcherGridLayout.cardHeight + SwitcherGridLayout.groupFrameInset * 2)
+
+        // 隣り合う別グループ枠の間に 4pt 以上の隙間が保たれ、接触しないこと
+        let horizontalGap = rightRect.minX - leftRect.maxX
+        #expect(horizontalGap == SwitcherGridLayout.cardSpacing - SwitcherGridLayout.groupFrameInset * 2)
+        #expect(horizontalGap >= 4)
+
+        // 外側パディング内に枠インセットが十分に収まること
+        #expect(SwitcherGridLayout.gridPadding - SwitcherGridLayout.groupFrameInset >= 8)
+
+        // 開放エッジ 4 パターンすべての枠線パスが有効な矩形内に生成されること
+        let sampleBounds = CGRect(x: 0, y: 0, width: leftRect.width, height: leftRect.height)
+        for openLeading in [false, true] {
+            for openTrailing in [false, true] {
+                let shape = SwitcherGridGroupBorderShape(
+                    closedCornerRadius: 13,
+                    openEdgeInset: 2,
+                    lineWidth: 1.5,
+                    openLeading: openLeading,
+                    openTrailing: openTrailing
+                )
+                let path = shape.path(in: sampleBounds)
+                #expect(!path.isEmpty)
+                #expect(path.boundingRect.minX >= -0.01)
+                #expect(path.boundingRect.minY >= -0.01)
+                #expect(path.boundingRect.maxX <= sampleBounds.width + 0.01)
+                #expect(path.boundingRect.maxY <= sampleBounds.height + 0.01)
+            }
+        }
     }
 }

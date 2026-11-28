@@ -210,31 +210,37 @@ struct SwitcherCaptureGridViewTests {
         flatContentHosting.layoutSubtreeIfNeeded()
         #expect(flatContentHosting.fittingSize.width == expectedWidth)
 
-        // グルーピング ON に切り替えると、アイコン型でも縦型リスト（ディスプレイ幅連動・1 列）へ切り替わり画面収録権限を参照しないこと
+        // グルーピング ON に切り替えても、アイコン型は固定グリッド（3 列・同一幅）を維持し画面収録権限を参照しないこと
         let expectedGroupedListWidth = SwitcherPanelLayout.listPanelWidth(
             availableScreenWidth: viewModel.availableScreenSize.width
         )
         #expect(expectedGroupedListWidth == 720)
         viewModel.updateNormalSwitcherGrouping(true)
-        #expect(viewModel.usesGridLayoutForCurrentMode == false)
-        #expect(viewModel.gridColumnCount == 1)
+        #expect(viewModel.usesGridLayoutForCurrentMode == true)
+        #expect(viewModel.gridColumnCount == 3)
         #expect(screenRecordingService.currentStatusCallCount == 0)
 
         let normalContentHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         normalContentHosting.layoutSubtreeIfNeeded()
-        #expect(normalContentHosting.fittingSize.width == expectedGroupedListWidth)
+        #expect(normalContentHosting.fittingSize.width == expectedWidth)
 
-        // キャプチャ表示型・グルーピング ON の場合もディスプレイ幅連動の縦型リストで描画され、権限未許可時はバナー付き・ボタン無しであること
+        // キャプチャ表示型・グルーピング ON も固定カードグリッド（3 列）で描画され、権限未許可時はバナー付き・ボタン無しであること
+        let expectedCaptureGridWidth = 3 * SwitcherGridLayout.cardWidth
+            + 2 * SwitcherGridLayout.cardSpacing
+            + SwitcherGridLayout.gridPadding * 2
         viewModel.cancel()
         viewModel.updateNormalDisplayStyle(.capture)
         viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
-        #expect(viewModel.usesGridLayoutForCurrentMode == false)
+        #expect(viewModel.usesGridLayoutForCurrentMode == true)
+        #expect(viewModel.gridColumnCount == 3)
+        #expect(viewModel.panelVerticalPlacement == .centered)
         #expect(viewModel.isScreenRecordingGranted == false)
         let groupedCaptureHosting = NSHostingView(rootView: SwitcherContentView(viewModel: viewModel))
         groupedCaptureHosting.layoutSubtreeIfNeeded()
-        #expect(groupedCaptureHosting.fittingSize.width == expectedGroupedListWidth)
+        #expect(groupedCaptureHosting.fittingSize.width == expectedCaptureGridWidth)
         #expect(collectAllSubviews(in: groupedCaptureHosting).compactMap { $0 as? NSButton }.isEmpty)
 
+        // 検索ランチャーは引き続きディスプレイ幅連動の縦型リストで描画されること
         viewModel.cancel()
         viewModel.handleHotKeyEvent(.launcherTriggerPressed)
         #expect(viewModel.mode == .launcher)
@@ -243,126 +249,136 @@ struct SwitcherCaptureGridViewTests {
         #expect(launcherContentHosting.fittingSize.width == expectedGroupedListWidth)
     }
 
-    /// アイコングリッドおよびキャプチャグリッド（グルーピング OFF）において、
+    /// アイコングリッドおよびキャプチャグリッド（グルーピング ON/OFF 双方）において、
     /// ウィンドウ終了処理中のみスピナー（NSProgressIndicator）がオーバーレイ描画され、サイズが変わらないことを検証する
-    @Test("アイコングリッド・キャプチャグリッドで終了処理中のみスピナーが表示され寸法が維持される")
+    @Test("アイコングリッド・キャプチャグリッドでグルーピング有無にかかわらず終了処理中のみスピナーが表示され寸法が維持される")
     @MainActor
     func closingIndicatorAppearsInIconAndCaptureGridsWithoutChangingDimensions() async {
         let styles: [SwitcherDisplayStyle] = [.icon, .capture]
 
         for style in styles {
-            let windowService = MockWindowService()
-            let now = Date()
-            windowService.stubbedCandidates = [
-                RawWindowCandidate(
-                    id: "g1",
-                    cgWindowID: 301,
-                    pid: 30,
-                    applicationName: "GridApp",
-                    title: "Tile 1",
-                    lastActivatedAt: now
-                ),
-                RawWindowCandidate(
-                    id: "g2",
-                    cgWindowID: 302,
-                    pid: 30,
-                    applicationName: "GridApp",
-                    title: "Tile 2",
-                    lastActivatedAt: now.addingTimeInterval(-10)
-                )
-            ]
+            for isGrouped in [false, true] {
+                let windowService = MockWindowService()
+                let now = Date()
+                windowService.stubbedCandidates = [
+                    RawWindowCandidate(
+                        id: "g1",
+                        cgWindowID: 301,
+                        pid: 30,
+                        bundleIdentifier: "com.example.gridapp",
+                        applicationName: "GridApp",
+                        title: "Tile 1",
+                        lastActivatedAt: now
+                    ),
+                    RawWindowCandidate(
+                        id: "g2",
+                        cgWindowID: 302,
+                        pid: 30,
+                        bundleIdentifier: "com.example.gridapp",
+                        applicationName: "GridApp",
+                        title: "Tile 2",
+                        lastActivatedAt: now.addingTimeInterval(-10)
+                    )
+                ]
 
-            var continuation: CheckedContinuation<Bool, Never>?
-            windowService.closeWindowHandler = { _ in
-                await withCheckedContinuation { cont in
-                    continuation = cont
+                var continuation: CheckedContinuation<Bool, Never>?
+                windowService.closeWindowHandler = { _ in
+                    await withCheckedContinuation { cont in
+                        continuation = cont
+                    }
                 }
+
+                let screenRecordingService = MockScreenRecordingPermissionService()
+                screenRecordingService.stubbedStatus = .granted
+
+                let viewModel = SwitcherViewModel(
+                    windowService: windowService,
+                    hotKeyMonitor: MockHotKeyMonitor(),
+                    permissionService: MockAccessibilityPermissionService(),
+                    iconProvider: MockIconProvider(),
+                    screenRecordingPermissionService: screenRecordingService,
+                    windowCaptureService: MockWindowCaptureService(),
+                    normalDisplayStyle: style,
+                    isNormalSwitcherGroupedByApp: isGrouped
+                )
+                viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
+                viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
+
+                let panel = SwitcherPanel(contentView: SwitcherContentView(viewModel: viewModel))
+                panel.alphaValue = 0
+                panel.ignoresMouseEvents = true
+                panel.show(mode: .normal, activateApp: false, verticalPlacement: viewModel.panelVerticalPlacement)
+                defer { panel.hidePanel(restorePreviousApp: false) }
+
+                try? await Task.sleep(for: .milliseconds(80))
+                guard let hostingView = panel.contentView else {
+                    Issue.record("SwitcherPanel の contentView が取得できませんでした")
+                    return
+                }
+                hostingView.layoutSubtreeIfNeeded()
+
+                let sizeBeforeClose = panel.measuredContentSize()
+                #expect(sizeBeforeClose.width > 0)
+                #expect(sizeBeforeClose.height > 0)
+                let indicatorsBefore = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
+                #expect(indicatorsBefore.isEmpty)
+
+                let closeTask = Task { @MainActor in
+                    await viewModel.closeSelectedWindow()
+                }
+                await Task.yield()
+                try? await Task.sleep(for: .milliseconds(80))
+
+                let sizeDuringClose = panel.measuredContentSize()
+                let indicatorsDuring = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
+                #expect(viewModel.isClosingWindow(id: "g2") == true)
+                #expect(indicatorsDuring.count == 1)
+                #expect(indicatorsDuring.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
+                #expect(sizeDuringClose.width == sizeBeforeClose.width)
+                #expect(abs(sizeDuringClose.height - sizeBeforeClose.height) < 0.5)
+
+                // 1. 終了失敗（キャンセル残存）で戻るとスピナーは即座に消える
+                continuation?.resume(returning: false)
+                await closeTask.value
+                try? await Task.sleep(for: .milliseconds(80))
+                hostingView.layoutSubtreeIfNeeded()
+
+                let indicatorsAfterFailure = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
+                #expect(viewModel.isClosingWindow == false)
+                #expect(viewModel.entries.map(\.id) == ["g1", "g2"])
+                #expect(indicatorsAfterFailure.isEmpty)
+
+                // 2. 終了成功で対象カードが削除された後も可視スピナーは残らず、残り 1 枚になるとグループ枠セグメントが自動解除される
+                let closeSuccessTask = Task { @MainActor in
+                    await viewModel.closeSelectedWindow()
+                }
+                await Task.yield()
+                try? await Task.sleep(for: .milliseconds(80))
+                hostingView.layoutSubtreeIfNeeded()
+                #expect(viewModel.isClosingWindow(id: "g2") == true)
+                let indicatorsDuringSecondClose = collectAllSubviews(in: hostingView)
+                    .compactMap { $0 as? NSProgressIndicator }
+                    .filter { !$0.isHiddenOrHasHiddenAncestor }
+                #expect(indicatorsDuringSecondClose.count == 1)
+
+                continuation?.resume(returning: true)
+                await closeSuccessTask.value
+                try? await Task.sleep(for: .milliseconds(80))
+                hostingView.layoutSubtreeIfNeeded()
+
+                let visibleIndicatorsAfterSuccess = collectAllSubviews(in: hostingView)
+                    .compactMap { $0 as? NSProgressIndicator }
+                    .filter { !$0.isHiddenOrHasHiddenAncestor }
+                #expect(viewModel.isClosingWindow == false)
+                #expect(viewModel.entries.map(\.id) == ["g1"])
+                #expect(visibleIndicatorsAfterSuccess.isEmpty)
+                #expect(
+                    SwitcherGridLayout.groupSegments(
+                        for: viewModel.displayedGroups,
+                        columns: viewModel.gridColumnCount
+                    ).isEmpty
+                )
             }
-
-            let screenRecordingService = MockScreenRecordingPermissionService()
-            screenRecordingService.stubbedStatus = .granted
-
-            let viewModel = SwitcherViewModel(
-                windowService: windowService,
-                hotKeyMonitor: MockHotKeyMonitor(),
-                permissionService: MockAccessibilityPermissionService(),
-                iconProvider: MockIconProvider(),
-                screenRecordingPermissionService: screenRecordingService,
-                windowCaptureService: MockWindowCaptureService(),
-                normalDisplayStyle: style,
-                isNormalSwitcherGroupedByApp: false
-            )
-            viewModel.updateAvailableScreenSize(CGSize(width: 1440, height: 900))
-            viewModel.handleHotKeyEvent(.triggerPressed(isShiftPressed: false))
-
-            let panel = SwitcherPanel(contentView: SwitcherContentView(viewModel: viewModel))
-            panel.alphaValue = 0
-            panel.ignoresMouseEvents = true
-            panel.show(mode: .normal, activateApp: false)
-            defer { panel.hidePanel(restorePreviousApp: false) }
-
-            try? await Task.sleep(for: .milliseconds(80))
-            guard let hostingView = panel.contentView else {
-                Issue.record("SwitcherPanel の contentView が取得できませんでした")
-                return
-            }
-            hostingView.layoutSubtreeIfNeeded()
-
-            let sizeBeforeClose = panel.measuredContentSize()
-            #expect(sizeBeforeClose.width > 0)
-            #expect(sizeBeforeClose.height > 0)
-            let indicatorsBefore = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
-            #expect(indicatorsBefore.isEmpty)
-
-            let closeTask = Task { @MainActor in
-                await viewModel.closeSelectedWindow()
-            }
-            await Task.yield()
-            try? await Task.sleep(for: .milliseconds(80))
-
-            let sizeDuringClose = panel.measuredContentSize()
-            let indicatorsDuring = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
-            #expect(viewModel.isClosingWindow(id: "g2") == true)
-            #expect(indicatorsDuring.count == 1)
-            #expect(indicatorsDuring.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
-            #expect(sizeDuringClose.width == sizeBeforeClose.width)
-            #expect(abs(sizeDuringClose.height - sizeBeforeClose.height) < 0.5)
-
-            // 1. 終了失敗（キャンセル残存）で戻るとスピナーは即座に消える
-            continuation?.resume(returning: false)
-            await closeTask.value
-            try? await Task.sleep(for: .milliseconds(80))
-            hostingView.layoutSubtreeIfNeeded()
-
-            let indicatorsAfterFailure = collectAllSubviews(in: hostingView).compactMap { $0 as? NSProgressIndicator }
-            #expect(viewModel.isClosingWindow == false)
-            #expect(viewModel.entries.map(\.id) == ["g1", "g2"])
-            #expect(indicatorsAfterFailure.isEmpty)
-
-            // 2. 終了成功で対象カードが削除された後も可視スピナーは残らない
-            let closeSuccessTask = Task { @MainActor in
-                await viewModel.closeSelectedWindow()
-            }
-            await Task.yield()
-            try? await Task.sleep(for: .milliseconds(80))
-            hostingView.layoutSubtreeIfNeeded()
-            #expect(viewModel.isClosingWindow(id: "g2") == true)
-            let indicatorsDuringSecondClose = collectAllSubviews(in: hostingView)
-                .compactMap { $0 as? NSProgressIndicator }
-                .filter { !$0.isHiddenOrHasHiddenAncestor }
-            #expect(indicatorsDuringSecondClose.count == 1)
-
-            continuation?.resume(returning: true)
-            await closeSuccessTask.value
-            try? await Task.sleep(for: .milliseconds(80))
-            hostingView.layoutSubtreeIfNeeded()
-
-            let visibleIndicatorsAfterSuccess = collectAllSubviews(in: hostingView)
-                .compactMap { $0 as? NSProgressIndicator }
-                .filter { !$0.isHiddenOrHasHiddenAncestor }
-            #expect(viewModel.isClosingWindow == false)
-            #expect(viewModel.entries.map(\.id) == ["g1"])
-            #expect(visibleIndicatorsAfterSuccess.isEmpty)
         }
     }
 }

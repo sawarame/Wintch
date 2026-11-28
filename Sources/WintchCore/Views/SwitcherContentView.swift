@@ -25,8 +25,7 @@ public struct SwitcherContentView: View {
     /// 現在のモードと表示形式に応じて表示ビューを切り替える本体構築
     public var body: some View {
         Group {
-            // グルーピング ON 時は通常スイッチャーのアイコン型・キャプチャ表示型も
-            // 検索ランチャーのキャプチャ表示型と同一の縦型リストビュー（ディスプレイ幅連動）で表示する
+            // 通常スイッチャーのアイコン型・キャプチャ表示型はグルーピング ON/OFF ともに固定グリッドで表示する
             if viewModel.usesGridLayoutForCurrentMode {
                 switch viewModel.normalDisplayStyle {
                 case .icon:

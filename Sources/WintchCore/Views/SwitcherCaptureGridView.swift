@@ -36,15 +36,19 @@ public struct SwitcherCaptureGridView: View {
         )
     }
 
+    /// グリッド内のカード領域の合計横幅
+    private var cardsWidth: CGFloat {
+        CGFloat(columnsCount) * SwitcherGridLayout.cardWidth
+            + CGFloat(max(columnsCount - 1, 0)) * SwitcherGridLayout.cardSpacing
+    }
+
     /// グリッドコンテンツの全体横幅
     private var panelWidth: CGFloat {
-        let cardsWidth = CGFloat(columnsCount) * SwitcherGridLayout.cardWidth
-            + CGFloat(max(columnsCount - 1, 0)) * SwitcherGridLayout.cardSpacing
         let baseWidth = cardsWidth + SwitcherGridLayout.gridPadding * 2
         return viewModel.isScreenRecordingGranted ? baseWidth : max(baseWidth, Self.minWidthWithBanner)
     }
 
-    /// グリッド領域の最大スクロール高さ（中央配置のキャプチャ表示板は従来の上限を維持する）
+    /// グリッド領域の最大スクロール高さ（中央配置のキャプチャ表示型は従来の上限を維持する）
     private var maxScrollHeight: CGFloat {
         SwitcherPanelLayout.maxCenteredCaptureGridScrollHeight(
             availableScreenHeight: viewModel.availableScreenSize.height
@@ -63,11 +67,30 @@ public struct SwitcherCaptureGridView: View {
         )
     }
 
-    /// LazyVGrid に渡す固定幅カラム配列
-    private var gridColumns: [GridItem] {
-        Array(
-            repeating: GridItem(.fixed(SwitcherGridLayout.cardWidth), spacing: SwitcherGridLayout.cardSpacing),
-            count: columnsCount
+    /// 現在の表示結果・列数・グルーピング状態から構築した安全な行スナップショット配列
+    private var gridRows: [SwitcherGridRowModel] {
+        let segmentsByRow: [Int: [SwitcherGridGroupSegment]]
+        if viewModel.isGroupingActiveForCurrentMode {
+            segmentsByRow = SwitcherGridLayout.groupSegmentsByRow(
+                for: viewModel.displayedGroups,
+                columns: columnsCount
+            )
+        } else {
+            segmentsByRow = [:]
+        }
+        return SwitcherGridRowModel.buildRows(
+            from: viewModel.displayedResults,
+            columns: columnsCount,
+            segmentsByRow: segmentsByRow
+        )
+    }
+
+    /// グルーピング ON 時に現在選択中カードが属する複数ウィンドウグループの ID
+    private var highlightedGroupID: String? {
+        guard viewModel.isGroupingActiveForCurrentMode else { return nil }
+        return SwitcherGridLayout.selectedMultiWindowGroupID(
+            selectedIndex: viewModel.selectedIndex,
+            in: viewModel.displayedGroups
         )
     }
 
@@ -124,28 +147,24 @@ public struct SwitcherCaptureGridView: View {
         )
     }
 
-    /// スクロール追従付きの複数行カードグリッド
+    /// スクロール追従付きの複数行カードグリッド（グルーピング ON 時は複数ウィンドウグループのみ背面枠でまとめる）
     private var gridScrollView: some View {
-        ScrollViewReader { proxy in
+        let rows = gridRows
+        let activeGroupID = highlightedGroupID
+
+        return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                LazyVGrid(columns: gridColumns, spacing: SwitcherGridLayout.cardSpacing) {
-                    ForEach(Array(viewModel.displayedResults.enumerated()), id: \.element.id) { index, result in
-                        SwitcherCaptureCardView(
-                            entry: result.entry,
-                            thumbnail: viewModel.thumbnail(for: result.entry),
-                            icon: viewModel.icon(for: result.entry.pid),
-                            isSelected: index == viewModel.selectedIndex,
-                            isClosing: viewModel.isClosingWindow(id: result.entry.id),
-                            language: viewModel.resolvedLanguage
+                LazyVStack(alignment: .center, spacing: SwitcherGridLayout.cardSpacing) {
+                    ForEach(rows) { row in
+                        gridRowView(
+                            row: row,
+                            highlightedGroupID: activeGroupID
                         )
-                        .id(result.id)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.selectAndActivate(at: index)
-                        }
+                        .id(Self.rowScrollID(for: row.rowIndex))
                     }
                 }
                 .padding(SwitcherGridLayout.gridPadding)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .frame(height: scrollHeight)
             .onAppear {
@@ -157,6 +176,58 @@ public struct SwitcherCaptureGridView: View {
         }
     }
 
+    /// グリッドの 1 行分（複数ウィンドウのグループ背面枠＋前面カード列）を構築する
+    /// - Parameters:
+    ///   - row: 描画対象の行スナップショットモデル
+    ///   - highlightedGroupID: 現在選択中のカードが属する複数ウィンドウグループ ID（該当なし時は nil）
+    /// - Returns: 1 行分のグリッドビュー
+    private func gridRowView(
+        row: SwitcherGridRowModel,
+        highlightedGroupID: String?
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(row.segments) { segment in
+                let frame = SwitcherGridLayout.segmentFrameInRow(
+                    for: segment,
+                    itemWidth: SwitcherGridLayout.cardWidth,
+                    itemHeight: SwitcherGridLayout.cardHeight
+                )
+                SwitcherGridGroupFrameView(
+                    segment: segment,
+                    isHighlighted: segment.groupID == highlightedGroupID
+                )
+                .frame(width: frame.width, height: frame.height)
+                .offset(x: frame.minX, y: frame.minY)
+            }
+
+            HStack(spacing: SwitcherGridLayout.cardSpacing) {
+                ForEach(row.items) { item in
+                    SwitcherCaptureCardView(
+                        entry: item.result.entry,
+                        thumbnail: viewModel.thumbnail(for: item.result.entry),
+                        icon: viewModel.icon(for: item.result.entry.pid),
+                        isSelected: item.index == viewModel.selectedIndex,
+                        isClosing: viewModel.isClosingWindow(id: item.result.entry.id),
+                        language: viewModel.resolvedLanguage
+                    )
+                    .id(item.id)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.selectAndActivate(at: item.index)
+                    }
+                }
+            }
+        }
+        .frame(width: cardsWidth, height: SwitcherGridLayout.cardHeight, alignment: .topLeading)
+    }
+
+    /// 行インデックスに対応する ScrollViewReader 用アンカー ID を返す
+    /// - Parameter rowIndex: 行インデックス（0 始まり）
+    /// - Returns: 行単位のスクロール識別子
+    private static func rowScrollID(for rowIndex: Int) -> String {
+        "capture-grid-row-\(rowIndex)"
+    }
+
     /// 現在選択中のカードへスクロール位置を追従させる
     /// - Parameters:
     ///   - proxy: 制御対象の `ScrollViewProxy`
@@ -165,14 +236,15 @@ public struct SwitcherCaptureGridView: View {
         scrollToItem(at: viewModel.selectedIndex, using: proxy, animated: animated)
     }
 
-    /// 指定インデックスのカードへスクロール位置を追従させる
+    /// 指定インデックスのカードを含む行へスクロール位置を追従させる
     /// - Parameters:
     ///   - index: 対象の選択インデックス
     ///   - proxy: 制御対象の `ScrollViewProxy`
     ///   - animated: 短いアニメーションを適用する場合は true
     private func scrollToItem(at index: Int, using proxy: ScrollViewProxy, animated: Bool) {
         guard viewModel.displayedResults.indices.contains(index) else { return }
-        let targetID = viewModel.displayedResults[index].id
+        let targetRow = index / max(columnsCount, 1)
+        let targetID = Self.rowScrollID(for: targetRow)
         if animated {
             withAnimation(.easeOut(duration: 0.08)) {
                 proxy.scrollTo(targetID, anchor: .center)
