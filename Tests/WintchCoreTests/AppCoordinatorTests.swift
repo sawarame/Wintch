@@ -505,10 +505,11 @@ struct AppCoordinatorTests {
         #expect(store.saveGroupLauncherByAppCallCount == 1)
     }
 
-    /// AppCoordinator の権限状態遷移に連動してバックグラウンド事前キャプチャが有効化・停止されることを検証する
-    @Test("AppCoordinator は権限許可時に事前キャプチャを有効化し監視中断・権限剥奪時に停止する")
+    /// AppCoordinator 配下でパネル非表示時は自動キャプチャ・権限リクエストが一切行われず、
+    /// パネル表示中のみ取得され、監視中断・権限剥奪・非キャプチャ切替時に進行中キャプチャキャンセルとキャッシュ全破棄が行われることを検証する
+    @Test("AppCoordinator はパネル非表示中に自動キャプチャを行わず監視中断・非キャプチャ切替で進行中タスク停止とキャッシュ全破棄を行う")
     @MainActor
-    func coordinatorEnablesAndStopsBackgroundCapturePrefetchAcrossPermissionLifecycle() async {
+    func coordinatorOnlyCapturesWhilePresentedAndClearsCacheOnInterruptionOrOptOut() async {
         let store = MockPreferencesStore()
         store.storedNormalDisplayStyle = .capture
         let windowService = MockWindowService()
@@ -519,8 +520,8 @@ struct AppCoordinatorTests {
         screenRecordingService.stubbedStatus = .granted
         let captureService = MockWindowCaptureService()
 
-        let prefetchedImage = NSImage(size: NSSize(width: 90, height: 60))
-        captureService.stubbedAsyncThumbnails[801] = prefetchedImage
+        let capturedImage = NSImage(size: NSSize(width: 90, height: 60))
+        captureService.stubbedAsyncThumbnails[801] = capturedImage
         windowService.stubbedCandidates = [
             RawWindowCandidate(
                 id: "w1",
@@ -545,114 +546,37 @@ struct AppCoordinatorTests {
             windowCaptureService: captureService
         )
 
+        // 1. 起動してもパネル非表示の間はバックグラウンド自動キャプチャや権限リクエストは一切行われない
         coordinator.start()
-        windowService.simulateCapturePrefetchNeeded(.initialScanCompleted)
+        try? await Task.sleep(for: .milliseconds(40))
+        #expect(captureService.capturedRequestWindowIDs.isEmpty)
+        #expect(screenRecordingService.requestPermissionCallCount == 0)
 
-        // デフォルトデバウンス（300ms）経過後に事前取得が実行されキャッシュへ保存される
-        for _ in 0..<200 where captureService.cachedThumbnails[801] == nil {
-            try? await Task.sleep(for: .milliseconds(15))
+        // 2. パネル表示中のみキャプチャが実行されてキャッシュへ保存される
+        hotKeyMonitor.simulateEvent(.triggerPressed(isShiftPressed: false))
+        for _ in 0..<100 where captureService.cachedThumbnails[801] == nil {
+            try? await Task.sleep(for: .milliseconds(5))
         }
-        #expect(captureService.cachedThumbnails[801] === prefetchedImage)
+        #expect(captureService.capturedRequestWindowIDs == [[801]])
+        #expect(captureService.cachedThumbnails[801] === capturedImage)
+        hotKeyMonitor.simulateEvent(.escapePressed)
 
-        // 権限剥奪／監視中断後は事前取得が無効化され、新規未キャッシュウィンドウ通知でも実行されない
+        // 3. 権限剥奪／監視中断時はキャッシュが全破棄され、以降の自動取得も起きない
         hotKeyMonitor.simulateMonitoringInterrupted()
-        let requestCountAfterRevoke = captureService.capturedRequestWindowIDs.count
-        windowService.stubbedCandidates = [
-            RawWindowCandidate(
-                id: "w2",
-                cgWindowID: 802,
-                pid: 20,
-                applicationName: "Notes",
-                title: "Memo",
-                isOnScreen: true,
-                lastActivatedAt: Date()
-            )
-        ]
-        windowService.simulateCapturePrefetchNeeded(.activeSpaceChanged)
-        try? await Task.sleep(for: .milliseconds(360))
-        #expect(captureService.capturedRequestWindowIDs.count == requestCountAfterRevoke)
-        // 権限剥奪時にキャッシュ（タイムスタンプ含む）も全破棄されていること
         #expect(captureService.cachedThumbnails.isEmpty)
-        #expect(captureService.lastCapturedAt(for: 801) == nil)
-    }
+        #expect(captureService.clearCacheCallCount >= 1)
 
-    /// AppCoordinator 配下で定期バックグラウンド更新ループがオプトイン・権限・スリープ状態に連動して
-    /// 稼働・一時停止・再開・即座停止することを検証する
-    @Test("AppCoordinator の定期バックグラウンド更新はスリープ・非キャプチャ切替・権限剥奪に連動して停止・再開する")
-    @MainActor
-    func coordinatorManagesPeriodicCaptureRefreshAcrossSleepAndOptOut() async {
-        let store = MockPreferencesStore()
-        store.storedNormalDisplayStyle = .capture
-        let windowService = MockWindowService()
-        let hotKeyMonitor = MockHotKeyMonitor()
-        let permissionService = MockAccessibilityPermissionService()
-        permissionService.stubbedStatus = .granted
-        let screenRecordingService = MockScreenRecordingPermissionService()
-        screenRecordingService.stubbedStatus = .granted
-
-        let baseNow = Date(timeIntervalSince1970: 1_700_005_000)
-        let clock = MutableTestClock(initial: baseNow)
-        let captureService = MockWindowCaptureService()
-        captureService.nowProvider = { clock.now }
-
-        let img = NSImage(size: NSSize(width: 90, height: 60))
-        captureService.stubbedAsyncThumbnails[851] = img
-        windowService.stubbedCandidates = [
-            RawWindowCandidate(
-                id: "w1",
-                cgWindowID: 851,
-                pid: 10,
-                applicationName: "Safari",
-                title: "Docs",
-                isOnScreen: true,
-                lastActivatedAt: baseNow
-            )
-        ]
-
-        let coordinator = AppCoordinator(
-            windowService: windowService,
-            hotKeyMonitor: hotKeyMonitor,
-            permissionService: permissionService,
-            preferencesStore: store,
-            launchAtLoginService: MockLaunchAtLoginService(),
-            iconProvider: MockIconProvider(),
-            installedAppService: MockInstalledAppService(),
-            screenRecordingPermissionService: screenRecordingService,
-            windowCaptureService: captureService,
-            capturePrefetchDebounceDuration: .milliseconds(10),
-            captureRefreshCooldown: 5.0,
-            periodicCaptureRefreshInterval: .milliseconds(25),
-            nowProvider: { clock.now }
-        )
-
-        coordinator.start()
-
-        // 1. 定期更新により未キャッシュの 851 が自動取得される
-        for _ in 0..<100 where captureService.cachedThumbnails[851] == nil {
-            try? await Task.sleep(for: .milliseconds(10))
+        // 4. 権限回復して再表示後にリスト型へ切り替えると、共有キャッシュが全破棄され以降は自動取得されない
+        permissionService.simulateStatusChange(.granted)
+        hotKeyMonitor.simulateEvent(.triggerPressed(isShiftPressed: false))
+        for _ in 0..<100 where captureService.cachedThumbnails[801] == nil {
+            try? await Task.sleep(for: .milliseconds(5))
         }
-        #expect(captureService.cachedThumbnails[851] === img)
-        let countAfterInitial = captureService.capturedRequestWindowIDs.count
-
-        // 2. スリープ通知中はクールダウン経過後も定期更新されない
-        windowService.simulateSystemCaptureAvailabilityEvent(.paused(.systemSleep))
-        clock.set(baseNow.addingTimeInterval(20.0))
-        try? await Task.sleep(for: .milliseconds(65))
-        #expect(captureService.capturedRequestWindowIDs.count == countAfterInitial)
-
-        // 3. スリープ復帰通知で定期更新が再開し、クールダウン経過済みの 851 が再取得される
-        windowService.simulateSystemCaptureAvailabilityEvent(.resumed(.systemSleep))
-        for _ in 0..<100 where captureService.capturedRequestWindowIDs.count == countAfterInitial {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        let countAfterWake = captureService.capturedRequestWindowIDs.count
-        #expect(countAfterWake == countAfterInitial + 1)
-
-        // 4. リスト型へ切り替えると定期更新ループが即座に停止しキャッシュ全破棄される
+        #expect(captureService.cachedThumbnails[801] === capturedImage)
         coordinator.updateNormalDisplayStyle(.list)
         #expect(captureService.cachedThumbnails.isEmpty)
-        clock.set(baseNow.addingTimeInterval(60.0))
-        try? await Task.sleep(for: .milliseconds(65))
-        #expect(captureService.capturedRequestWindowIDs.count == countAfterWake)
+        let requestCountAfterOptOut = captureService.capturedRequestWindowIDs.count
+        try? await Task.sleep(for: .milliseconds(40))
+        #expect(captureService.capturedRequestWindowIDs.count == requestCountAfterOptOut)
     }
 }

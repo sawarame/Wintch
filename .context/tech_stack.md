@@ -100,7 +100,7 @@ OS 依存 API の漏洩防止とユニットテスト容易性を両立するた
 │       │   ├── SwitcherPanelLayout.swift        # パネル垂直配置スタイル判定・座標計算・一覧最大高さ算出
 │       │   ├── SwitcherSelection.swift          # スイッチャー／ランチャーの選択インデックス・循環計算
 │       │   ├── WindowAppGrouping.swift          # アプリ単位の安定グルーピング・MRU 2 番目初期選択解決
-│       │   ├── WindowCaptureRefreshPolicy.swift # 起動時一括取得・イベント更新・定期更新の対象選定およびクールダウン鮮度判定
+│       │   ├── WindowCaptureCachePolicy.swift   # キャプチャキャッシュ整理時の OS 生存ウィンドウ ID 保持集合算出
 │       │   ├── WindowEntry.swift                # 表示対象ウィンドウドメインモデル
 │       │   ├── WindowFilter.swift               # ノイズ除外・重複統合・画面占有判定・WindowEntry 変換
 │       │   ├── WindowMenuPairing.swift          # アプリ「ウィンドウ」メニュー項目との省略記号対応照合・補完

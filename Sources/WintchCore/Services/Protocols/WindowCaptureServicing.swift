@@ -14,11 +14,6 @@ public protocol WindowCaptureServicing: AnyObject {
     /// - Returns: キャッシュに保持されていれば true
     func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool
 
-    /// 指定ウィンドウのサムネイルがメモリキャッシュへ最後に格納された時刻を返す（LRU 順序は変更しない）
-    /// - Parameter cgWindowID: 確認対象の CoreGraphics ウィンドウ ID
-    /// - Returns: キャッシュに保持されていれば最終取得時刻、未保持の場合は nil
-    func lastCapturedAt(for cgWindowID: UInt32) -> Date?
-
     /// 指定ウィンドウ群の最新サムネイルを非同期取得し、完了したものから順次通知する
     /// - Parameters:
     ///   - cgWindowIDs: 取得対象の CoreGraphics ウィンドウ ID 配列
@@ -48,12 +43,5 @@ public extension WindowCaptureServicing {
     /// - Returns: キャッシュに保持されていれば true
     func hasCachedThumbnail(for cgWindowID: UInt32) -> Bool {
         cachedThumbnail(for: cgWindowID) != nil
-    }
-
-    /// デフォルト実装として未記録（nil）を返す（テストモック互換用）
-    /// - Parameter cgWindowID: 確認対象の CoreGraphics ウィンドウ ID
-    /// - Returns: 最終取得時刻（既定では nil）
-    func lastCapturedAt(for cgWindowID: UInt32) -> Date? {
-        nil
     }
 }

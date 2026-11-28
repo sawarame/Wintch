@@ -148,10 +148,6 @@ public final class AppCoordinator {
     ///   - appIdentity: アプリ識別情報（既定値はメインバンドルから取得）
     ///   - versionInfo: アプリバージョン情報（既定値はメインバンドルから取得）
     ///   - preferredLanguagesProvider: システム優先言語配列の提供クロージャ（既定値は `Locale.preferredLanguages`）
-    ///   - capturePrefetchDebounceDuration: バックグラウンド事前キャプチャのデバウンス待機時間（既定値は 300ms）
-    ///   - captureRefreshCooldown: バックグラウンド更新の最小再取得間隔（既定値は 5 秒）
-    ///   - periodicCaptureRefreshInterval: 定期バックグラウンド更新の間隔（既定値は 15 秒）
-    ///   - nowProvider: キャッシュ鮮度判定に用いる現在時刻プロバイダ（既定値は `Date.init`）
     public init(
         windowService: any WindowServicing,
         hotKeyMonitor: any HotKeyMonitoring,
@@ -166,11 +162,7 @@ public final class AppCoordinator {
         updateService: any AppUpdateServicing = AppUpdateService(),
         appIdentity: AppIdentity = .current,
         versionInfo: AppVersionInfo = .current,
-        preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages },
-        capturePrefetchDebounceDuration: Duration = .milliseconds(300),
-        captureRefreshCooldown: TimeInterval = WindowCaptureRefreshPolicy.defaultRefreshCooldown,
-        periodicCaptureRefreshInterval: Duration = WindowCaptureRefreshPolicy.defaultPeriodicRefreshInterval,
-        nowProvider: @escaping @Sendable () -> Date = Date.init
+        preferredLanguagesProvider: @escaping @Sendable () -> [String] = { Locale.preferredLanguages }
     ) {
         self.appIdentity = appIdentity
         self.versionInfo = versionInfo
@@ -216,11 +208,7 @@ public final class AppCoordinator {
             launcherDisplayStyle: initialLauncherDisplayStyle,
             isNormalSwitcherGroupedByApp: initialNormalGrouping,
             isLauncherGroupedByApp: initialLauncherGrouping,
-            resolvedLanguage: initialResolvedLanguage,
-            capturePrefetchDebounceDuration: capturePrefetchDebounceDuration,
-            captureRefreshCooldown: captureRefreshCooldown,
-            periodicCaptureRefreshInterval: periodicCaptureRefreshInterval,
-            nowProvider: nowProvider
+            resolvedLanguage: initialResolvedLanguage
         )
         self.permissionGuideViewModel = PermissionGuideViewModel(
             permissionService: permissionService,
@@ -356,7 +344,7 @@ public final class AppCoordinator {
     /// アプリケーションを安全に終了する
     public func quit() {
         automaticUpdateCheckTask?.cancel()
-        switcherViewModel.stopBackgroundCaptureWork()
+        switcherViewModel.stopCaptureWork()
         hotKeyMonitor.stopMonitoring()
         windowService.stopObserving()
         permissionService.stopMonitoring()
@@ -408,7 +396,6 @@ public final class AppCoordinator {
             permissionGuideViewModel.syncStatus(.granted)
             isPermissionGuidePresented = false
             permissionWindow?.orderOut(nil)
-            switcherViewModel.enableBackgroundCapturePrefetch()
             windowService.startObserving()
             // 権限誘導画面の表示中に保留していた起動時自動チェックの更新通知があればここで提示する
             if let pending = pendingAutomaticUpdate {
@@ -431,7 +418,7 @@ public final class AppCoordinator {
         settingsViewModel.refreshStatus(permissionStatus: .denied)
         permissionGuideViewModel.syncStatus(.denied)
         switcherViewModel.cancel()
-        switcherViewModel.stopBackgroundCaptureWork()
+        switcherViewModel.stopCaptureWork()
         hotKeyMonitor.stopMonitoring()
         windowService.stopObserving()
         isPermissionGuidePresented = true
